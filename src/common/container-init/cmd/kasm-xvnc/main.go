@@ -120,7 +120,17 @@ func buildXvncArgs(env map[string]string, arch string, fileExists func(string) b
 		"-interface", "0.0.0.0",
 		"-BlacklistThreshold=0",
 		"-FreeKeyMappings",
+		// Xvnc's default `-SecurityTypes VncAuth` reads ~/.vnc/passwd
+		// (rfb-style hashed) — that file isn't written by `kasmvncpasswd`
+		// (which only produces ~/.kasmpasswd). The matching scheme is
+		// `Plain`, plus an explicit `-PlainUsers` allow-list.
+		"-SecurityTypes", "Plain",
 	)
+	plainUser := env["KASM_OS_USER"]
+	if plainUser == "" {
+		plainUser = "kasm-user"
+	}
+	args = append(args, "-PlainUsers", plainUser)
 
 	// SSL cert. KasmVNC's `-cert` defaults to empty; without it,
 	// `-sslOnly` Xvnc accepts the TCP connection then drops it during
