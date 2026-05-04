@@ -1,0 +1,10 @@
+distro	build	ttfl_trace_ci_median	ttfl_trace_bash_median	cgmem_ci_MiB	cgmem_bash_MiB	audio_out_ws_fails	os_user_uid_correct	find_uid1000_count
+kali	OK	20	515	213	412	0	1	0
+fedora43	OK	22	517	144	449	0	1	0
+opensuse	OK	26	?	266	?	0	1	0
+oracle9	OK	22	569	241	453	0	1	0
+rockylinux9	OK	25	630	240	452	0	1	0
+rockylinux8	OK	27	529	215	405	0	1	0
+almalinux9	OK	26	624	221	460	0	1	0
+parrotos7	FAIL_BUILD	-	-	-	-	-	-	-
+alpine	OK	21	624	230	444	0	1	0

@@ -1,0 +1,16 @@
+[Unit]
+Description=Profile size monitor (notify-send when over limit)
+After=profile-pull.service window-manager.service
+ConditionEnvironment=KASM_PROFILE_PULL=1
+
+[Service]
+Type=simple
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+Environment=DISPLAY=:1
+ExecStart=/usr/local/bin/kasm-profile-size-check
+Restart=on-failure
+RestartSec=10s
+StartLimitBurst=3
+StartLimitIntervalSec=120s

@@ -1,0 +1,13 @@
+[Unit]
+Description=Webcam helper — public listener (gated on /dev/video0)
+ConditionEnvironment=KASM_VNC=1
+ConditionPathExists=/dev/video0
+
+[Socket]
+ListenStream=4905
+ActivationMode=proxy
+ProxyTarget=127.0.0.1:14905
+Service=webcam.service
+
+[Install]
+WantedBy=sockets.target

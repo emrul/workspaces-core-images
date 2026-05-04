@@ -1,0 +1,9 @@
+[Unit]
+Description=Pattern 3 — native socket helper
+Requires=myhelper.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/myhelper
+Restart=on-failure
+RestartSec=500ms

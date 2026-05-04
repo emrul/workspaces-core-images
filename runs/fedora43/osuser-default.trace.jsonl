@@ -1,0 +1,65 @@
+{"dt_ms":0,"phase":"boot_start","status":"ok","t_start_ms":1777847274179,"wall_utc":"2026-05-03T22:27:54.180Z"}
+{"by_comm":[{"comm":"container-init","rss_kib":3312}],"cgroup_current_bytes":1433600,"cgroup_peak_bytes":1482752,"cgroup_swap_bytes":0,"dt_ms":0,"label":"boot","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":3391488,"status":"ok","t_start_ms":1777847274180}
+{"count":23,"dt_ms":0,"overrides":0,"phase":"units_loaded","status":"ok","t_start_ms":1777847274180,"warnings":0}
+{"available":false,"dt_ms":0,"err":"mkdir /sys/fs/cgroup/container-init: mkdir /sys/fs/cgroup/container-init: read-only file system","phase":"cgroup_init","status":"ok","t_start_ms":1777847274181}
+{"dt_ms":0,"phase":"supervisor_start","status":"ok","t_start_ms":1777847274181}
+{"address":":4904","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777847274181,"unit":"audio-in.socket"}
+{"address":":8081","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777847274181,"unit":"audio-out-ws.socket"}
+{"address":":4903","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777847274181,"unit":"gamepad.socket"}
+{"address":":4902","dt_ms":0,"mode":"native","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777847274181,"unit":"upload.socket"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dev/video0 unmet","status":"ok","t_start_ms":1777847274181,"unit":"webcam.socket"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_PROFILE_PULL=1 (have \"0\", want \"1\")","status":"ok","t_start_ms":1777847274181,"unit":"profile-pull.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_SVC_RECORDER=1 (have \"\", want \"1\")","status":"ok","t_start_ms":1777847274181,"unit":"recorder-drain.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dev/video0 unmet","status":"ok","t_start_ms":1777847274181,"unit":"webcam.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dockerstartup/custom_startup.sh unmet","status":"ok","t_start_ms":1777847274181,"unit":"custom-startup.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_PROFILE_PULL=1 (have \"0\", want \"1\")","status":"ok","t_start_ms":1777847274181,"unit":"profile-size-check.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_SVC_RECORDER=1 (have \"\", want \"1\")","status":"ok","t_start_ms":1777847274181,"unit":"recorder-watch.service"}
+{"by_comm":[{"comm":"container-init","rss_kib":4332}],"cgroup_current_bytes":2318336,"cgroup_peak_bytes":2482176,"cgroup_swap_bytes":0,"dt_ms":0,"label":"post_services","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":4435968,"status":"ok","t_start_ms":1777847274181}
+{"argv":["/usr/local/bin/kasm-setup"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847274181,"unit":"kasm-setup.service"}
+{"dt_ms":0,"phase":"kasm-setup_invoke","pid":10,"status":"ok","t_start_ms":1777847274181,"unit":"kasm-setup.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"exited","status":"ok","t_start_ms":1777847274197,"unit":"kasm-setup.service"}
+{"argv":["/usr/local/bin/kasm-network-wait"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847274197,"unit":"network-wait.service"}
+{"argv":["/usr/local/bin/kasm-xvnc"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847274197,"unit":"kasmvnc.service"}
+{"argv":["/usr/local/bin/kasm-audio-out"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847274198,"unit":"audio-out.service"}
+{"dt_ms":1,"phase":"network-wait_invoke","pid":33,"status":"ok","t_start_ms":1777847274197,"unit":"network-wait.service"}
+{"dt_ms":1,"phase":"kasmvnc_invoke","pid":34,"status":"ok","t_start_ms":1777847274197,"unit":"kasmvnc.service"}
+{"argv":["/usr/sbin/pcscd","--foreground","--apdu"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847274198,"unit":"pcscd.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847274198,"unit":"window-manager.service"}
+{"argv":["/dockerstartup/printer/kasm_printer_service","--directory","/home/kasm-user/PDF","--relay","/tmp/printer"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847274198,"unit":"printer.service"}
+{"dt_ms":0,"err":"fork/exec /usr/sbin/pcscd: no such file or directory","phase":"pcscd_invoke","status":"error","t_start_ms":1777847274198,"unit":"pcscd.service"}
+{"dt_ms":0,"err":"start pcscd.service: fork/exec /usr/sbin/pcscd: no such file or directory","failed":true,"phase":"exited","status":"ok","t_start_ms":1777847274198,"unit":"pcscd.service"}
+{"dt_ms":0,"phase":"window-manager_invoke","pid":39,"status":"ok","t_start_ms":1777847274198,"unit":"window-manager.service"}
+{"dt_ms":1,"phase":"audio-out_invoke","pid":45,"status":"ok","t_start_ms":1777847274198,"unit":"audio-out.service"}
+{"dt_ms":3,"phase":"printer_invoke","pid":46,"status":"ok","t_start_ms":1777847274198,"unit":"printer.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"exited","status":"ok","t_start_ms":1777847274201,"unit":"network-wait.service"}
+{"dt_ms":0,"err":"killed by aborted","failed":true,"phase":"exited","status":"ok","t_start_ms":1777847274592,"unit":"window-manager.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847275093,"unit":"window-manager.service"}
+{"dt_ms":0,"phase":"window-manager_invoke","pid":91,"status":"ok","t_start_ms":1777847275093,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"killed by aborted","failed":true,"phase":"exited","status":"ok","t_start_ms":1777847275258,"unit":"window-manager.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847275759,"unit":"window-manager.service"}
+{"dt_ms":1,"phase":"window-manager_invoke","pid":114,"status":"ok","t_start_ms":1777847275759,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"killed by aborted","failed":true,"phase":"exited","status":"ok","t_start_ms":1777847275944,"unit":"window-manager.service"}
+{"argv":["/usr/sbin/pcscd","--foreground","--apdu"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847276200,"unit":"pcscd.service"}
+{"dt_ms":1,"err":"fork/exec /usr/sbin/pcscd: no such file or directory","phase":"pcscd_invoke","status":"error","t_start_ms":1777847276200,"unit":"pcscd.service"}
+{"dt_ms":0,"err":"start pcscd.service: fork/exec /usr/sbin/pcscd: no such file or directory","failed":true,"phase":"exited","status":"ok","t_start_ms":1777847276201,"unit":"pcscd.service"}
+{"dt_ms":0,"phase":"first_connect","status":"ok","t_start_ms":1777847276225,"unit":"audio-out-ws.socket"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm-user:vncpassword"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847276226,"unit":"audio-out-ws.service"}
+{"dt_ms":1,"phase":"audio-out-ws_invoke","pid":140,"status":"ok","t_start_ms":1777847276226,"unit":"audio-out-ws.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847276446,"unit":"window-manager.service"}
+{"dt_ms":1,"phase":"window-manager_invoke","pid":153,"status":"ok","t_start_ms":1777847276446,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"killed by aborted","failed":true,"phase":"exited","status":"ok","t_start_ms":1777847276628,"unit":"window-manager.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847277130,"unit":"window-manager.service"}
+{"dt_ms":0,"phase":"window-manager_invoke","pid":176,"status":"ok","t_start_ms":1777847277130,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"killed by aborted","failed":true,"phase":"exited","status":"ok","t_start_ms":1777847277312,"unit":"window-manager.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847277812,"unit":"window-manager.service"}
+{"dt_ms":0,"phase":"window-manager_invoke","pid":199,"status":"ok","t_start_ms":1777847277813,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"killed by aborted","failed":true,"phase":"exited","status":"ok","t_start_ms":1777847277999,"unit":"window-manager.service"}
+{"argv":["/usr/sbin/pcscd","--foreground","--apdu"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847278203,"unit":"pcscd.service"}
+{"dt_ms":0,"err":"fork/exec /usr/sbin/pcscd: no such file or directory","phase":"pcscd_invoke","status":"error","t_start_ms":1777847278203,"unit":"pcscd.service"}
+{"dt_ms":0,"err":"start pcscd.service: fork/exec /usr/sbin/pcscd: no such file or directory","failed":true,"phase":"exited","status":"ok","t_start_ms":1777847278203,"unit":"pcscd.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847278500,"unit":"window-manager.service"}
+{"dt_ms":1,"phase":"window-manager_invoke","pid":224,"status":"ok","t_start_ms":1777847278501,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"killed by aborted","failed":true,"phase":"exited","status":"ok","t_start_ms":1777847278691,"unit":"window-manager.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847279193,"unit":"window-manager.service"}
+{"dt_ms":1,"phase":"window-manager_invoke","pid":247,"status":"ok","t_start_ms":1777847279193,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"killed by aborted","failed":true,"phase":"exited","status":"ok","t_start_ms":1777847279387,"unit":"window-manager.service"}

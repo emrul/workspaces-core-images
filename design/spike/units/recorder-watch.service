@@ -1,0 +1,12 @@
+[Unit]
+Description=Recorder watch (sleep stub; presence indicates "recording")
+ConditionEnvironment=KASM_SVC_RECORDER=1
+
+[Service]
+Type=simple
+ExecStart=/bin/sleep 3600
+Restart=on-failure
+RestartSec=200ms
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Socket whose ConditionEnvironment is unset by default — should never bind
+ConditionEnvironment=KASM_SVC_OFF=1
+
+[Socket]
+ListenStream=4999
+ActivationMode=native
+Service=cond-skip.service
+
+[Install]
+WantedBy=sockets.target

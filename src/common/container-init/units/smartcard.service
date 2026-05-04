@@ -1,0 +1,20 @@
+[Unit]
+Description=Smartcard bridge (kasm_smartcard_bridge)
+# See note in printer.service — same correction applies. Xvnc owns
+# /tmp/smartcard via its -UnixRelay; smartcard.service is the client.
+After=kasmvnc.service pcscd.service
+Requires=kasmvnc.service
+ConditionEnvironment=KASM_VNC=1
+# Auto-skip when the helper binary isn't installed (INCLUDE_SMARTCARD=0).
+ConditionPathExists=/dockerstartup/smartcard/kasm_smartcard_bridge
+
+[Service]
+Type=simple
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+ExecStart=/dockerstartup/smartcard/kasm_smartcard_bridge --relay /tmp/smartcard
+Restart=on-failure
+RestartSec=2s
+StartLimitBurst=3
+StartLimitIntervalSec=60s

@@ -1,0 +1,19 @@
+[Unit]
+Description=Audio-out (ffmpeg pulse → mpegts → jsmpeg websocket)
+# kasm-setup.service runs the Phase 4.10 rename; without it audio-out
+# would attempt User=alice priv-drop before /etc/passwd has the entry.
+After=kasm-setup.service audio-out-ws.service
+Requires=kasm-setup.service
+ConditionEnvironment=KASM_VNC=1
+
+[Service]
+Type=simple
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+Environment=HOME=/var/run/pulse no_proxy=127.0.0.1
+ExecStart=/usr/local/bin/kasm-audio-out
+Restart=on-failure
+RestartSec=500ms
+StartLimitBurst=5
+StartLimitIntervalSec=30s

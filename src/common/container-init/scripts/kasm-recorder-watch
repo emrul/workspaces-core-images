@@ -1,0 +1,31 @@
+#!/bin/sh
+# kasm-recorder-watch — port of vnc_startup.sh § ensure_recorder_running
+# loop. Polls for the recorder service every few seconds and exits non-
+# zero (driving the supervisor's Restart=on-failure path) when the
+# recorder dies or starts under the wrong user.
+set -eu
+
+recorder_proc="/dockerstartup/recorder/kasm_recorder_service"
+ack=/tmp/kasm_recorder.ack
+seconds=0
+
+while :; do
+    if [ -f "$ack" ] && [ "$(stat -c '%U' "$ack" 2>/dev/null)" = kasm-recorder ]; then
+        seconds=0
+    fi
+    pid=$(pgrep -f "^$recorder_proc" 2>/dev/null || true)
+    if [ -z "$pid" ]; then
+        if [ "$seconds" -gt 15 ]; then
+            echo "kasm-recorder-watch: $recorder_proc not running" >&2
+            exit 1
+        fi
+    else
+        user=$(ps -p "$pid" -o user= 2>/dev/null | head -n1)
+        if [ "$user" != kasm-recorder ]; then
+            echo "kasm-recorder-watch: not running as kasm-recorder ($user)" >&2
+            exit 1
+        fi
+    fi
+    sleep 3
+    seconds=$(( seconds + 3 ))
+done

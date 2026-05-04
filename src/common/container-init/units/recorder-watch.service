@@ -1,0 +1,14 @@
+[Unit]
+Description=Session recorder watchdog
+After=kasmvnc.service window-manager.service
+ConditionEnvironment=KASM_SVC_RECORDER=1
+# Auto-skip when the recorder binary isn't installed (INCLUDE_RECORDER=0).
+ConditionPathExists=/dockerstartup/recorder/kasm_recorder_service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/kasm-recorder-watch
+Restart=on-failure
+RestartSec=2s
+StartLimitBurst=3
+StartLimitIntervalSec=60s

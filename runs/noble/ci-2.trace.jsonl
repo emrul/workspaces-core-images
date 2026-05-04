@@ -1,0 +1,183 @@
+{"dt_ms":0,"phase":"boot_start","status":"ok","t_start_ms":1777842343206,"wall_utc":"2026-05-03T21:05:43.206Z"}
+{"by_comm":[{"comm":"container-init","rss_kib":3212}],"cgroup_current_bytes":1458176,"cgroup_peak_bytes":1499136,"cgroup_swap_bytes":0,"dt_ms":0,"label":"boot","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":3289088,"status":"ok","t_start_ms":1777842343207}
+{"count":23,"dt_ms":0,"overrides":0,"phase":"units_loaded","status":"ok","t_start_ms":1777842343207,"warnings":0}
+{"available":false,"dt_ms":0,"err":"mkdir /sys/fs/cgroup/container-init: mkdir /sys/fs/cgroup/container-init: read-only file system","phase":"cgroup_init","status":"ok","t_start_ms":1777842343207}
+{"dt_ms":0,"phase":"supervisor_start","status":"ok","t_start_ms":1777842343208}
+{"address":":4901","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777842343208,"unit":"audio-in.socket"}
+{"address":":8081","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777842343208,"unit":"audio-out-ws.socket"}
+{"address":":4903","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777842343208,"unit":"gamepad.socket"}
+{"address":":4902","dt_ms":0,"mode":"native","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777842343208,"unit":"upload.socket"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dev/video0 unmet","status":"ok","t_start_ms":1777842343208,"unit":"webcam.socket"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_PROFILE_PULL=1 (have \"0\", want \"1\")","status":"ok","t_start_ms":1777842343208,"unit":"profile-pull.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_SVC_RECORDER=1 (have \"\", want \"1\")","status":"ok","t_start_ms":1777842343208,"unit":"recorder-drain.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dev/video0 unmet","status":"ok","t_start_ms":1777842343208,"unit":"webcam.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dockerstartup/custom_startup.sh unmet","status":"ok","t_start_ms":1777842343208,"unit":"custom-startup.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_PROFILE_PULL=1 (have \"0\", want \"1\")","status":"ok","t_start_ms":1777842343208,"unit":"profile-size-check.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_SVC_RECORDER=1 (have \"\", want \"1\")","status":"ok","t_start_ms":1777842343208,"unit":"recorder-watch.service"}
+{"by_comm":[{"comm":"container-init","rss_kib":3944}],"cgroup_current_bytes":2256896,"cgroup_peak_bytes":2265088,"cgroup_swap_bytes":0,"dt_ms":0,"label":"post_services","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":4038656,"status":"ok","t_start_ms":1777842343208}
+{"argv":["/usr/local/bin/kasm-setup"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842343208,"unit":"kasm-setup.service"}
+{"argv":["/usr/local/bin/kasm-audio-out"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842343208,"unit":"audio-out.service"}
+{"dt_ms":0,"phase":"kasm-setup_invoke","pid":10,"status":"ok","t_start_ms":1777842343208,"unit":"kasm-setup.service"}
+{"dt_ms":0,"phase":"audio-out_invoke","pid":11,"status":"ok","t_start_ms":1777842343208,"unit":"audio-out.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"exited","status":"ok","t_start_ms":1777842343228,"unit":"kasm-setup.service"}
+{"argv":["/usr/local/bin/kasm-network-wait"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842343229,"unit":"network-wait.service"}
+{"dt_ms":0,"phase":"network-wait_invoke","pid":40,"status":"ok","t_start_ms":1777842343229,"unit":"network-wait.service"}
+{"argv":["/usr/local/bin/kasm-xvnc"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842343229,"unit":"kasmvnc.service"}
+{"dt_ms":1,"phase":"kasmvnc_invoke","pid":43,"status":"ok","t_start_ms":1777842343229,"unit":"kasmvnc.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842343230,"unit":"window-manager.service"}
+{"argv":["/usr/sbin/pcscd","--foreground","--apdu"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842343230,"unit":"pcscd.service"}
+{"argv":["/dockerstartup/printer/kasm_printer_service","--directory","/home/kasm-user/PDF","--relay","/tmp/printer"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842343230,"unit":"printer.service"}
+{"dt_ms":1,"phase":"window-manager_invoke","pid":49,"status":"ok","t_start_ms":1777842343230,"unit":"window-manager.service"}
+{"dt_ms":6,"phase":"pcscd_invoke","pid":53,"status":"ok","t_start_ms":1777842343230,"unit":"pcscd.service"}
+{"argv":["/dockerstartup/smartcard/kasm_smartcard_bridge","--relay","/tmp/smartcard"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842343237,"unit":"smartcard.service"}
+{"dt_ms":9,"phase":"printer_invoke","pid":58,"status":"ok","t_start_ms":1777842343230,"unit":"printer.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"exited","status":"ok","t_start_ms":1777842343239,"unit":"network-wait.service"}
+{"dt_ms":8,"phase":"smartcard_invoke","pid":60,"status":"ok","t_start_ms":1777842343237,"unit":"smartcard.service"}
+{"dt_ms":0,"phase":"first_connect","status":"ok","t_start_ms":1777842345234,"unit":"audio-out-ws.socket"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842345234,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":88,"status":"ok","t_start_ms":1777842345234,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842345265,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842345766,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":99,"status":"ok","t_start_ms":1777842345766,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842345796,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842346297,"unit":"audio-out-ws.service"}
+{"dt_ms":1,"phase":"audio-out-ws_invoke","pid":105,"status":"ok","t_start_ms":1777842346297,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842346328,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842346829,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":111,"status":"ok","t_start_ms":1777842346829,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842346863,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842347364,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":117,"status":"ok","t_start_ms":1777842347364,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842347395,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842347896,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":123,"status":"ok","t_start_ms":1777842347896,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842347926,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842348427,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":129,"status":"ok","t_start_ms":1777842348427,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842348458,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842348959,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":135,"status":"ok","t_start_ms":1777842348959,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842348994,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842349494,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":141,"status":"ok","t_start_ms":1777842349494,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842349531,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842350031,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":147,"status":"ok","t_start_ms":1777842350031,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842350062,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 152","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842350280,"unit":"audio-out.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842350563,"unit":"audio-out-ws.service"}
+{"dt_ms":1,"phase":"audio-out-ws_invoke","pid":153,"status":"ok","t_start_ms":1777842350563,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842350595,"unit":"audio-out-ws.service"}
+{"argv":["/usr/local/bin/kasm-audio-out"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842350780,"unit":"audio-out.service"}
+{"dt_ms":1,"phase":"audio-out_invoke","pid":159,"status":"ok","t_start_ms":1777842350780,"unit":"audio-out.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842351096,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":165,"status":"ok","t_start_ms":1777842351096,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842351135,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842351637,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":171,"status":"ok","t_start_ms":1777842351637,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842351670,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842352172,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":177,"status":"ok","t_start_ms":1777842352172,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842352205,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842352706,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":190,"status":"ok","t_start_ms":1777842352706,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842352767,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842353268,"unit":"audio-out-ws.service"}
+{"dt_ms":1,"phase":"audio-out-ws_invoke","pid":196,"status":"ok","t_start_ms":1777842353268,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842353304,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842353805,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":202,"status":"ok","t_start_ms":1777842353805,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842353839,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842354339,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":208,"status":"ok","t_start_ms":1777842354339,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842354371,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842354872,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":214,"status":"ok","t_start_ms":1777842354872,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842354904,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842355405,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":220,"status":"ok","t_start_ms":1777842355405,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842355438,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842355939,"unit":"audio-out-ws.service"}
+{"dt_ms":1,"phase":"audio-out-ws_invoke","pid":226,"status":"ok","t_start_ms":1777842355939,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842355973,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842356475,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":232,"status":"ok","t_start_ms":1777842356475,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842356510,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842357010,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":238,"status":"ok","t_start_ms":1777842357010,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842357046,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 152","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842357168,"unit":"audio-out.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842357550,"unit":"audio-out-ws.service"}
+{"dt_ms":1,"phase":"audio-out-ws_invoke","pid":244,"status":"ok","t_start_ms":1777842357550,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842357581,"unit":"audio-out-ws.service"}
+{"argv":["/usr/local/bin/kasm-audio-out"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842357670,"unit":"audio-out.service"}
+{"dt_ms":0,"phase":"audio-out_invoke","pid":250,"status":"ok","t_start_ms":1777842357670,"unit":"audio-out.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842358082,"unit":"audio-out-ws.service"}
+{"dt_ms":1,"phase":"audio-out-ws_invoke","pid":256,"status":"ok","t_start_ms":1777842358082,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842358119,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842358620,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":262,"status":"ok","t_start_ms":1777842358620,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842358655,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842359157,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":268,"status":"ok","t_start_ms":1777842359157,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842359191,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 224","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842359270,"unit":"audio-out.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842359692,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":281,"status":"ok","t_start_ms":1777842359692,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842359726,"unit":"audio-out-ws.service"}
+{"argv":["/usr/local/bin/kasm-audio-out"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842359771,"unit":"audio-out.service"}
+{"dt_ms":0,"phase":"audio-out_invoke","pid":287,"status":"ok","t_start_ms":1777842359771,"unit":"audio-out.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842360227,"unit":"audio-out-ws.service"}
+{"dt_ms":1,"phase":"audio-out-ws_invoke","pid":293,"status":"ok","t_start_ms":1777842360227,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842360263,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842360764,"unit":"audio-out-ws.service"}
+{"dt_ms":1,"phase":"audio-out-ws_invoke","pid":299,"status":"ok","t_start_ms":1777842360764,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842360796,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842361297,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":312,"status":"ok","t_start_ms":1777842361297,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842361329,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842361830,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":318,"status":"ok","t_start_ms":1777842361830,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842361862,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842362362,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":324,"status":"ok","t_start_ms":1777842362362,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842362394,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842362896,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":330,"status":"ok","t_start_ms":1777842362896,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842362926,"unit":"audio-out-ws.service"}
+{"by_comm":[{"comm":"Xvnc","rss_kib":87496},{"comm":"container-init","rss_kib":6840},{"comm":"dbus-daemon","rss_kib":2940},{"comm":"ffmpeg","rss_kib":46056},{"comm":"kasm_printer_se","rss_kib":27064},{"comm":"kasm_smartcard_","rss_kib":18944},{"comm":"pcscd","rss_kib":2764},{"comm":"pulseaudio","rss_kib":11984},{"comm":"xfce4-session","rss_kib":91968}],"cgroup_current_bytes":225292288,"cgroup_peak_bytes":236777472,"cgroup_swap_bytes":0,"dt_ms":0,"label":"steady_state_t+20s","nproc":13,"phase":"mem_snapshot","rss_sum_bytes":303161344,"status":"ok","t_start_ms":1777842363209}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842363427,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":336,"status":"ok","t_start_ms":1777842363427,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842363458,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842363960,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":342,"status":"ok","t_start_ms":1777842363960,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842363991,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842364492,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":348,"status":"ok","t_start_ms":1777842364492,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842364523,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842365024,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":354,"status":"ok","t_start_ms":1777842365024,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842365060,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842365561,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":360,"status":"ok","t_start_ms":1777842365561,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842365595,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842366096,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":366,"status":"ok","t_start_ms":1777842366096,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842366131,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 152","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842366339,"unit":"audio-out.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842366632,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":372,"status":"ok","t_start_ms":1777842366632,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842366666,"unit":"audio-out-ws.service"}
+{"argv":["/usr/local/bin/kasm-audio-out"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842366840,"unit":"audio-out.service"}
+{"dt_ms":0,"phase":"audio-out_invoke","pid":378,"status":"ok","t_start_ms":1777842366840,"unit":"audio-out.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842367166,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":384,"status":"ok","t_start_ms":1777842367167,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842367200,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842367701,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":390,"status":"ok","t_start_ms":1777842367701,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842367734,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842368235,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":396,"status":"ok","t_start_ms":1777842368235,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777842368267,"unit":"audio-out-ws.service"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm_user:default"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777842368768,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":414,"status":"ok","t_start_ms":1777842368768,"unit":"audio-out-ws.service"}

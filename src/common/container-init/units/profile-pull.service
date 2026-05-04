@@ -1,0 +1,17 @@
+[Unit]
+Description=Pull persistent profile from object storage
+After=network-wait.service
+Requires=network-wait.service
+ConditionEnvironment=KASM_PROFILE_PULL=1
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+ExecStart=/usr/local/bin/kasm-profile-pull
+TimeoutStartSec=600s
+
+[Install]
+WantedBy=multi-user.target

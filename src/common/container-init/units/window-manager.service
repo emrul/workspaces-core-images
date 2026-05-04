@@ -1,0 +1,21 @@
+[Unit]
+Description=Desktop window manager (XFCE / Openbox / KDE per START_DE)
+After=kasmvnc.service
+Requires=kasmvnc.service
+OnFailure=recorder-drain.service
+ConditionEnvironment=KASM_VNC=1
+
+[Service]
+Type=simple
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+Environment=DISPLAY=:1
+ExecStart=/usr/local/bin/kasm-window-manager
+Restart=on-failure
+RestartSec=500ms
+StartLimitBurst=5
+StartLimitIntervalSec=30s
+
+[Install]
+WantedBy=multi-user.target

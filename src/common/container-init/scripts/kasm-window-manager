@@ -1,0 +1,44 @@
+#!/bin/sh
+# kasm-window-manager — port of vnc_startup.sh § start_window_manager.
+# Selects the desktop env per START_DE / START_XFCE4. Mirrors the bash
+# selection logic exactly so existing image variants drop in unchanged.
+set -eu
+
+# Source DBus session address that kasm-setup.service captured.
+if [ -r /tmp/kasm-dbus.env ]; then
+    set -a
+    . /tmp/kasm-dbus.env
+    set +a
+fi
+
+DISPLAY=:1
+export DISPLAY
+
+if [ "${START_XFCE4:-0}" = "1" ] || [ "${START_DE:-}" = xfce4-session ]; then
+    if [ -n "${KASM_ENABLE_ZINK:-}" ] && [ -n "${KASM_EGL_CARD:-}" ] && [ -n "${KASM_RENDERD:-}" ]; then
+        export LIBGL_KOPPER_DRI2=1 MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink
+        exec /usr/bin/startxfce4 --replace
+    fi
+    if [ -x /opt/VirtualGL/bin/vglrun ] && [ -n "${KASM_EGL_CARD:-}" ] && [ -n "${KASM_RENDERD:-}" ] \
+            && [ -O "${KASM_RENDERD}" ] && [ -O "${KASM_EGL_CARD}" ]; then
+        exec /opt/VirtualGL/bin/vglrun -d "${KASM_EGL_CARD}" /usr/bin/startxfce4 --replace
+    fi
+    exec /usr/bin/startxfce4 --replace
+fi
+
+case "${START_DE:-}" in
+    openbox)
+        exec /usr/bin/openbox-session
+        ;;
+    kde5)
+        if [ -x /opt/VirtualGL/bin/vglrun ] && [ -n "${KASM_EGL_CARD:-}" ] && [ -n "${KASM_RENDERD:-}" ] \
+                && [ -O "${KASM_RENDERD}" ] && [ -O "${KASM_EGL_CARD}" ]; then
+            exec /opt/VirtualGL/bin/vglrun -d "${KASM_EGL_CARD}" /usr/bin/startplasma-x11
+        fi
+        exec /usr/bin/startplasma-x11
+        ;;
+esac
+
+# Default fallback when neither START_XFCE4 nor START_DE picked a target.
+echo "kasm-window-manager: no DE selected (START_DE=${START_DE:-} START_XFCE4=${START_XFCE4:-}); idling" >&2
+exec sleep infinity

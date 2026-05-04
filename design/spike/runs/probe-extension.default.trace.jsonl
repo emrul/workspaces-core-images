@@ -1,0 +1,71 @@
+{"dt_ms":0,"phase":"boot_start","status":"ok","t_start_ms":1777840898949,"wall_utc":"2026-05-03T20:41:38.950Z"}
+{"by_comm":[{"comm":"container-init","rss_kib":3448}],"cgroup_current_bytes":1601536,"cgroup_peak_bytes":1630208,"cgroup_swap_bytes":0,"dt_ms":0,"label":"boot","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":3530752,"status":"ok","t_start_ms":1777840898950}
+{"base_path":"/etc/container-init/units/kasmvnc.service","dt_ms":0,"override_path":"/etc/container-init.d/kasmvnc.service","phase":"unit_overridden","status":"ok","t_start_ms":1777840898951,"unit":"kasmvnc.service"}
+{"count":30,"dt_ms":0,"overrides":1,"phase":"units_loaded","status":"ok","t_start_ms":1777840898951,"warnings":0}
+{"available":false,"dt_ms":0,"err":"mkdir /sys/fs/cgroup/container-init: mkdir /sys/fs/cgroup/container-init: read-only file system","phase":"cgroup_init","status":"ok","t_start_ms":1777840898951}
+{"dt_ms":0,"phase":"supervisor_start","status":"ok","t_start_ms":1777840898951}
+{"address":":4901","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777840898951,"unit":"audio-in.socket"}
+{"address":":8081","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777840898951,"unit":"audio-out-ws.socket"}
+{"address":"/run/dbus/system_bus_socket","dt_ms":0,"mode":"native","network":"unix","phase":"bound","status":"ok","t_start_ms":1777840898952,"unit":"dbus-system.socket"}
+{"address":":4903","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777840898952,"unit":"gamepad.socket"}
+{"address":":6901","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777840898952,"unit":"kasmvnc.socket"}
+{"address":":5050","dt_ms":0,"mode":"native","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777840898952,"unit":"myhelper.socket"}
+{"address":":4902","dt_ms":0,"mode":"native","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777840898952,"unit":"upload.socket"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dev/video0 unmet","status":"ok","t_start_ms":1777840898952,"unit":"webcam.socket"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_PROFILE_PULL=1 (have \"0\", want \"1\")","status":"ok","t_start_ms":1777840898952,"unit":"profile-pull.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_SVC_RECORDER=1 (have \"\", want \"1\")","status":"ok","t_start_ms":1777840898952,"unit":"recorder-drain.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dev/video0 unmet","status":"ok","t_start_ms":1777840898952,"unit":"webcam.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dockerstartup/custom_startup.sh unmet","status":"ok","t_start_ms":1777840898952,"unit":"custom-startup.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_PROFILE_PULL=1 (have \"0\", want \"1\")","status":"ok","t_start_ms":1777840898952,"unit":"profile-size-check.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_SVC_RECORDER=1 (have \"\", want \"1\")","status":"ok","t_start_ms":1777840898952,"unit":"recorder-watch.service"}
+{"by_comm":[{"comm":"container-init","rss_kib":4432}],"cgroup_current_bytes":2600960,"cgroup_peak_bytes":2650112,"cgroup_swap_bytes":0,"dt_ms":0,"label":"post_services","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":4538368,"status":"ok","t_start_ms":1777840898952}
+{"argv":["/usr/local/bin/kasm-setup"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840898952,"unit":"kasm-setup.service"}
+{"argv":["/usr/sbin/pcscd","--foreground","--apdu"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840898953,"unit":"pcscd.service"}
+{"argv":["/usr/local/bin/kasm-audio-out"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840898953,"unit":"audio-out.service"}
+{"argv":["/dockerstartup/printer/kasm_printer_service","--directory","/home/kasm-user/PDF","--relay","/tmp/printer"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840898953,"unit":"printer.service"}
+{"dt_ms":1,"phase":"kasm-setup_invoke","pid":10,"status":"ok","t_start_ms":1777840898952,"unit":"kasm-setup.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840898953,"unit":"window-manager.service"}
+{"dt_ms":0,"phase":"pcscd_invoke","pid":14,"status":"ok","t_start_ms":1777840898953,"unit":"pcscd.service"}
+{"argv":["/dockerstartup/smartcard/kasm_smartcard_bridge","--relay","/tmp/smartcard"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840898953,"unit":"smartcard.service"}
+{"dt_ms":0,"phase":"smartcard_invoke","pid":15,"status":"ok","t_start_ms":1777840898953,"unit":"smartcard.service"}
+{"dt_ms":1,"phase":"audio-out_invoke","pid":17,"status":"ok","t_start_ms":1777840898953,"unit":"audio-out.service"}
+{"dt_ms":0,"phase":"first_connect","status":"ok","t_start_ms":1777840898966,"unit":"dbus-system.socket"}
+{"argv":["/usr/local/bin/dbus-system-stub"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840898966,"unit":"dbus-system.service"}
+{"dt_ms":24,"phase":"printer_invoke","pid":20,"status":"ok","t_start_ms":1777840898953,"unit":"printer.service"}
+{"dt_ms":25,"phase":"window-manager_invoke","pid":41,"status":"ok","t_start_ms":1777840898953,"unit":"window-manager.service"}
+{"dt_ms":15,"phase":"dbus-system_invoke","pid":42,"status":"ok","t_start_ms":1777840898966,"unit":"dbus-system.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"exited","status":"ok","t_start_ms":1777840898981,"unit":"kasm-setup.service"}
+{"argv":["/usr/local/bin/myimage-app"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840898981,"unit":"myimage-app.service"}
+{"argv":["/usr/local/bin/myimage-init"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840898981,"unit":"myimage-init.service"}
+{"argv":["/usr/local/bin/kasm-network-wait"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840898981,"unit":"network-wait.service"}
+{"dt_ms":0,"phase":"myimage-app_invoke","pid":45,"status":"ok","t_start_ms":1777840898981,"unit":"myimage-app.service"}
+{"dt_ms":0,"phase":"myimage-init_invoke","pid":46,"status":"ok","t_start_ms":1777840898981,"unit":"myimage-init.service"}
+{"dt_ms":0,"phase":"network-wait_invoke","pid":47,"status":"ok","t_start_ms":1777840898981,"unit":"network-wait.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"exited","status":"ok","t_start_ms":1777840898985,"unit":"network-wait.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"exited","status":"ok","t_start_ms":1777840898986,"unit":"myimage-init.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777840899001,"unit":"window-manager.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840899502,"unit":"window-manager.service"}
+{"dt_ms":1,"phase":"window-manager_invoke","pid":59,"status":"ok","t_start_ms":1777840899502,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777840899513,"unit":"window-manager.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840900015,"unit":"window-manager.service"}
+{"dt_ms":0,"phase":"window-manager_invoke","pid":72,"status":"ok","t_start_ms":1777840900015,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777840900028,"unit":"window-manager.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840900529,"unit":"window-manager.service"}
+{"dt_ms":1,"phase":"window-manager_invoke","pid":78,"status":"ok","t_start_ms":1777840900529,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777840900546,"unit":"window-manager.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840901050,"unit":"window-manager.service"}
+{"dt_ms":1,"phase":"window-manager_invoke","pid":84,"status":"ok","t_start_ms":1777840901050,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777840901073,"unit":"window-manager.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840901575,"unit":"window-manager.service"}
+{"dt_ms":0,"phase":"window-manager_invoke","pid":90,"status":"ok","t_start_ms":1777840901575,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777840901597,"unit":"window-manager.service"}
+{"dt_ms":0,"phase":"first_connect","status":"ok","t_start_ms":1777840901998,"unit":"myhelper.socket"}
+{"argv":["/usr/local/bin/myhelper"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840901998,"unit":"myhelper.service"}
+{"dt_ms":0,"phase":"myhelper_invoke","pid":96,"status":"ok","t_start_ms":1777840901998,"unit":"myhelper.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"exited","status":"ok","t_start_ms":1777840902016,"unit":"myhelper.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840902100,"unit":"window-manager.service"}
+{"dt_ms":1,"phase":"window-manager_invoke","pid":97,"status":"ok","t_start_ms":1777840902100,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777840902122,"unit":"window-manager.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777840902624,"unit":"window-manager.service"}
+{"dt_ms":1,"phase":"window-manager_invoke","pid":103,"status":"ok","t_start_ms":1777840902624,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777840902648,"unit":"window-manager.service"}

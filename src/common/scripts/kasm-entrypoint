@@ -1,0 +1,12 @@
+#!/bin/sh
+# Phase 6: thin shim — container-init is the only boot path. The Go
+# supervisor owns argv parsing, the kasm-os-user rename (via
+# kasm-setup.service), and per-service privilege drop. POSIX /bin/sh
+# so it runs verbatim on every dockerfile-kasm-core* image.
+#
+# Note: $@ is intentionally NOT forwarded. container-init reads its
+# config from /etc/container-init/units (default flag value) — the
+# legacy `CMD ["--wait"]` argv is a bash-chain artifact that the
+# supervisor does not understand, so the shim drops it on the floor.
+set -e
+exec /usr/local/bin/container-init

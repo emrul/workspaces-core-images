@@ -1,0 +1,17 @@
+[Unit]
+Description=Audio-in helper — public listener
+ConditionEnvironment=KASM_VNC=1
+
+# :4904 is the audio-input port the bash chain (and noVNC) target.
+# :4901 is occupied by the kasm_audio_out-linux WebSocket relay
+# spawned via audio-out-ws.service — Phase 4.6 mistakenly mapped
+# audio-in here, which collided with audio-out and made the relay
+# binary exit with EADDRINUSE on every spawn.
+[Socket]
+ListenStream=4904
+ActivationMode=proxy
+ProxyTarget=127.0.0.1:14901
+Service=audio-in.service
+
+[Install]
+WantedBy=sockets.target

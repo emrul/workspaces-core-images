@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Pattern 1 marker — the probe asserts this file exists post-boot.
+set -eu
+mkdir -p /tmp/extension-test
+date -u +%FT%TZ > /tmp/extension-test/myimage-init.ran

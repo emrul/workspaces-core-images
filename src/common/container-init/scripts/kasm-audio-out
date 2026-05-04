@@ -1,0 +1,16 @@
+#!/bin/sh
+# kasm-audio-out — port of vnc_startup.sh § start_audio_out.
+# Optionally starts pulseaudio, then ffmpeg captures from the default
+# pulse source and ships mpegts to the local jsmpeg websocket helper.
+set -eu
+
+if [ "${START_PULSEAUDIO:-0}" = 1 ]; then
+    HOME=/var/run/pulse pulseaudio --start --exit-idle-time=-1 || true
+fi
+
+frag=${PULSEAUDIO_FRAGMENT_SIZE:-2000}
+exec env HOME=/var/run/pulse no_proxy=127.0.0.1 \
+    ffmpeg -v warning -f pulse -fragment_size "$frag" -ar 44100 -i default \
+    -f mpegts -correct_ts_overflow 0 -codec:a mp2 -b:a 128k -ac 1 \
+    -muxdelay 0.001 \
+    "http://127.0.0.1:8081/kasmaudio"

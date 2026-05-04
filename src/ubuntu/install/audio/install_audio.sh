@@ -76,7 +76,7 @@ done
 EOF
     chmod +x /usr/local/bin/pulseaudio
     # ffmpeg-4 installs as /usr/bin/ffmpeg-4; create /usr/bin/ffmpeg so that
-    # vnc_startup.sh can call 'ffmpeg -f pulse ...' for audio streaming
+    # audio-out.service can call 'ffmpeg -f pulse ...' for audio streaming
     [[ -e /usr/bin/ffmpeg ]] || ln -s /usr/bin/ffmpeg-4 /usr/bin/ffmpeg
   fi
 elif [[ "${DISTRO}" == "alpine" ]]; then

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Pattern 2 marker — long-running. Touch a sentinel on first start
+# so the probe can confirm spawn happened, then idle.
+set -eu
+mkdir -p /tmp/extension-test
+date -u +%FT%TZ > /tmp/extension-test/myimage-app.started
+exec sleep infinity

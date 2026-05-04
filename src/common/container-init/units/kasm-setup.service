@@ -1,0 +1,11 @@
+[Unit]
+Description=Kasm session setup (envdump, dbus, cert, kasmvncpasswd, OS-user rename)
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/kasm-setup
+TimeoutStartSec=60s
+
+[Install]
+WantedBy=multi-user.target

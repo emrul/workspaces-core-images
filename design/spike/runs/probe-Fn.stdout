@@ -1,0 +1,17 @@
+container-init: cgroup-v2 unavailable (mkdir /sys/fs/cgroup/container-init: mkdir /sys/fs/cgroup/container-init: read-only file system); falling back to PGID kill path
+container-init: socket audio-out-ws.socket: bound tcp/:8081 -> audio-out-ws.service (mode=proxy)
+container-init: unit cond-skip.socket: skipped (ConditionEnvironment=KASM_SVC_OFF=1 (have "", want "1"))
+container-init: socket upload.socket: bound tcp/:4902 -> upload.service (mode=native)
+container-init: unit audio-out-ws.service: socket-activated (driven by attached .socket)
+container-init: unit cond-skip.service: skipped (ConditionEnvironment=KASM_SVC_OFF=1 (have "", want "1"))
+container-init: unit recorder-drain.service: skipped (ConditionEnvironment=KASM_SVC_RECORDER=1 (have "", want "1"))
+container-init: unit recorder-watch.service: skipped (ConditionEnvironment=KASM_SVC_RECORDER=1 (have "", want "1"))
+container-init: unit upload.service: socket-activated (driven by attached .socket)
+wm-stub: running indefinitely
+spike-helper(native,pid=25): ready on [::]:4902
+spike-helper(native,pid=25): conn 1 from 127.0.0.1:42764
+spike-helper(native,pid=25): dying after 1 conns (SPIKE_HELPER_DIE_AFTER)
+spike-helper(native,pid=30): ready on [::]:4902
+spike-helper(native,pid=30): conn 1 from 127.0.0.1:42774
+spike-helper(native,pid=30): dying after 1 conns (SPIKE_HELPER_DIE_AFTER)
+spike-helper(native,pid=39): ready on [::]:4902

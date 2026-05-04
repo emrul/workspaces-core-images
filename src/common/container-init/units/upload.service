@@ -1,0 +1,16 @@
+[Unit]
+Description=Upload server (Go, native socket activation)
+Requires=upload.socket
+After=kasm-setup.service
+ConditionEnvironment=KASM_VNC=1
+
+[Service]
+Type=simple
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+ExecStart=/usr/bin/kasm-upload-server --ssl --auth-token ${KASM_UPLOAD_AUTH:-kasm_user:default} --upload-dir ${KASM_OS_HOME:-/home/kasm-user}/Uploads
+Restart=on-failure
+RestartSec=500ms
+StartLimitBurst=5
+StartLimitIntervalSec=60s

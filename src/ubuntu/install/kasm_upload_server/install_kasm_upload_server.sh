@@ -1,14 +1,40 @@
 #!/usr/bin/env bash
+# Install kasm-upload-server.
+#
+# Phase 3 of design/work_sequence.md replaced the PyInstaller-bundled
+# Flask helper (~27 MiB binary, 47 MiB RSS, 200-500 ms cold start)
+# with a Go drop-in (~6 MiB static binary, ~1 MiB RSS, <10 ms cold
+# start). The Go binary is built from src/common/container-init/cmd/
+# kasm-upload-server by the `upload_builder` stage in each
+# dockerfile-kasm-core* and dropped into $INST_SCRIPTS/kasm_upload_server/
+# at `kasm-upload-server` before this script runs.
+#
+# This script's sole job is to put it at the path Phase 4's upload.service
+# expects:
+#     /dockerstartup/upload_server/kasm_upload_server  (mode 0755)
 set -ex
 
-COMMIT_ID="0c56f4c9671a0ba895eb81984e1a037d676d366c"
-BRANCH="develop"
-COMMIT_ID_SHORT=$(echo "${COMMIT_ID}" | cut -c1-6)
+SRC="$(dirname "$0")/kasm-upload-server"
+DEST_DIR="$STARTUPDIR/upload_server"
+DEST="$DEST_DIR/kasm_upload_server"
 
-ARCH=$(arch | sed 's/aarch64/arm64/g' | sed 's/x86_64/amd64/g')
+if [[ ! -f "$SRC" ]]; then
+    echo "FATAL: $SRC not found." >&2
+    echo "       The Dockerfile's upload_builder stage must COPY the binary into" >&2
+    echo "       \$INST_SCRIPTS/kasm_upload_server/kasm-upload-server before this" >&2
+    echo "       script runs. See dockerfile-kasm-core's 'Install Kasm Upload" >&2
+    echo "       Server' block for the canonical pattern." >&2
+    exit 1
+fi
 
-mkdir $STARTUPDIR/upload_server
-wget --quiet https://kasmweb-build-artifacts.s3.amazonaws.com/kasm_upload_service/${COMMIT_ID}/kasm_upload_service_${ARCH}_${BRANCH}.${COMMIT_ID_SHORT}.tar.gz -O /tmp/kasm_upload_server.tar.gz
-tar -xvf /tmp/kasm_upload_server.tar.gz -C $STARTUPDIR/upload_server
-rm /tmp/kasm_upload_server.tar.gz
-echo "${BRANCH}:${COMMIT_ID}" > $STARTUPDIR/upload_server/kasm_upload_service.version
+mkdir -p "$DEST_DIR"
+install -m 0755 "$SRC" "$DEST"
+
+# Stamp the version (mirrors the previous behaviour for any tooling
+# that greps the file). The binary itself is reproducible from the
+# repo SHA, so we record it here for forensic value.
+{
+    echo "source: src/common/container-init/cmd/kasm-upload-server"
+    echo "build:  go static, CGO_ENABLED=0"
+    if [[ -n "${SOURCE_COMMIT:-}" ]]; then echo "commit: $SOURCE_COMMIT"; fi
+} > "$DEST_DIR/kasm_upload_service.version"

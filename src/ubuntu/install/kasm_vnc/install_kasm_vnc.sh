@@ -199,3 +199,17 @@ chown -R 0:0 $KASM_VNC_PATH
 chmod -R og-w $KASM_VNC_PATH
 ln -sf /home/kasm-user/Downloads $KASM_VNC_PATH/www/Downloads/Downloads
 chown -R 1000:0 $KASM_VNC_PATH/www/Downloads
+
+# Bake a self-signed default TLS cert for KasmVNC at image build, so the
+# per-container startup path doesn't have to spend 80-250ms on `openssl req`.
+# Runtime override: set KASM_TLS_CERT_PATH=/path/to/cert.pem (mounted by the
+# operator) and kasm-setup.service copies that file into ~/.vnc/self.pem.
+mkdir -p /etc/kasm
+openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+    -keyout /etc/kasm/self-default.pem \
+    -out /etc/kasm/self-default.pem \
+    -subj "/C=US/ST=VA/L=None/O=None/OU=DoFu/CN=kasm/emailAddress=none@none.none"
+# Numeric gid 1000 is the kasm-user group, which the dockerfile creates after
+# this script runs; chown by numeric id works regardless.
+chown 0:1000 /etc/kasm/self-default.pem
+chmod 0640 /etc/kasm/self-default.pem

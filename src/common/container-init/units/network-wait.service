@@ -1,0 +1,13 @@
+[Unit]
+Description=Wait for non-loopback network interface
+After=kasm-setup.service
+Requires=kasm-setup.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/kasm-network-wait
+TimeoutStartSec=120s
+
+[Install]
+WantedBy=multi-user.target

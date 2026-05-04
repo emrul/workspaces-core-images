@@ -1,0 +1,10 @@
+[Unit]
+Description=Pattern 3 — native sd_listen_fds helper, public listener
+
+[Socket]
+ListenStream=5050
+ActivationMode=native
+Service=myhelper.service
+
+[Install]
+WantedBy=sockets.target

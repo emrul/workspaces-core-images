@@ -1,0 +1,16 @@
+{"phase":"boot_start","t_start_ms":1777851509198,"dt_ms":0,"status":"ok","wall_utc":"2026-05-03T23:38:29.199Z"}
+{"phase":"mem_snapshot","label":"boot","t_start_ms":1777851509199,"dt_ms":0,"status":"ok","cgroup_current_bytes":2985984,"cgroup_peak_bytes":2994176,"cgroup_swap_bytes":0,"nproc":5,"rss_sum_bytes":5681152,"by_comm":[{"comm":"awk","rss_kib":1060},{"comm":"ps","rss_kib":1856},{"comm":"vnc_startup.sh","rss_kib":3456}]}
+{"phase":"dbus_launch","t_start_ms":1777851509206,"dt_ms":3,"status":"ok"}
+{"phase":"network_wait","t_start_ms":1777851509211,"dt_ms":1,"status":"ok"}
+{"phase":"profile_pull","t_start_ms":1777851509213,"dt_ms":1,"status":"ok"}
+{"phase":"source_bashrc","t_start_ms":1777851509214,"dt_ms":2,"status":"ok"}
+{"phase":"openssl_cert","t_start_ms":1777851509217,"dt_ms":2,"status":"ok"}
+{"phase":"kasmvncpasswd","t_start_ms":1777851509220,"dt_ms":9,"status":"ok"}
+{"phase":"kasmvnc_port_open","t_start_ms":1777851509229,"dt_ms":626,"status":"ok"}
+{"phase":"kasmvnc_invoke","t_start_ms":1777851509229,"dt_ms":3724,"status":"ok"}
+{"phase":"wm_invoke","t_start_ms":1777851512954,"dt_ms":0,"status":"ok"}
+{"phase":"mem_snapshot","label":"post_kasmvnc","t_start_ms":1777851512955,"dt_ms":0,"status":"ok","cgroup_current_bytes":27226112,"cgroup_peak_bytes":52363264,"cgroup_swap_bytes":0,"nproc":10,"rss_sum_bytes":376406016,"by_comm":[{"comm":"awk","rss_kib":1000},{"comm":"sleep","rss_kib":2512},{"comm":"Xvnc","rss_kib":78812},{"comm":"ps","rss_kib":1956},{"comm":"dbus-daemon","rss_kib":1080},{"comm":"xfce4-session","rss_kib":7264},{"comm":"vnc_startup.sh","rss_kib":6548}]}
+{"phase":"services_invoke","t_start_ms":1777851512963,"dt_ms":62,"status":"ok"}
+{"phase":"mem_snapshot","label":"post_services","t_start_ms":1777851513032,"dt_ms":0,"status":"ok","cgroup_current_bytes":76328960,"cgroup_peak_bytes":78852096,"cgroup_swap_bytes":0,"nproc":25,"rss_sum_bytes":3015634944,"by_comm":[{"comm":"awk","rss_kib":1060},{"comm":"kasm_gamepad_se","rss_kib":3940},{"comm":"sleep","rss_kib":2436},{"comm":"xfconfd","rss_kib":4304},{"comm":"pulseaudio","rss_kib":6528},{"comm":"at-spi2-registr","rss_kib":5924},{"comm":"kasm_upload_ser","rss_kib":5780},{"comm":"ffmpeg","rss_kib":38280},{"comm":"ld-musl-aarch64","rss_kib":38400},{"comm":"Xvnc","rss_kib":78880},{"comm":"ps","rss_kib":2032},{"comm":"gvfsd","rss_kib":5408},{"comm":"ssh-agent","rss_kib":1560},{"comm":"kasm_printer_se","rss_kib":3068},{"comm":"at-spi-bus-laun","rss_kib":6052},{"comm":"kasm_audio_inpu","rss_kib":3752},{"comm":"dbus-daemon","rss_kib":2508},{"comm":"kasm_smartcard_","rss_kib":2924},{"comm":"xfce4-session","rss_kib":69424},{"comm":"vnc_startup.sh","rss_kib":6548},{"comm":"gsettings-helpe","rss_kib":6524}]}
+{"phase":"pre_monitor_sleep","t_start_ms":1777851513075,"dt_ms":3003,"status":"ok"}
+{"phase":"monitor_loop_entered","t_start_ms":1777851516080,"dt_ms":0,"status":"ok"}

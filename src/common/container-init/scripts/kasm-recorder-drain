@@ -1,0 +1,23 @@
+#!/bin/sh
+# kasm-recorder-drain — port of vnc_startup.sh §
+# ensure_recorder_terminates_gracefully. Blocks until the recorder
+# process is gone, then exits non-zero so recorder-drain.service's
+# ExitContainerOnFailure=true triggers reverse shutdown. This is the
+# WM-dies-with-recorder cross-service rule from the spike: the bash's
+# OnFailure=recorder-drain.service edge fires this script, the script
+# drains pending uploads, and the resulting non-zero exit takes the
+# whole container down via container-init's reverse-shutdown path.
+set -eu
+
+recorder_proc="/dockerstartup/recorder/kasm_recorder_service"
+deadline=$((SECONDS + 240))
+
+while [ "$SECONDS" -lt "$deadline" ]; do
+    if ! pgrep -f "$recorder_proc" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
+# Failure exit drives ExitContainerOnFailure=true.
+exit 1

@@ -1,0 +1,10 @@
+container-init: cgroup-v2 unavailable (mkdir /sys/fs/cgroup/container-init: mkdir /sys/fs/cgroup/container-init: read-only file system); falling back to PGID kill path
+uid=1500(alice) gid=1500(alice) groups=1500(alice)
+/home/alice
+HOME=/home/alice
+container-init: received terminated, beginning reverse shutdown
+container-init: cgroup-v2 unavailable (mkdir /sys/fs/cgroup/container-init: mkdir /sys/fs/cgroup/container-init: read-only file system); falling back to PGID kill path
+uid=1500(alice) gid=1500(alice) groups=1500(alice)
+/home/alice
+HOME=/home/alice
+container-init: received terminated, beginning reverse shutdown

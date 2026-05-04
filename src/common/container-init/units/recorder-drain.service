@@ -1,0 +1,11 @@
+[Unit]
+Description=Drain in-flight recorder uploads then exit container
+ConditionEnvironment=KASM_SVC_RECORDER=1
+# Auto-skip when the recorder binary isn't installed (INCLUDE_RECORDER=0).
+ConditionPathExists=/dockerstartup/recorder/kasm_recorder_service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/kasm-recorder-drain
+ExitContainerOnFailure=true
+TimeoutStartSec=300s

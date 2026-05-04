@@ -1,0 +1,12 @@
+[Unit]
+Description=Pattern 5 — system D-Bus public AF_UNIX listener
+
+[Socket]
+ListenStream=/run/dbus/system_bus_socket
+SocketUser=root
+SocketMode=0666
+ActivationMode=native
+Service=dbus-system.service
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,39 @@
+{"dt_ms":0,"phase":"boot_start","status":"ok","t_start_ms":1777847298509,"wall_utc":"2026-05-03T22:28:18.509Z"}
+{"by_comm":[{"comm":"container-init","rss_kib":3208}],"cgroup_current_bytes":2756608,"cgroup_peak_bytes":2756608,"cgroup_swap_bytes":0,"dt_ms":0,"label":"boot","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":3284992,"status":"ok","t_start_ms":1777847298510}
+{"count":23,"dt_ms":0,"overrides":0,"phase":"units_loaded","status":"ok","t_start_ms":1777847298511,"warnings":0}
+{"available":false,"dt_ms":0,"err":"mkdir /sys/fs/cgroup/container-init: mkdir /sys/fs/cgroup/container-init: read-only file system","phase":"cgroup_init","status":"ok","t_start_ms":1777847298511}
+{"dt_ms":0,"phase":"supervisor_start","status":"ok","t_start_ms":1777847298511}
+{"address":":4904","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777847298511,"unit":"audio-in.socket"}
+{"address":":8081","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777847298511,"unit":"audio-out-ws.socket"}
+{"address":":4903","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777847298511,"unit":"gamepad.socket"}
+{"address":":4902","dt_ms":0,"mode":"native","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777847298511,"unit":"upload.socket"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dev/video0 unmet","status":"ok","t_start_ms":1777847298511,"unit":"webcam.socket"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_PROFILE_PULL=1 (have \"0\", want \"1\")","status":"ok","t_start_ms":1777847298511,"unit":"profile-pull.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_SVC_RECORDER=1 (have \"\", want \"1\")","status":"ok","t_start_ms":1777847298511,"unit":"recorder-drain.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dev/video0 unmet","status":"ok","t_start_ms":1777847298511,"unit":"webcam.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionPathExists=/dockerstartup/custom_startup.sh unmet","status":"ok","t_start_ms":1777847298511,"unit":"custom-startup.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_PROFILE_PULL=1 (have \"0\", want \"1\")","status":"ok","t_start_ms":1777847298511,"unit":"profile-size-check.service"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_SVC_RECORDER=1 (have \"\", want \"1\")","status":"ok","t_start_ms":1777847298511,"unit":"recorder-watch.service"}
+{"argv":["/usr/local/bin/kasm-setup"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847298511,"unit":"kasm-setup.service"}
+{"by_comm":[{"comm":"container-init","rss_kib":4224}],"cgroup_current_bytes":3760128,"cgroup_peak_bytes":3760128,"cgroup_swap_bytes":0,"dt_ms":0,"label":"post_services","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":4325376,"status":"ok","t_start_ms":1777847298511}
+{"dt_ms":0,"phase":"kasm-setup_invoke","pid":10,"status":"ok","t_start_ms":1777847298511,"unit":"kasm-setup.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"exited","status":"ok","t_start_ms":1777847298545,"unit":"kasm-setup.service"}
+{"argv":["/usr/local/bin/kasm-network-wait"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847298545,"unit":"network-wait.service"}
+{"argv":["/usr/local/bin/kasm-xvnc"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847298545,"unit":"kasmvnc.service"}
+{"dt_ms":0,"phase":"network-wait_invoke","pid":33,"status":"ok","t_start_ms":1777847298545,"unit":"network-wait.service"}
+{"argv":["/usr/local/bin/kasm-audio-out"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847298546,"unit":"audio-out.service"}
+{"dt_ms":1,"phase":"kasmvnc_invoke","pid":34,"status":"ok","t_start_ms":1777847298545,"unit":"kasmvnc.service"}
+{"argv":["/usr/sbin/pcscd","--foreground","--apdu"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847298546,"unit":"pcscd.service"}
+{"argv":["/dockerstartup/printer/kasm_printer_service","--directory","/home/kasm-user/PDF","--relay","/tmp/printer"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847298546,"unit":"printer.service"}
+{"argv":["/usr/local/bin/kasm-window-manager"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847298546,"unit":"window-manager.service"}
+{"dt_ms":0,"phase":"pcscd_invoke","pid":39,"status":"ok","t_start_ms":1777847298546,"unit":"pcscd.service"}
+{"argv":["/dockerstartup/smartcard/kasm_smartcard_bridge","--relay","/tmp/smartcard"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847298547,"unit":"smartcard.service"}
+{"dt_ms":1,"phase":"printer_invoke","pid":40,"status":"ok","t_start_ms":1777847298546,"unit":"printer.service"}
+{"dt_ms":2,"phase":"audio-out_invoke","pid":41,"status":"ok","t_start_ms":1777847298546,"unit":"audio-out.service"}
+{"dt_ms":2,"phase":"window-manager_invoke","pid":48,"status":"ok","t_start_ms":1777847298546,"unit":"window-manager.service"}
+{"dt_ms":1,"phase":"smartcard_invoke","pid":49,"status":"ok","t_start_ms":1777847298547,"unit":"smartcard.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"exited","status":"ok","t_start_ms":1777847298556,"unit":"network-wait.service"}
+{"dt_ms":0,"phase":"first_connect","status":"ok","t_start_ms":1777847299966,"unit":"audio-out-ws.socket"}
+{"argv":["/dockerstartup/jsmpeg/kasm_audio_out-linux","kasmaudio","14081","4901","/home/kasm-user/.vnc/self.pem","/home/kasm-user/.vnc/self.pem","kasm-user:vncpassword"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777847299966,"unit":"audio-out-ws.service"}
+{"dt_ms":0,"phase":"audio-out-ws_invoke","pid":109,"status":"ok","t_start_ms":1777847299966,"unit":"audio-out-ws.service"}
+{"by_comm":[{"comm":"Xvnc","rss_kib":68644},{"comm":"container-init","rss_kib":4880},{"comm":"dbus-daemon","rss_kib":5392},{"comm":"dbus-launch.x11","rss_kib":2036},{"comm":"ffmpeg","rss_kib":44400},{"comm":"kasm_audio_out-","rss_kib":38004},{"comm":"kasm_printer_se","rss_kib":26724},{"comm":"kasm_smartcard_","rss_kib":18624},{"comm":"pcscd","rss_kib":2656},{"comm":"pipewire","rss_kib":8348},{"comm":"pipewire-pulse","rss_kib":12896},{"comm":"pulseaudio","rss_kib":5012},{"comm":"wireplumber","rss_kib":22128},{"comm":"xfce4-session","rss_kib":73400}],"cgroup_current_bytes":341704704,"cgroup_peak_bytes":342351872,"cgroup_swap_bytes":0,"dt_ms":0,"label":"steady_state_t+20s","nproc":21,"phase":"mem_snapshot","rss_sum_bytes":341139456,"status":"ok","t_start_ms":1777847318515}

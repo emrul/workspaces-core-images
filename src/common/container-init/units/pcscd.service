@@ -1,0 +1,12 @@
+[Unit]
+Description=PC/SC daemon
+After=kasmvnc.service
+ConditionEnvironment=KASM_VNC=1
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/pcscd --foreground --apdu
+Restart=on-failure
+RestartSec=2s
+StartLimitBurst=3
+StartLimitIntervalSec=60s

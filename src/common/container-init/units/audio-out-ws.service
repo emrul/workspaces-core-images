@@ -1,0 +1,21 @@
+[Unit]
+Description=Audio-out websocket helper (jsmpeg)
+Requires=audio-out-ws.socket
+After=kasm-setup.service
+ConditionEnvironment=KASM_VNC=1
+
+[Service]
+Type=simple
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+# Auth token "<user>:<password>" — the browser is prompted for HTTP
+# basic auth on first audio connect, so the username should track
+# KASM_OS_USER (operators changing the OS user expect their browser
+# prompt to accept the same name). Default password is ${VNC_PW},
+# matching the bash chain's literal `kasm_user:$VNC_PW` behaviour.
+ExecStart=/dockerstartup/jsmpeg/kasm_audio_out-linux kasmaudio 14081 4901 ${KASM_OS_HOME:-/home/kasm-user}/.vnc/self.pem ${KASM_OS_HOME:-/home/kasm-user}/.vnc/self.pem ${KASM_AUDIO_AUTH:-${KASM_OS_USER:-kasm-user}:${VNC_PW}}
+Restart=on-failure
+RestartSec=500ms
+StartLimitBurst=5
+StartLimitIntervalSec=30s

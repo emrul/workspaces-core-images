@@ -1,0 +1,15 @@
+[Unit]
+# Pattern 4 — *replaces* core /etc/container-init/units/kasmvnc.service
+# via the override-by-name semantic. The fixture probe asserts the
+# "drop-in override" log line names this file.
+Description=KasmVNC (warm-pool drop-in, fixture variant)
+Requires=kasmvnc.socket
+After=kasm-setup.service
+ConditionEnvironment=KASM_VNC=1
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/kasm-xvnc
+Restart=on-failure
+RestartSec=200ms
+Environment=NO_VNC_PORT=16901

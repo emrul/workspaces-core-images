@@ -1,0 +1,53 @@
+#!/bin/sh
+# kasm-os-user-rename — Phase 4.10 OS-user rename / chown step.
+# Invoked from kasm-setup only when at least one of KASM_OS_USER /
+# _UID / _GID / _GROUP / _HOME differs from its default. No-op
+# fast-path when all values match defaults — handled by the caller.
+#
+# Per-distro nuance: Alpine ships busybox usermod, which lacks -m / -l.
+# Detect $DISTRO and fall back to delgroup/addgroup/adduser/mv there.
+set -eu
+
+KASM_OS_USER=${KASM_OS_USER:-kasm-user}
+KASM_OS_UID=${KASM_OS_UID:-1000}
+KASM_OS_GID=${KASM_OS_GID:-1000}
+KASM_OS_GROUP=${KASM_OS_GROUP:-kasm-user}
+KASM_OS_HOME=${KASM_OS_HOME:-/home/kasm-user}
+
+case "${DISTRO:-}" in
+    alpine)
+        # busybox path: delete + re-create.
+        old_home=$(getent passwd kasm-user | cut -d: -f6 || echo /home/kasm-user)
+        deluser kasm-user 2>/dev/null || true
+        delgroup kasm-user 2>/dev/null || true
+        addgroup -g "$KASM_OS_GID" "$KASM_OS_GROUP"
+        adduser -D -h "$KASM_OS_HOME" -u "$KASM_OS_UID" -G "$KASM_OS_GROUP" -s /bin/sh "$KASM_OS_USER"
+        if [ "$old_home" != "$KASM_OS_HOME" ] && [ -d "$old_home" ]; then
+            mkdir -p "$(dirname "$KASM_OS_HOME")"
+            mv "$old_home" "$KASM_OS_HOME"
+        fi
+        ;;
+    *)
+        # util-linux path (every other distro in the matrix).
+        groupmod -g "$KASM_OS_GID" -n "$KASM_OS_GROUP" kasm-user 2>/dev/null || true
+        usermod  -u "$KASM_OS_UID" -g "$KASM_OS_GID" -l "$KASM_OS_USER" -d "$KASM_OS_HOME" -m kasm-user 2>/dev/null || true
+        ;;
+esac
+
+# Sweep any non-home files that were owned by the old uid/gid (squid
+# nssdb, unison config, /run/pcscd, $STARTUPDIR/kasmrx/Downloads,
+# /usr/share/icons/* cursor symlinks).
+# `-h` is required: cursor files etc. are symlinks; without -h, chown
+# follows the link and chowns the target, leaving the symlink itself
+# at the old uid (and `find -uid` keeps finding it).
+find / -mount -uid 1000 -exec chown -h "$KASM_OS_UID":"$KASM_OS_GID" {} + 2>/dev/null || true
+find / -mount -gid 1000 -exec chgrp -h "$KASM_OS_GID" {} + 2>/dev/null || true
+
+# Update copied-in xfce panel XML configs that hardcode /home/kasm-user.
+xfce_xml="$KASM_OS_HOME/.config/xfce4/xfconf/xfce-perchannel-xml"
+if [ -d "$xfce_xml" ]; then
+    find "$xfce_xml" -type f -name '*.xml' \
+        -exec sed -i "s|/home/kasm-user|$KASM_OS_HOME|g" {} \; 2>/dev/null || true
+fi
+
+exit 0

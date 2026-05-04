@@ -1,0 +1,54 @@
+#!/bin/sh
+# kasm-profile-pull — port of vnc_startup.sh § pull_profile.
+# Runs whichever profile-sync binary KASM_PROFILE_LDR selects, then
+# notifies the Workspaces server that the session is "running".
+set -eu
+
+KASM_OS_HOME=${KASM_OS_HOME:-/home/kasm-user}
+KASM_PROFILE_CHUNK_SIZE=${KASM_PROFILE_CHUNK_SIZE:-100000}
+
+if [ -z "${KASM_PROFILE_LDR:-}" ]; then
+    exit 0
+fi
+
+if ! [ -f /usr/bin/kasm-profile-sync ] && ! [ -f /usr/bin/kasm-profile-sync-2 ]; then
+    echo "kasm-profile-pull: profile-sync binaries not installed; skipping" >&2
+    sleep 3
+    if [ -n "${KASM_API_HOST:-}" ]; then
+        http_proxy= https_proxy= curl -k -m 5 -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"status":"running"}' \
+            "https://${KASM_API_HOST}:${KASM_API_PORT}/api/set_kasm_session_status?token=${KASM_API_JWT}" >/dev/null 2>&1 || true
+    fi
+    exit 0
+fi
+
+case "${KASM_PROFILE_LDR}" in
+    0|1)
+        http_proxy= https_proxy= /usr/bin/kasm-profile-sync \
+            --download "$KASM_OS_HOME" --insecure \
+            --remote "${KASM_API_HOST}" --port "${KASM_API_PORT}" \
+            -c "${KASM_PROFILE_CHUNK_SIZE}" --token "${KASM_API_JWT}"
+        rc=$?
+        sleep 3
+        http_proxy= https_proxy= curl -k -m 5 -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"status":"running"}' \
+            "https://${KASM_API_HOST}:${KASM_API_PORT}/api/set_kasm_session_status?token=${KASM_API_JWT}" >/dev/null 2>&1 || true
+        ;;
+    2)
+        http_proxy= https_proxy= /usr/bin/kasm-profile-sync-2 \
+            --action pull --ignore-ssl --report-status
+        rc=$?
+        ;;
+    *)
+        echo "kasm-profile-pull: unexpected KASM_PROFILE_LDR=$KASM_PROFILE_LDR" >&2
+        exit 0
+        ;;
+esac
+
+if [ "${rc:-0}" -gt 1 ]; then
+    echo "kasm-profile-pull: non-recoverable error (rc=$rc)" >&2
+    exit 1
+fi
+exit 0

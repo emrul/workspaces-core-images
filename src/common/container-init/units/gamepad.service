@@ -1,0 +1,16 @@
+[Unit]
+Description=Gamepad helper (PyInstaller bundle)
+Requires=gamepad.socket
+After=kasm-setup.service
+ConditionEnvironment=KASM_VNC=1
+# Auto-skip when the helper binary isn't installed (INCLUDE_GAMEPAD=0
+# at build time strips /dockerstartup/gamepad/).
+ConditionPathExists=/dockerstartup/gamepad/kasm_gamepad_server
+
+[Service]
+Type=simple
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+ExecStart=/dockerstartup/gamepad/kasm_gamepad_server --ssl --port 14903 --auth-token ${KASM_GAMEPAD_AUTH:-kasm_user:default} --cert ${KASM_OS_HOME:-/home/kasm-user}/.vnc/self.pem --certkey ${KASM_OS_HOME:-/home/kasm-user}/.vnc/self.pem
+Restart=no

@@ -1,0 +1,19 @@
+[Unit]
+Description=KasmVNC (Xvnc via kasm-xvnc launcher)
+After=kasm-setup.service profile-pull.service
+Requires=kasm-setup.service
+ConditionEnvironment=KASM_VNC=1
+
+[Service]
+Type=simple
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+ExecStart=/usr/local/bin/kasm-xvnc
+Restart=on-failure
+RestartSec=200ms
+StartLimitBurst=5
+StartLimitIntervalSec=30s
+
+[Install]
+WantedBy=multi-user.target

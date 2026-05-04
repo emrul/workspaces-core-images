@@ -1,0 +1,11 @@
+{"dt_ms":0,"phase":"boot_start","status":"ok","t_start_ms":1777834622319,"wall_utc":"2026-05-03T18:57:02.320Z"}
+{"by_comm":[{"comm":"container-init","rss_kib":3212}],"cgroup_current_bytes":1650688,"cgroup_peak_bytes":1658880,"cgroup_swap_bytes":0,"dt_ms":0,"label":"boot","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":3289088,"status":"ok","t_start_ms":1777834622320}
+{"count":2,"dt_ms":0,"phase":"units_loaded","status":"ok","t_start_ms":1777834622320,"warnings":0}
+{"available":false,"dt_ms":0,"err":"mkdir /sys/fs/cgroup/container-init: mkdir /sys/fs/cgroup/container-init: read-only file system","phase":"cgroup_init","status":"ok","t_start_ms":1777834622320}
+{"dt_ms":0,"phase":"supervisor_start","status":"ok","t_start_ms":1777834622320}
+{"argv":["/bin/sh","-c","mkdir -p /home/kasm-user/.vnc && cp -f /etc/kasm/self-default.pem /home/kasm-user/.vnc/self.pem 2>/dev/null || true; chmod 600 /home/kasm-user/.vnc/self.pem 2>/dev/null || true; printf 'password\\\\npassword\\\\n\\\\n' | kasmvncpasswd -u kasm_user -wo; chmod 600 /home/kasm-user/.kasmpasswd; rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777834622320,"unit":"kasm-setup.service"}
+{"argv":["/usr/local/bin/kasm-xvnc"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777834622321,"unit":"kasmvnc.service"}
+{"by_comm":[{"comm":"container-init","rss_kib":3656}],"cgroup_current_bytes":1912832,"cgroup_peak_bytes":1912832,"cgroup_swap_bytes":0,"dt_ms":0,"label":"post_services","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":3743744,"status":"ok","t_start_ms":1777834622321}
+{"dt_ms":0,"phase":"kasm-setup_invoke","pid":9,"status":"ok","t_start_ms":1777834622321,"unit":"kasm-setup.service"}
+{"dt_ms":0,"phase":"kasmvnc_invoke","pid":11,"status":"ok","t_start_ms":1777834622321,"unit":"kasmvnc.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"exited","status":"ok","t_start_ms":1777834622325,"unit":"kasm-setup.service"}

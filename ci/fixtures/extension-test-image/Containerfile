@@ -1,0 +1,16 @@
+# CI fixture: layers /etc/container-init.d/ drop-ins exercising every
+# documented worked example onto the production-probe image. The probe
+# script (design/spike/scripts/probe-extension.sh) builds + runs this
+# image and asserts the supervisor wires each pattern correctly.
+FROM kasm-prod-probe:latest
+USER 0
+
+# Drop-in unit files — patterns 1..5 from src/common/container-init/README.md.
+RUN mkdir -p /etc/container-init.d /usr/local/bin
+COPY dropins/ /etc/container-init.d/
+COPY scripts/ /usr/local/bin/
+
+RUN chmod +x /usr/local/bin/myimage-init \
+              /usr/local/bin/myimage-app \
+              /usr/local/bin/myhelper \
+              /usr/local/bin/dbus-system-stub

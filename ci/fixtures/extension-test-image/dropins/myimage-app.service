@@ -1,0 +1,15 @@
+[Unit]
+Description=Pattern 2 — long-running app under the WM
+# Fixture deviates from README: depends on kasm-setup instead of
+# window-manager so the same drop-in works in headless mode (KASM_VNC=0)
+# where window-manager is skipped via ConditionEnvironment.
+After=kasm-setup.service
+Requires=kasm-setup.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/myimage-app
+Restart=on-failure
+RestartSec=2s
+StartLimitBurst=5
+StartLimitIntervalSec=60s

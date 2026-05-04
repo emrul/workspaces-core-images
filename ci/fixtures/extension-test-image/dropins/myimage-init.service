@@ -1,0 +1,10 @@
+[Unit]
+Description=Pattern 1 — one-shot at boot
+After=kasm-setup.service
+Requires=kasm-setup.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/myimage-init
+TimeoutStartSec=60s

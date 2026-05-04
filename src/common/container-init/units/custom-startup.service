@@ -1,0 +1,13 @@
+[Unit]
+Description=Back-compat shim — runs /dockerstartup/custom_startup.sh if present
+After=window-manager.service
+ConditionPathExists=/dockerstartup/custom_startup.sh
+
+[Service]
+Type=simple
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+Environment=DISPLAY=:1
+ExecStart=/dockerstartup/custom_startup.sh
+Restart=no

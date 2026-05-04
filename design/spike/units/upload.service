@@ -1,0 +1,9 @@
+[Unit]
+Description=Upload helper (native — consumes inherited fd 3)
+Requires=upload.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/spike-helper -mode native
+Restart=on-failure
+RestartSec=200ms

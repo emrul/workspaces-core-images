@@ -1,0 +1,22 @@
+[Unit]
+Description=Printer helper (kasm_printer_service)
+# Phase 4 design corrected during 5.x.1 noble verification: Xvnc owns
+# /tmp/printer (created via -UnixRelay printer:/tmp/printer in
+# kasm-xvnc); printer.service is the *client* that pulls jobs off it.
+# Earlier socket-activation wiring raced Xvnc for the same path.
+After=kasmvnc.service
+Requires=kasmvnc.service
+ConditionEnvironment=KASM_VNC=1
+# Auto-skip when the helper binary isn't installed (INCLUDE_PRINTER=0).
+ConditionPathExists=/dockerstartup/printer/kasm_printer_service
+
+[Service]
+Type=simple
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+ExecStart=/dockerstartup/printer/kasm_printer_service --directory ${KASM_OS_HOME:-/home/kasm-user}/PDF --relay /tmp/printer
+Restart=on-failure
+RestartSec=2s
+StartLimitBurst=3
+StartLimitIntervalSec=60s

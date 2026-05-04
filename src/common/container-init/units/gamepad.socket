@@ -1,0 +1,12 @@
+[Unit]
+Description=Gamepad helper — public listener
+ConditionEnvironment=KASM_VNC=1
+
+[Socket]
+ListenStream=4903
+ActivationMode=proxy
+ProxyTarget=127.0.0.1:14903
+Service=gamepad.service
+
+[Install]
+WantedBy=sockets.target

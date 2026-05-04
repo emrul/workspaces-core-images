@@ -1,0 +1,12 @@
+[Unit]
+Description=Pattern 4 — KasmVNC public listener (warm-pool drop-in)
+ConditionEnvironment=KASM_VNC=1
+
+[Socket]
+ListenStream=6901
+ActivationMode=proxy
+ProxyTarget=127.0.0.1:16901
+Service=kasmvnc.service
+
+[Install]
+WantedBy=sockets.target

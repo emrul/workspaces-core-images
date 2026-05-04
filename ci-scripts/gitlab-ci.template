@@ -129,6 +129,7 @@ test_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
     - ARCH=$( echo "$CI_RUNNER_TAGS" | sed -e 's/.*-amd-.*/x86_64/' -e 's/.*-arm-.*/aarch64/' )
     - apk add bash
     - bash ci-scripts/test-unit.sh "{{ IMAGE.name1 }}" "{{ IMAGE.name2 }}" "${ARCH}"
+    - bash ci-scripts/test-container-init.sh "{{ IMAGE.name1 }}" "{{ IMAGE.name2 }}" "${ARCH}"
     - bash ci-scripts/test.sh "{{ IMAGE.name1 }}" "{{ IMAGE.name2 }}" "{{ IMAGE.base }}" "{{ IMAGE.bg }}" "{{ IMAGE.distro }}" "{{ IMAGE.dockerfile }}" "${ARCH}" "${EC2_LAUNCHER_ID}" "${EC2_LAUNCHER_SECRET}"
   needs:
     - build_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}
@@ -161,6 +162,7 @@ test_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
   script:
     - apk add bash
     - bash ci-scripts/test-unit.sh "{{ IMAGE.name1 }}" "{{ IMAGE.name2 }}" "x86_64"
+    - bash ci-scripts/test-container-init.sh "{{ IMAGE.name1 }}" "{{ IMAGE.name2 }}" "x86_64"
     - bash ci-scripts/test.sh "{{ IMAGE.name1 }}" "{{ IMAGE.name2 }}" "{{ IMAGE.base }}" "{{ IMAGE.bg }}" "{{ IMAGE.distro }}" "{{ IMAGE.dockerfile }}" "x86_64" "${EC2_LAUNCHER_ID}" "${EC2_LAUNCHER_SECRET}"
   needs:
     - build_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}

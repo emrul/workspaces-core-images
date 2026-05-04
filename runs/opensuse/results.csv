@@ -1,0 +1,7 @@
+path,i,ttfl_trace_ms,ttfl_extern_ms,cgmem_bytes,nproc
+ci,1,36,482,342327296,24
+ci,2,21,417,279289856,24
+ci,3,26,358,243318784,24
+bash,1,NA,,,
+bash,2,NA,,,
+bash,3,NA,,,

@@ -1,0 +1,9 @@
+[Unit]
+Description=Audio out websocket helper (proxy — binds private endpoint)
+Requires=audio-out-ws.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/spike-helper -mode proxy -listen 127.0.0.1:14081
+Restart=on-failure
+RestartSec=200ms

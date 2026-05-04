@@ -1,0 +1,58 @@
+#!/bin/sh
+# kasm-profile-size-check — port of vnc_startup.sh § profile_size_check.
+# Polls every 60s; pings notify-send when the profile is at / over its
+# storage limit. Lives in the boot path because the bash sub-shell that
+# implements it today is itself one of the units we're decomposing.
+set -eu
+
+KASM_OS_HOME=${KASM_OS_HOME:-/home/kasm-user}
+
+if [ -z "${KASM_PROFILE_LDR:-}" ]; then
+    case "${KASM_PROFILE_SIZE_LIMIT:-}" in
+        ''|0) exit 0 ;;
+    esac
+    SIZE_LIMIT_MB=$(( KASM_PROFILE_SIZE_LIMIT / 1000 ))
+    failed=0
+    while :; do
+        sleep 60
+        cur=$(du -s "$KASM_OS_HOME" | awk '{print $1}')
+        if [ "$cur" -gt "$KASM_PROFILE_SIZE_LIMIT" ]; then
+            notify-send "Profile Size Exceeds Limit" "Your home profile has exceeded the size limit of ${SIZE_LIMIT_MB}MB. Changes will not be saved between sessions until you reduce the size of your profile." \
+                -i /usr/share/icons/ubuntu-mono-dark/apps/22/dropboxstatus-x.svg -t 57000 || true
+            failed=1
+        elif [ "$failed" = 1 ]; then
+            failed=0
+            notify-send "Profile Size" "Your home profile size is now under the limit and will be saved when your session is terminated." \
+                -i /usr/share/icons/ubuntu-mono-dark/apps/22/dropboxstatus-logo.svg -t 57000 || true
+        fi
+        if [ -f /tmp/.kasm_container_shutdown_failure ]; then
+            notify-send "Profile Size" "Your profile failed to save. Contact your administrator for assistance." \
+                -i /usr/share/icons/ubuntu-mono-dark/apps/22/dropboxstatus-logo.svg -t 57000 || true
+        fi
+    done
+fi
+
+case "${KASM_PROFILE_LDR}" in
+    1|2)
+        while :; do
+            sleep 60
+            output=$(http_proxy= https_proxy= /usr/bin/kasm-profile-sync-2 --action status --ignore-ssl 2>&1) || rc=$?
+            rc=${rc:-0}
+            case "$rc" in
+                1)
+                    limit=$(printf '%s\n' "$output" | tail -n1 | grep -oE '\([0-9, ]+ MB\)' | tr -dc '0-9')
+                    notify-send "Profile Size Warning" "Your profile is nearing its size limit of ${limit}MB. Please consider cleaning up to avoid data loss." \
+                        -i /usr/share/icons/ubuntu-mono-dark/apps/22/dropboxstatus-x.svg -t 57000 || true
+                    ;;
+                2)
+                    notify-send "Profile Size Exceeds Limit" "Your profile has exceeded its size limit. Changes will not be saved until the size is reduced." \
+                        -i /usr/share/icons/ubuntu-mono-dark/apps/22/dropboxstatus-x.svg -t 57000 || true
+                    ;;
+            esac
+            if [ -f /tmp/.kasm_container_shutdown_failure ]; then
+                notify-send "Profile Size" "Your profile failed to save. Contact your administrator for assistance." \
+                    -i /usr/share/icons/ubuntu-mono-dark/apps/22/dropboxstatus-logo.svg -t 57000 || true
+            fi
+        done
+        ;;
+esac

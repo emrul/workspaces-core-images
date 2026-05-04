@@ -1,0 +1,42 @@
+#!/bin/sh
+# kasm-network-wait — port of vnc_startup.sh § wait_for_network_devices.
+# Waits for any non-loopback / non-tun interface to appear. Egress-gateway
+# containers also wait for /dockerstartup/.egress_status before signalling
+# the Workspaces server.
+set -eu
+
+while :; do
+    interfaces=$(ip -o link show 2>/dev/null \
+        | awk '!/lo:/ && !/tun/ {sub(/@.*/,"",$2); print $2}' \
+        | tr -d ':')
+    if [ -z "$interfaces" ]; then
+        sleep 1
+        continue
+    fi
+    for iface in $interfaces; do
+        case "$iface" in
+            eth*)
+                if [ -z "${KASM_SVC_EGRESS:-}" ]; then
+                    exit 0
+                fi
+                ;;
+            k-p-*)
+                # Egress gateway path: wait for the gateway probe.
+                while [ ! -f /dockerstartup/.egress_status ]; do sleep 1; done
+                status=$(cat /dockerstartup/.egress_status 2>/dev/null || echo error)
+                if [ "$status" = ready ]; then
+                    if [ -z "${KASM_PROFILE_LDR:-}" ] && [ -n "${KASM_API_HOST:-}" ]; then
+                        http_proxy= https_proxy= curl -k -m 2 -X POST \
+                            -H 'Content-Type: application/json' \
+                            -d '{"status":"running"}' \
+                            "https://${KASM_API_HOST}:${KASM_API_PORT}/api/set_kasm_session_status?token=${KASM_API_JWT}" >/dev/null 2>&1 || true
+                    fi
+                    exit 0
+                fi
+                echo "egress gateway failed (status=$status)" >&2
+                exit 1
+                ;;
+        esac
+    done
+    sleep 1
+done

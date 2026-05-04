@@ -1,0 +1,8 @@
+[Unit]
+Description=Service for cond-skip.socket — should never start
+ConditionEnvironment=KASM_SVC_OFF=1
+Requires=cond-skip.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/spike-helper -mode native

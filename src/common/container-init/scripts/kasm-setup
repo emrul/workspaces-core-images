@@ -1,0 +1,74 @@
+#!/bin/sh
+# kasm-setup — privileged-context oneshot for Kasm session bootstrap.
+# Runs as root from kasm-setup.service before any other unit.
+#
+#  1. (Phase 4.10) Optional OS-user rename when KASM_OS_USER / _UID /
+#     _GID / _GROUP / _HOME differ from defaults.
+#  2. mkdirs (/var/run/pulse, /var/log/journal, ${KASM_OS_HOME}/.vnc)
+#  3. dbus-launch + export the session-bus address into /tmp/kasm.env
+#     so subsequent units can pick it up.
+#  4. Cert install: /etc/kasm/self-default.pem -> ${KASM_OS_HOME}/.vnc/self.pem
+#     (overrideable via KASM_TLS_CERT_PATH).
+#  5. kasmvncpasswd from $VNC_PW.
+#  6. Stale X1 lock cleanup so kasmvnc.service can bind :1.
+set -eu
+
+KASM_OS_USER=${KASM_OS_USER:-kasm-user}
+KASM_OS_UID=${KASM_OS_UID:-1000}
+KASM_OS_GID=${KASM_OS_GID:-1000}
+KASM_OS_GROUP=${KASM_OS_GROUP:-kasm-user}
+KASM_OS_HOME=${KASM_OS_HOME:-/home/kasm-user}
+
+# 1) OS-user rename (Phase 4.10) — no-op when every value matches the default.
+if [ "$KASM_OS_USER" != kasm-user ] || [ "$KASM_OS_UID" != 1000 ] \
+        || [ "$KASM_OS_GID" != 1000 ] || [ "$KASM_OS_GROUP" != kasm-user ] \
+        || [ "$KASM_OS_HOME" != /home/kasm-user ]; then
+    /usr/local/bin/kasm-os-user-rename
+fi
+
+# 2) Required runtime directories.
+install -d -m 0755 -o "$KASM_OS_USER" -g "$KASM_OS_GROUP" "$KASM_OS_HOME/.vnc" "$KASM_OS_HOME/.config" "$KASM_OS_HOME/Uploads" "$KASM_OS_HOME/PDF" 2>/dev/null || true
+install -d -m 0755 /var/run/pulse /var/log/journal 2>/dev/null || true
+install -d -m 1777 /tmp/.ICE-unix /tmp/.X11-unix 2>/dev/null || true
+
+# 3) Session D-Bus. Capture the address so dependent units can re-export it.
+if command -v dbus-launch >/dev/null 2>&1; then
+    eval "$(dbus-launch --sh-syntax)"
+    : > /tmp/kasm-dbus.env
+    printf 'DBUS_SESSION_BUS_ADDRESS=%s\nDBUS_SESSION_BUS_PID=%s\n' \
+        "$DBUS_SESSION_BUS_ADDRESS" "${DBUS_SESSION_BUS_PID:-0}" \
+        > /tmp/kasm-dbus.env
+fi
+
+# 4) TLS cert: bake-time copy with operator override.
+cert_src=${KASM_TLS_CERT_PATH:-/etc/kasm/self-default.pem}
+if [ -f "$cert_src" ]; then
+    cp -f "$cert_src" "$KASM_OS_HOME/.vnc/self.pem"
+    chown "$KASM_OS_USER:$KASM_OS_GROUP" "$KASM_OS_HOME/.vnc/self.pem"
+    chmod 0600 "$KASM_OS_HOME/.vnc/self.pem"
+fi
+
+# 5) kasmvncpasswd. The binary picks $HOME/.kasmpasswd from the env;
+# run it as root with HOME pointing at the target user's home and
+# chown the resulting file. Avoids `su` entirely — the login-shell
+# form hangs when invoked from container-init's supervised child
+# (PAM-session setup races against pid1 reaping on Ubuntu/Noble).
+# Full-access record uses the OS username so the noVNC connect prompt
+# accepts the same name operators set via KASM_OS_USER. Read-only
+# record stays "kasm_viewer" — it's a role designator, not an OS user
+# (matches the bash chain's two-record split).
+if command -v kasmvncpasswd >/dev/null 2>&1 && [ -n "${VNC_PW:-}" ]; then
+    HOME="$KASM_OS_HOME" sh -c "printf '%s\n%s\n\n' '$VNC_PW' '$VNC_PW' | kasmvncpasswd -u '$KASM_OS_USER' -wo" >/dev/null 2>&1 || true
+    if [ -n "${VNC_VIEW_ONLY_PW:-}" ]; then
+        HOME="$KASM_OS_HOME" sh -c "printf '%s\n%s\n\n' '$VNC_VIEW_ONLY_PW' '$VNC_VIEW_ONLY_PW' | kasmvncpasswd -u kasm_viewer -r" >/dev/null 2>&1 || true
+    fi
+    if [ -f "$KASM_OS_HOME/.kasmpasswd" ]; then
+        chown "$KASM_OS_USER:$KASM_OS_GROUP" "$KASM_OS_HOME/.kasmpasswd"
+        chmod 0600 "$KASM_OS_HOME/.kasmpasswd"
+    fi
+fi
+
+# 6) Stale X1 lock cleanup.
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null || true
+
+exit 0

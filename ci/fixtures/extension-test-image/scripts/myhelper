@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+# Pattern 3 marker — native sd_listen_fds. Container-init binds
+# port 5050 and on first connect spawns this helper with LISTEN_PID
+# / LISTEN_FDS pointing at fd 3. The probe asserts both: the env
+# vars arrived correctly, and fd 3 is a bound socket.
+import os
+import socket
+import sys
+
+os.makedirs("/tmp/extension-test", exist_ok=True)
+
+listen_pid = os.environ.get("LISTEN_PID", "")
+listen_fds = os.environ.get("LISTEN_FDS", "")
+record = {
+    "pid": os.getpid(),
+    "listen_pid": listen_pid,
+    "listen_fds": listen_fds,
+    "fd3_ok": False,
+    "fd3_listen_addr": None,
+}
+
+if listen_pid == str(os.getpid()) and listen_fds == "1":
+    try:
+        s = socket.fromfd(3, socket.AF_INET, socket.SOCK_STREAM)
+        record["fd3_ok"] = True
+        record["fd3_listen_addr"] = s.getsockname()
+        # Accept exactly one connection so the probe sees end-to-end
+        # delivery, then exit.
+        s.listen()
+        conn, _peer = s.accept()
+        conn.sendall(b"hello from myhelper\n")
+        conn.close()
+        s.close()
+    except Exception as e:
+        record["fd3_error"] = repr(e)
+
+with open("/tmp/extension-test/myhelper.spawned", "w") as f:
+    import json
+    json.dump(record, f)
+    f.write("\n")
+
+sys.exit(0)

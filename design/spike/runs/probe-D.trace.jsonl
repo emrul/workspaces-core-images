@@ -1,0 +1,25 @@
+{"dt_ms":0,"phase":"boot_start","status":"ok","t_start_ms":1777835310093,"wall_utc":"2026-05-03T19:08:30.094Z"}
+{"by_comm":[{"comm":"container-init","rss_kib":3304}],"cgroup_current_bytes":1454080,"cgroup_peak_bytes":1515520,"cgroup_swap_bytes":0,"dt_ms":0,"label":"boot","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":3383296,"status":"ok","t_start_ms":1777835310094}
+{"count":10,"dt_ms":0,"phase":"units_loaded","status":"ok","t_start_ms":1777835310094,"warnings":0}
+{"available":false,"dt_ms":0,"err":"mkdir /sys/fs/cgroup/container-init: mkdir /sys/fs/cgroup/container-init: read-only file system","phase":"cgroup_init","status":"ok","t_start_ms":1777835310095}
+{"dt_ms":0,"phase":"supervisor_start","status":"ok","t_start_ms":1777835310095}
+{"address":":8081","dt_ms":0,"mode":"proxy","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777835310095,"unit":"audio-out-ws.socket"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_SVC_OFF=1 (have \"\", want \"1\")","status":"ok","t_start_ms":1777835310095,"unit":"cond-skip.socket"}
+{"address":":4902","dt_ms":0,"mode":"native","network":"tcp","phase":"bound","status":"ok","t_start_ms":1777835310095,"unit":"upload.socket"}
+{"dt_ms":0,"phase":"skipped","reason":"ConditionEnvironment=KASM_SVC_OFF=1 (have \"\", want \"1\")","status":"ok","t_start_ms":1777835310095,"unit":"cond-skip.service"}
+{"by_comm":[{"comm":"container-init","rss_kib":4040}],"cgroup_current_bytes":2236416,"cgroup_peak_bytes":2240512,"cgroup_swap_bytes":0,"dt_ms":0,"label":"post_services","nproc":1,"phase":"mem_snapshot","rss_sum_bytes":4136960,"status":"ok","t_start_ms":1777835310095}
+{"argv":["/bin/sleep","3600"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777835310095,"unit":"recorder-watch.service"}
+{"argv":["/bin/sleep","3600"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777835310095,"unit":"kasmvnc.service"}
+{"dt_ms":1,"phase":"recorder-watch_invoke","pid":10,"status":"ok","t_start_ms":1777835310095,"unit":"recorder-watch.service"}
+{"dt_ms":1,"phase":"kasmvnc_invoke","pid":11,"status":"ok","t_start_ms":1777835310095,"unit":"kasmvnc.service"}
+{"argv":["/usr/local/bin/wm-stub.sh"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777835310096,"unit":"window-manager.service"}
+{"dt_ms":0,"phase":"window-manager_invoke","pid":12,"status":"ok","t_start_ms":1777835310096,"unit":"window-manager.service"}
+{"dt_ms":0,"err":"exit code 1","failed":true,"phase":"exited","status":"ok","t_start_ms":1777835310176,"unit":"window-manager.service"}
+{"dt_ms":0,"phase":"onfailure_invoke","status":"ok","t_start_ms":1777835310176,"unit":"recorder-drain.service"}
+{"argv":["/usr/local/bin/recorder-drain.sh"],"dt_ms":0,"phase":"spawn","status":"ok","t_start_ms":1777835310176,"unit":"recorder-drain.service"}
+{"dt_ms":0,"phase":"recorder-drain_invoke","pid":17,"status":"ok","t_start_ms":1777835310176,"unit":"recorder-drain.service"}
+{"dt_ms":0,"err":"","failed":false,"phase":"onfailure_exited","status":"ok","t_start_ms":1777835310177,"unit":"recorder-drain.service"}
+{"dt_ms":0,"err":"killed by terminated","failed":true,"phase":"exited","status":"ok","t_start_ms":1777835310177,"unit":"kasmvnc.service"}
+{"dt_ms":0,"err":"killed by terminated","failed":true,"phase":"exited","status":"ok","t_start_ms":1777835310177,"unit":"recorder-watch.service"}
+{"dt_ms":0,"exit":0,"phase":"reverse_shutdown_done","status":"ok","t_start_ms":1777835310227}
+{"dt_ms":0,"exit":0,"phase":"boot_done","status":"ok","t_start_ms":1777835310227}

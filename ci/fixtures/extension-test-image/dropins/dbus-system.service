@@ -1,0 +1,9 @@
+[Unit]
+Description=Pattern 5 — D-Bus stub (fixture-only; not a real bus)
+Requires=dbus-system.socket
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/install -d -m 0755 /run/dbus
+ExecStart=/usr/local/bin/dbus-system-stub
+Restart=on-failure

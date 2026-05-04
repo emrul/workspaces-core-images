@@ -1,5 +1,36 @@
-#### Build Stage ####
+# Top-level build args (must precede any FROM so all stages can reference
+# them — podman/Buildah parses inter-stage ARGs as belonging to the
+# previous stage, which breaks `FROM $BASE_IMAGE` later in the file).
 ARG BASE_IMAGE="centos:centos7"
+
+#### Upload-server build stage ####
+# Compile the Go drop-in for kasm_upload_server. Output goes into
+# $INST_SCRIPTS/kasm_upload_server/ in the runtime stage; the install
+# script picks it up from there. See design/work_sequence.md Phase 3.
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS upload_builder
+ARG TARGETARCH
+WORKDIR /src
+COPY src/common/container-init /src
+RUN GOOS=linux GOARCH=${TARGETARCH} CGO_ENABLED=0 \
+    go build -trimpath -tags 'osusergo,netgo' -ldflags '-s -w' \
+    -o /out/kasm-upload-server ./cmd/kasm-upload-server
+
+#### container-init build stage ####
+# Compile the PID 1 supervisor + kasm-xvnc launcher. Phase 6 retired
+# the bash supervisor; container-init is now the only boot path and
+# kasm-entrypoint is a thin shim that execs into it.
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS containerinit_builder
+ARG TARGETARCH
+WORKDIR /src
+COPY src/common/container-init /src
+RUN GOOS=linux GOARCH=${TARGETARCH} CGO_ENABLED=0 \
+    go build -trimpath -tags 'osusergo,netgo' -ldflags '-s -w' \
+    -o /out/container-init ./cmd/container-init && \
+    GOOS=linux GOARCH=${TARGETARCH} CGO_ENABLED=0 \
+    go build -trimpath -tags 'osusergo,netgo' -ldflags '-s -w' \
+    -o /out/kasm-xvnc ./cmd/kasm-xvnc
+
+#### Build Stage ####
 
 FROM $BASE_IMAGE AS install_tools
 ARG DISTRO=centos
@@ -8,6 +39,11 @@ ARG DISTRO=centos
 COPY ./src/ubuntu/install/package_rules $INST_SCRIPTS/package_rules/
 RUN bash $INST_SCRIPTS/package_rules/package_rules.sh && rm -rf $INST_SCRIPTS/package_rules/
 
+ARG INCLUDE_WEBCAM=1
+ARG INCLUDE_RECORDER=1
+ARG INCLUDE_GAMEPAD=1
+ARG INCLUDE_PRINTER=1
+ARG INCLUDE_SMARTCARD=1
 ### Install common tools
 COPY ./src/ubuntu/install/tools $INST_SCRIPTS/tools/
 RUN bash "$INST_SCRIPTS/tools/install_tools.sh" && rm -rf "$INST_SCRIPTS/tools/"
@@ -64,6 +100,7 @@ COPY ./src/common/install/kasm_vnc/kasmvnc.yaml /etc/kasmvnc/
 
 ### Install Kasm Upload Server
 COPY ./src/ubuntu/install/kasm_upload_server $INST_SCRIPTS/kasm_upload_server/
+COPY --from=upload_builder /out/kasm-upload-server $INST_SCRIPTS/kasm_upload_server/kasm-upload-server
 RUN bash $INST_SCRIPTS/kasm_upload_server/install_kasm_upload_server.sh  && rm -rf $INST_SCRIPTS/kasm_upload_server/
 
 ### Install custom cursors
@@ -80,45 +117,68 @@ RUN bash $INST_SCRIPTS/audio_input/install_audio_input.sh && rm -rf $INST_SCRIPT
 
 ### Install Gamepad Service
 COPY ./src/ubuntu/install/gamepad $INST_SCRIPTS/gamepad/
-RUN bash $INST_SCRIPTS/gamepad/install_gamepad.sh && rm -rf $INST_SCRIPTS/gamepad/
+RUN if [ "$INCLUDE_GAMEPAD" = "1" ]; then bash $INST_SCRIPTS/gamepad/install_gamepad.sh; fi && rm -rf $INST_SCRIPTS/gamepad
 
 ### Install Webcam Service
 COPY ./src/ubuntu/install/webcam $INST_SCRIPTS/webcam/
-RUN bash $INST_SCRIPTS/webcam/install_webcam.sh && rm -rf $INST_SCRIPTS/webcam/
+RUN if [ "$INCLUDE_WEBCAM" = "1" ]; then bash $INST_SCRIPTS/webcam/install_webcam.sh; fi && rm -rf $INST_SCRIPTS/webcam
 
 ### Install Printer Service
 COPY ./src/ubuntu/install/printer $INST_SCRIPTS/printer/
 COPY ./src/ubuntu/install/printer/start_cups.sh /etc/cups/start_cups.sh
-RUN bash $INST_SCRIPTS/printer/install_printer.sh && rm -rf $INST_SCRIPTS/printer
+RUN if [ "$INCLUDE_PRINTER" = "1" ]; then bash $INST_SCRIPTS/printer/install_printer.sh; fi && rm -rf $INST_SCRIPTS/printer
 COPY ./src/ubuntu/install/printer/resources/*.ppd /etc/cups/ppd/
 
 ### Install Recorder Service
 COPY ./src/ubuntu/install/recorder $INST_SCRIPTS/recorder/
-RUN bash $INST_SCRIPTS/recorder/install_recorder.sh && rm -rf $INST_SCRIPTS/recorder
+RUN if [ "$INCLUDE_RECORDER" = "1" ]; then bash $INST_SCRIPTS/recorder/install_recorder.sh; fi && rm -rf $INST_SCRIPTS/recorder
 
-### Install Squid
-COPY ./src/ubuntu/install/squid/install/ $INST_SCRIPTS/squid_install/
-RUN bash $INST_SCRIPTS/squid_install/install_squid.sh && rm -rf $INST_SCRIPTS/squid_install/
-COPY ./src/ubuntu/install/squid/resources/*.conf /etc/squid/
-COPY ./src/ubuntu/install/squid/resources/start_squid.sh /etc/squid/start_squid.sh
-COPY ./src/ubuntu/install/squid/resources/SN.png /usr/local/squid/share/icons/SN.png
-RUN chown proxy:proxy /usr/local/squid/share/icons/SN.png
-COPY ./src/ubuntu/install/squid/resources/error_message/access_denied.html /usr/local/squid/share/errors/en/ERR_ACCESS_DENIED
-RUN chown proxy:proxy /usr/local/squid/share/errors/en/ERR_ACCESS_DENIED
-RUN rm -rf "$INST_SCRIPTS/resources/"
+### Install Squid (optional, gated by build arg INCLUDE_SQUID).
+# INCLUDE_SQUID=0 skips the install entirely — useful for image
+# variants that do not need outbound proxy filtering. The squid
+# install pulls a ~30 MB binary tarball from
+# kasmweb-build-artifacts.s3 plus distro packages (openssl,
+# nss-tools, libnss3-tools, etc.) so the disable saves ~50-80 MiB
+# image and a network round-trip.
+ARG INCLUDE_SQUID=1
+COPY ./src/ubuntu/install/squid /tmp/squid_stage
+RUN if [ "$INCLUDE_SQUID" = "1" ]; then \
+        bash /tmp/squid_stage/install/install_squid.sh && \
+        cp /tmp/squid_stage/resources/*.conf /etc/squid/ && \
+        cp /tmp/squid_stage/resources/start_squid.sh /etc/squid/start_squid.sh && \
+        mkdir -p /usr/local/squid/share/icons /usr/local/squid/share/errors/en && \
+        cp /tmp/squid_stage/resources/SN.png /usr/local/squid/share/icons/SN.png && \
+        chown proxy:proxy /usr/local/squid/share/icons/SN.png && \
+        cp /tmp/squid_stage/resources/error_message/access_denied.html /usr/local/squid/share/errors/en/ERR_ACCESS_DENIED && \
+        chown proxy:proxy /usr/local/squid/share/errors/en/ERR_ACCESS_DENIED && \
+        chmod +x /etc/squid/kasm_squid_adapter && \
+        chmod +x /etc/squid/start_squid.sh && chmod 4755 /etc/squid/start_squid.sh ; \
+    else \
+        echo "Squid disabled (INCLUDE_SQUID=0) — skipping install" ; \
+    fi && rm -rf /tmp/squid_stage
 
 RUN chmod +x /etc/squid/kasm_squid_adapter
 RUN chmod +x /etc/squid/start_squid.sh && chmod 4755 /etc/squid/start_squid.sh
 
 ### Install Smartcard Service
 COPY ./src/ubuntu/install/smartcard $INST_SCRIPTS/smartcard/
-RUN bash $INST_SCRIPTS/smartcard/install_smartcard.sh && rm -rf $INST_SCRIPTS/smartcard/
+RUN if [ "$INCLUDE_SMARTCARD" = "1" ]; then bash $INST_SCRIPTS/smartcard/install_smartcard.sh; fi && rm -rf $INST_SCRIPTS/smartcard
 
 ### configure startup
 COPY ./src/common/scripts/kasm_hook_scripts $STARTUPDIR
 COPY ./src/common/startup_scripts $STARTUPDIR
 RUN bash $STARTUPDIR/set_user_permission.sh $STARTUPDIR $HOME && \
     echo 'source $STARTUPDIR/generate_container_user' >> $HOME/.bashrc
+
+### Install container-init (Phase 4.8 — PID 1 supervisor, the only boot path)
+COPY --from=containerinit_builder /out/container-init /usr/local/bin/container-init
+COPY --from=containerinit_builder /out/kasm-xvnc      /usr/local/bin/kasm-xvnc
+COPY ./src/common/container-init/units/   /etc/container-init/units/
+COPY ./src/common/container-init/scripts/ /usr/local/bin/
+COPY ./src/common/scripts/kasm-entrypoint /usr/local/bin/kasm-entrypoint
+RUN chmod 0755 /usr/local/bin/container-init /usr/local/bin/kasm-xvnc /usr/local/bin/kasm-entrypoint && \
+    find /usr/local/bin -maxdepth 1 -type f -name 'kasm-*' -exec chmod 0755 {} \; && \
+    /usr/local/bin/container-init --units /etc/container-init/units --strict-units --validate
 
 ### extra configurations needed per distro variant
 COPY ./src/ubuntu/install/extra $INST_SCRIPTS/extra/
@@ -151,8 +211,6 @@ RUN (groupadd -g 1001 kasm-recorder \
 # these files are created on container first exec, by the default user, so we have to create them since default will not have write perm
 RUN touch $STARTUPDIR/wm.log \
     && touch $STARTUPDIR/window_manager_startup.log \
-    && touch $STARTUPDIR/vnc_startup.log \
-    && touch $STARTUPDIR/no_vnc_startup.log \
     && chown -R root:root $STARTUPDIR \
     && find $STARTUPDIR -type d -exec chmod 755 {} \; \
     && find $STARTUPDIR -type f -exec chmod 644 {} \; \
@@ -163,12 +221,12 @@ RUN touch $STARTUPDIR/wm.log \
     && find $STARTUPDIR -type f -iname "*.log" -exec chmod 666 {} \; \
     && chmod 755 $STARTUPDIR/upload_server/kasm_upload_server \
     && chmod 755 $STARTUPDIR/audio_input/kasm_audio_input_server \
-    && chmod 755 $STARTUPDIR/gamepad/kasm_gamepad_server \
-    && chmod 755 $STARTUPDIR/webcam/kasm_webcam_server \
+    && ( [ -f $STARTUPDIR/gamepad/kasm_gamepad_server ] && chmod 755 $STARTUPDIR/gamepad/kasm_gamepad_server || true ) \
+    && ( [ -f $STARTUPDIR/webcam/kasm_webcam_server ] && chmod 755 $STARTUPDIR/webcam/kasm_webcam_server || true ) \
     && chmod 755 $STARTUPDIR/generate_container_user \
-    && chmod 755 $STARTUPDIR/printer/kasm_printer_service \
-    && chmod 755 $STARTUPDIR/smartcard/kasm_smartcard_bridge \
-    && chmod 755 $STARTUPDIR/recorder/kasm_recorder_service \
+    && ( [ -f $STARTUPDIR/printer/kasm_printer_service ] && chmod 755 $STARTUPDIR/printer/kasm_printer_service || true ) \
+    && ( [ -f $STARTUPDIR/smartcard/kasm_smartcard_bridge ] && chmod 755 $STARTUPDIR/smartcard/kasm_smartcard_bridge || true ) \
+    && ( [ -f $STARTUPDIR/recorder/kasm_recorder_service ] && chmod 755 $STARTUPDIR/recorder/kasm_recorder_service || true ) \
     && chmod +x $STARTUPDIR/jsmpeg/kasm_audio_out-linux \
     && rm -rf $STARTUPDIR/install \
     && mkdir -p $STARTUPDIR/kasmrx/Downloads \
@@ -180,7 +238,14 @@ RUN touch $STARTUPDIR/wm.log \
 
 ### Cleanup job
 COPY ./src/ubuntu/install/cleanup $INST_SCRIPTS/cleanup/
-RUN bash $INST_SCRIPTS/cleanup/cleanup.sh && rm -rf $INST_SCRIPTS/cleanup/
+# KASM_LANG_PROFILE: full (default, no trim) | latin | en. See
+# src/ubuntu/install/cleanup/cleanup.sh for the per-profile contents.
+ARG KASM_LANG_PROFILE=full
+# INCLUDE_PERL: 0 (default) drops perl runtime — see cleanup.sh's
+# Phase 6.7 block. =1 keeps it for image authors who exec the
+# standalone KasmVNC `vncserver -kill :1` / `-list` CLIs.
+ARG INCLUDE_PERL=0
+RUN KASM_LANG_PROFILE=$KASM_LANG_PROFILE INCLUDE_PERL=$INCLUDE_PERL bash $INST_SCRIPTS/cleanup/cleanup.sh && rm -rf $INST_SCRIPTS/cleanup/
 
 #### Runtime Stage ####
 FROM scratch
@@ -242,7 +307,9 @@ EXPOSE $VNC_PORT \
        $UPLOAD_PORT \
        $AUDIO_PORT
 WORKDIR $HOME
-USER 1000
+# Identity, OS-user rename (KASM_OS_USER/_UID/_GID/_HOME), and per-service
+# privilege drop are owned by container-init (PID 1) via kasm-setup.service.
+# kasm-entrypoint is a thin shim that execs into container-init.
 
-ENTRYPOINT ["/dockerstartup/kasm_default_profile.sh", "/dockerstartup/vnc_startup.sh", "/dockerstartup/kasm_startup.sh"]
+ENTRYPOINT ["/usr/local/bin/kasm-entrypoint"]
 CMD ["--wait"]

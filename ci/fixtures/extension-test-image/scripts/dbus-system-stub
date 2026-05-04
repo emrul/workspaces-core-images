@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+# Pattern 5 marker — fixture stub for dbus-system.service. We don't
+# install dbus-daemon in the fixture (the README pattern targets
+# image authors who *do* bring dbus + a backend). The stub records
+# that activation reached us with a usable AF_UNIX listener fd, then
+# idles so the supervisor sees a healthy long-running service.
+import json
+import os
+import socket
+import sys
+
+os.makedirs("/tmp/extension-test", exist_ok=True)
+record = {
+    "pid": os.getpid(),
+    "listen_pid": os.environ.get("LISTEN_PID", ""),
+    "listen_fds": os.environ.get("LISTEN_FDS", ""),
+    "fd3_ok": False,
+}
+try:
+    s = socket.fromfd(3, socket.AF_UNIX, socket.SOCK_STREAM)
+    record["fd3_ok"] = True
+    record["fd3_listen_addr"] = s.getsockname()
+    s.close()
+except Exception as e:
+    record["fd3_error"] = repr(e)
+
+with open("/tmp/extension-test/dbus-system.started", "w") as f:
+    json.dump(record, f)
+    f.write("\n")
+
+# Idle.
+import signal
+signal.pause()
+sys.exit(0)

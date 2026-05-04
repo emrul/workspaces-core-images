@@ -1,0 +1,11 @@
+[Unit]
+Description=Upload server — public listener (native sd_listen_fds)
+ConditionEnvironment=KASM_VNC=1
+
+[Socket]
+ListenStream=4902
+ActivationMode=native
+Service=upload.service
+
+[Install]
+WantedBy=sockets.target
