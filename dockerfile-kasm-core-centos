@@ -276,6 +276,7 @@ ENV AUDIO_PORT=4901 \
     HOME=/home/kasm-user \
     INST_SCRIPTS=/dockerstartup/install \
     KASMVNC_AUTO_RECOVER=true \
+    KASM_VNC=1 \
     KASM_VNC_PATH=/usr/share/kasmvnc \
     LANG=$LANG \
     LANGUAGE=$LANGUAGE \
