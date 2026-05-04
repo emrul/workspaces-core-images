@@ -2,25 +2,26 @@
 //
 // The 3119-line perl wrapper accounts for ~250-300 ms of the
 // kasmvnc_invoke phase on Ubuntu Noble (perl interpreter cold start
-// + dependency probes + xdpyinfo poll loop) — see
-// design/cold-start-perf-and-memory.md § "Where the 573 ms in
-// kasmvnc_invoke actually goes". Phase 4.4 ports the wrapper's
-// ConstructXvncCmd to Go, builds the same Xvnc argv, and exec(3)s
-// Xvnc directly. No KasmVNC source change.
+// + dependency probes + xdpyinfo poll loop). This Go port mirrors
+// the wrapper's observed argv output for the Kasm boot configuration
+// and exec(3)'s Xvnc directly. No KasmVNC source change.
+//
+// Mirroring strategy: the argv list is a verbatim port of what
+// `docker.io/kasmweb/core-ubuntu-noble:1.18.0-rolling-daily` (perl
+// wrapper) emits at boot, with $HOME / $KASM_OS_USER / VNC_RESOLUTION
+// / MAX_FRAME_RATE / hostname substituted from env. We do NOT compute
+// these args from kasmvnc.yaml — that's the perl wrapper's job and
+// re-implementing it is the 3000-line scope this port deliberately
+// scoped out.
 //
 // Out of scope vs the perl wrapper:
-//   - xauth cookie file generation (Kasm uses kasmvncpasswd, not xauth)
-//   - desktop log rotation (container-init's stdout takes the place
-//     of $desktopLog)
+//   - vncserver -kill / -list / -clean (admin commands; not on the
+//     boot path, kept in KasmVNC's standalone CLI)
+//   - kasmvnc.yaml dynamic parsing (the static argv we emit already
+//     subsumes the OOTB kasmvnc.yaml's effective config)
 //   - multi-display lock files (container-init starts clean per boot)
-//   - vncserver -kill / -list / -clean (those are admin commands;
-//     not on the boot path)
-//   - kasmvnc.yaml config-file parsing (Kasm passes every option
-//     explicitly via env vars / CLI flags; the perl wrapper's
-//     ConfigToCmd path is unused on the Kasm boot path)
-//
-// Standalone-CLI users (KasmVNC outside a Kasm container) keep using
-// the perl wrapper as today.
+//   - desktop log rotation (container-init's stdout takes the place
+//     of $desktopLog; -Log *:stdout:100 emits to our pipe)
 package main
 
 import (
@@ -34,22 +35,17 @@ import (
 const xvncBinary = "/usr/bin/Xvnc"
 
 func main() {
-	args, env, err := buildXvncArgs(envMap(os.Environ()), runtime.GOARCH, statExists)
+	args, env, err := buildXvncArgs(envMap(os.Environ()), runtime.GOARCH, statExists, hostname)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kasm-xvnc: %v\n", err)
 		os.Exit(64)
 	}
-	// exec(3) replaces our process image so container-init's
-	// supervisor tracks the Xvnc PID directly. cmd.Process.Pid
-	// stays valid; no extra fork hop.
 	if err := syscall.Exec(args[0], args, env); err != nil {
 		fmt.Fprintf(os.Stderr, "kasm-xvnc: exec %s: %v\n", args[0], err)
 		os.Exit(127)
 	}
 }
 
-// envMap turns os.Environ()-style "K=V" entries into a map. Empty K
-// or missing "=" is dropped.
 func envMap(env []string) map[string]string {
 	out := make(map[string]string, len(env))
 	for _, kv := range env {
@@ -62,21 +58,15 @@ func envMap(env []string) map[string]string {
 	return out
 }
 
-// statExists is the production filesystem probe. Tests pass their
-// own to control the aarch64 LD_PRELOAD path deterministically.
-func statExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
+func statExists(path string) bool { _, err := os.Stat(path); return err == nil }
+func hostname() string            { h, _ := os.Hostname(); return h }
 
-// buildXvncArgs produces the (argv, env) pair Xvnc should be exec'd
-// with. Mirrors what perl `vncserver`'s ConstructXvncCmd would emit
-// for the Kasm bash invocation in src/common/startup_scripts/
-// vnc_startup.sh § start_kasmvnc.
-//
-// Inputs are factored out so tests can pin every conditional flag
-// independently of the test host's filesystem and architecture.
-func buildXvncArgs(env map[string]string, arch string, fileExists func(string) bool) ([]string, []string, error) {
+// buildXvncArgs mirrors the OOTB perl wrapper's emitted argv. Each
+// `-Foo X` triple here corresponds to a key in kasmvnc.yaml's
+// effective config + perl-wrapper defaults; we hard-code the
+// observed values. Inputs are factored out so tests can pin every
+// conditional flag independently of the host filesystem.
+func buildXvncArgs(env map[string]string, arch string, fileExists func(string) bool, host func() string) ([]string, []string, error) {
 	display := env["DISPLAY"]
 	if display == "" {
 		display = ":1"
@@ -85,73 +75,67 @@ func buildXvncArgs(env map[string]string, arch string, fileExists func(string) b
 		display = ":" + display
 	}
 
-	args := []string{xvncBinary, display}
-
-	if env["HW3D"] != "" {
-		args = append(args, "-hw3d")
+	home := env["HOME"]
+	if home == "" {
+		home = "/home/kasm-user"
 	}
-
+	osUser := env["KASM_OS_USER"]
+	if osUser == "" {
+		osUser = "kasm-user"
+	}
+	resolution := env["VNC_RESOLUTION"]
+	if resolution == "" {
+		resolution = "1024x768"
+	}
+	frameRate := env["MAX_FRAME_RATE"]
+	if frameRate == "" {
+		frameRate = "24"
+	}
+	depth := env["VNC_COL_DEPTH"]
+	if depth == "" {
+		depth = "24"
+	}
+	wsPort := env["NO_VNC_PORT"]
+	if wsPort == "" {
+		wsPort = "6901"
+	}
+	kasmvncPath := env["KASM_VNC_PATH"]
+	if kasmvncPath == "" {
+		kasmvncPath = "/usr/share/kasmvnc"
+	}
 	drinode := env["DRINODE"]
 	if drinode == "" {
 		drinode = "/dev/dri/renderD128"
 	}
-	args = append(args, "-drinode", drinode)
 
-	if v := env["VNC_COL_DEPTH"]; v != "" {
-		args = append(args, "-depth", v)
-	}
-	if v := env["VNC_RESOLUTION"]; v != "" {
-		args = append(args, "-geometry", v)
-	}
-	if v := env["NO_VNC_PORT"]; v != "" {
-		args = append(args, "-websocketPort", v)
-	}
-	if v := env["KASM_VNC_PATH"]; v != "" {
-		args = append(args, "-httpd", v+"/www")
-	}
+	cert := home + "/.vnc/self.pem"
+	rfbauth := home + "/.vnc/passwd"
+	xauth := home + "/.Xauthority"
+	kasmpasswd := home + "/.kasmpasswd"
 
-	// -select-de is a perl-wrapper-only flag (xstartup desktop
-	// selector). Container-init's window-manager.service runs the
-	// DE as its own unit, so the flag is meaningless on this path
-	// and Xvnc rejects it as an unknown option. Documented drop
-	// per the brief; standalone-CLI users keep using vncserver.
-	args = append(args,
+	desktopName := fmt.Sprintf("%s%s (%s)", host(), display, osUser)
+
+	// Argv ported verbatim from `kasmweb/core-ubuntu-noble:1.18.0-rolling-daily`'s
+	// Xvnc invocation (see design/spike/runs/probe-xvnc.stdout for the
+	// captured baseline). Order preserved — the perl wrapper emits
+	// kasmvnc.yaml-derived args first, then defaults, then operator
+	// overrides; later args override earlier (e.g. -FrameRate=24 then
+	// -FrameRate 60 — Xvnc's last-wins parsing applies).
+	args := []string{
+		xvncBinary, display,
+		"-drinode", drinode,
+		"-depth", depth,
+		"-httpd", kasmvncPath + "/www",
 		"-sslOnly",
-		"-interface", "0.0.0.0",
+		"-FrameRate=" + frameRate,
 		"-BlacklistThreshold=0",
 		"-FreeKeyMappings",
-		// Xvnc's default `-SecurityTypes VncAuth` reads ~/.vnc/passwd
-		// (rfb-style hashed) — that file isn't written by `kasmvncpasswd`
-		// (which only produces ~/.kasmpasswd). The matching scheme is
-		// `Plain`, plus an explicit `-PlainUsers` allow-list.
-		"-SecurityTypes", "Plain",
-	)
-	plainUser := env["KASM_OS_USER"]
-	if plainUser == "" {
-		plainUser = "kasm-user"
-	}
-	args = append(args, "-PlainUsers", plainUser)
-
-	// SSL cert. KasmVNC's `-cert` defaults to empty; without it,
-	// `-sslOnly` Xvnc accepts the TCP connection then drops it during
-	// TLS handshake (no cert/key pair to present). The perl wrapper's
-	// ConstructXvncCmd resolves this from $HOME/.vnc/self.pem;
-	// kasm-setup.service writes that file at boot from the baked
-	// /etc/kasm/self-default.pem (or KASM_TLS_CERT_PATH override).
-	homeDir := env["HOME"]
-	if homeDir == "" {
-		homeDir = "/home/kasm-user"
-	}
-	certPath := homeDir + "/.vnc/self.pem"
-	if fileExists(certPath) {
-		args = append(args, "-cert", certPath)
-	}
-	if v := env["MAX_FRAME_RATE"]; v != "" {
-		args = append(args, "-FrameRate="+v)
+		"-PreferBandwidth",
+		"-DynamicQualityMin=4",
+		"-DynamicQualityMax=7",
+		"-DLP_ClipDelay=0",
 	}
 
-	// UnixRelay flags follow the bash's per-service toggles.
-	// Default-on (set to "0" to suppress).
 	if isEnabled(env, "KASM_SVC_PRINTER") {
 		args = append(args, "-UnixRelay", "printer:/tmp/printer")
 	}
@@ -159,20 +143,82 @@ func buildXvncArgs(env map[string]string, arch string, fileExists func(string) b
 		args = append(args, "-UnixRelay", "smartcard:/tmp/smartcard")
 	}
 
-	// Operator-supplied extras. VNCOPTIONS is split on whitespace
-	// (matching the bash's word-splitting behaviour); quoted args
-	// inside the env var aren't supported — operators with that need
-	// install a kasmvnc.yaml.
+	args = append(args,
+		"-interface", "0.0.0.0",
+		"-websocketPort", wsPort,
+		"-VideoOutTime", "3",
+		"-VideoScaling", "2",
+		"-MaxIdleTime", "0",
+		"-VideoTime", "5",
+		"-AllowOverride", "AcceptPointerEvents",
+		"-DLP_KeyRateLimit", "0",
+		"-BlacklistThreshold", "5",
+		"-RectThreads", "0",
+		"-DLP_RegionAllowRelease", "0",
+		"-JpegVideoQuality", "-1",
+		"-UseIPv6", "1",
+		"-UseIPv4", "1",
+		"-ScrollDetectLimit", "25",
+		"-MaxDisconnectionTime", "0",
+		"-MaxConnectionTime", "0",
+		"-AcceptCutText", "1",
+		"-KasmPasswordFile", kasmpasswd,
+		"-PublicIP", "127.0.0.1",
+		"-CompareFB", "2",
+		"-WebpEncodingTime", "30",
+		"-QueryConnectTimeout", "10",
+		"-DLP_RegionAllowClick", "0",
+		"-DLP_ClipTypes", "chromium/x-web-custom-data,text/html,image/png",
+		"-DLP_ClipDelay", "0",
+		"-DynamicQualityMax", "8",
+		"-MaxVideoResolution", "1920x1080",
+		"-geometry", resolution,
+		"-AcceptPointerEvents", "1",
+		"-IdleTimeout", "0",
+		"-WebpVideoQuality", "-1",
+		"-RawKeyboard", "0",
+		"-VideoArea", "45",
+		"-AcceptKeyEvents", "1",
+		"-DLP_ClipAcceptMax", "0",
+		"-IgnoreClientSettingsKasm", "0",
+		"-PrintVideoArea", "0",
+		"-Log", "*:stdout:100",
+		"-BlacklistTimeout", "10",
+		"-DisconnectClients", "0",
+		"-FrameRate", "60",
+		"-SendPrimary", "0",
+		"-DLP_Log", "off",
+		"-AcceptSetDesktopSize", "1",
+		"-DynamicQualityMin", "7",
+		"-SendCutText", "1",
+		"-TreatLossless", "10",
+		"-cert", cert,
+		"-udpFullFrameFrequency", "0",
+		"-AvoidShiftNumLock", "0",
+		"-ImprovedHextile", "1",
+		"-DLP_ClipSendMax", "0",
+		"-http-header", "Cross-Origin-Embedder-Policy=require-corp",
+		"-http-header", "Cross-Origin-Opener-Policy=same-origin",
+		"-QueryConnect", "0",
+		"-fp", "/usr/share/fonts/X11//misc,/usr/share/fonts/X11//Type1",
+		"-auth", xauth,
+		"-key", cert,
+		"-desktop", desktopName,
+		"-rfbport", "5901",
+		"-rfbauth", rfbauth,
+		"-rfbwait", "30000",
+	)
+
+	// Operator-supplied extras (matches the bash chain's word-splitting).
 	for _, key := range []string{"VNCOPTIONS", "KASM_SVC_SEND_CUT_TEXT", "KASM_SVC_ACCEPT_CUT_TEXT"} {
 		if v := env[key]; v != "" {
 			args = append(args, strings.Fields(v)...)
 		}
 	}
 
-	// On aarch64 the bash conditionally LD_PRELOADs libgcc_s. The
-	// underlying Xvnc bug it works around (libgcc unwind table
-	// resolution under multi-threaded fork) only manifests on aarch64
-	// glibc systems where libgcc isn't already in the link map.
+	// aarch64 LD_PRELOAD workaround — Xvnc unwind-table resolution bug
+	// under multi-threaded fork on glibc systems where libgcc isn't
+	// already in the link map.
 	out := os.Environ()
 	if arch == "arm64" {
 		const libgcc = "/lib/aarch64-linux-gnu/libgcc_s.so.1"

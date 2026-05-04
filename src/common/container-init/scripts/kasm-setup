@@ -68,7 +68,21 @@ if command -v kasmvncpasswd >/dev/null 2>&1 && [ -n "${VNC_PW:-}" ]; then
     fi
 fi
 
-# 6) Stale X1 lock cleanup.
+# 6) Disable legacy VncAuth. KasmVNC's perl `vncserver` wrapper has
+# a `DisableLegacyVncAuth` sub that writes a fixed 8-byte sentinel
+# (base64 "WrLNwLrcrxM=" → bytes 5a b2 cd c0 ba dc af 13) to
+# ~/.vnc/passwd. Xvnc reads it via -rfbauth and treats VncAuth as
+# disabled; real auth happens at the BasicAuth / WebSocket layer
+# via ~/.kasmpasswd. Without this file Xvnc errors out
+# mid-handshake with "No password configured for VNC Auth".
+# (POSIX `printf '\xHH'` is unreliable across dash/busybox; use
+# base64 -d the same way the perl wrapper does.)
+sentinel_passwd="$KASM_OS_HOME/.vnc/passwd"
+echo 'WrLNwLrcrxM=' | base64 -d > "$sentinel_passwd"
+chown "$KASM_OS_USER:$KASM_OS_GROUP" "$sentinel_passwd"
+chmod 0600 "$sentinel_passwd"
+
+# 7) Stale X1 lock cleanup.
 rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null || true
 
 exit 0
