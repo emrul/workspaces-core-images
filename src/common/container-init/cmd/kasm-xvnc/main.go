@@ -121,6 +121,21 @@ func buildXvncArgs(env map[string]string, arch string, fileExists func(string) b
 		"-BlacklistThreshold=0",
 		"-FreeKeyMappings",
 	)
+
+	// SSL cert. KasmVNC's `-cert` defaults to empty; without it,
+	// `-sslOnly` Xvnc accepts the TCP connection then drops it during
+	// TLS handshake (no cert/key pair to present). The perl wrapper's
+	// ConstructXvncCmd resolves this from $HOME/.vnc/self.pem;
+	// kasm-setup.service writes that file at boot from the baked
+	// /etc/kasm/self-default.pem (or KASM_TLS_CERT_PATH override).
+	homeDir := env["HOME"]
+	if homeDir == "" {
+		homeDir = "/home/kasm-user"
+	}
+	certPath := homeDir + "/.vnc/self.pem"
+	if fileExists(certPath) {
+		args = append(args, "-cert", certPath)
+	}
 	if v := env["MAX_FRAME_RATE"]; v != "" {
 		args = append(args, "-FrameRate="+v)
 	}
