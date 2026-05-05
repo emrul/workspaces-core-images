@@ -17,7 +17,13 @@ KASM_OS_USER=${KASM_OS_USER:-kasm-user}
 KASM_OS_UID=${KASM_OS_UID:-1000}
 KASM_OS_GID=${KASM_OS_GID:-1000}
 KASM_OS_GROUP=${KASM_OS_GROUP:-kasm-user}
-KASM_OS_HOME=${KASM_OS_HOME:-/home/kasm-user}
+if [ -z "${KASM_OS_HOME:-}" ]; then
+    if [ "$KASM_OS_USER" = "kasm-user" ]; then
+        KASM_OS_HOME=/home/kasm-user
+    else
+        KASM_OS_HOME=/home/$KASM_OS_USER
+    fi
+fi
 
 # 1) OS-user rename (Phase 4.10) — no-op when every value matches the default.
 if [ "$KASM_OS_USER" != kasm-user ] || [ "$KASM_OS_UID" != 1000 ] \

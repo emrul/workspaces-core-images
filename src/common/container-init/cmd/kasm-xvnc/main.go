@@ -75,13 +75,26 @@ func buildXvncArgs(env map[string]string, arch string, fileExists func(string) b
 		display = ":" + display
 	}
 
-	home := env["HOME"]
-	if home == "" {
-		home = "/home/kasm-user"
-	}
 	osUser := env["KASM_OS_USER"]
 	if osUser == "" {
 		osUser = "kasm-user"
+	}
+	// Resolution order matches the unit-file expansion contract:
+	// KASM_OS_HOME wins, else /home/$KASM_OS_USER, else $HOME, else
+	// /home/kasm-user. The middle step matters when the operator sets
+	// only KASM_OS_USER — kasm-os-user-rename moved the home dir to
+	// /home/$KASM_OS_USER but the dockerfile baked HOME=/home/kasm-user
+	// into PID 1's env, so falling through to env["HOME"] would chdir
+	// into a path that no longer exists.
+	home := env["KASM_OS_HOME"]
+	if home == "" {
+		if osUser != "kasm-user" {
+			home = "/home/" + osUser
+		} else if h := env["HOME"]; h != "" {
+			home = h
+		} else {
+			home = "/home/kasm-user"
+		}
 	}
 	resolution := env["VNC_RESOLUTION"]
 	if resolution == "" {

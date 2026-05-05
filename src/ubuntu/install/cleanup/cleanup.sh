@@ -76,6 +76,21 @@ rm -rf \
   /usr/libexec/gcc \
   /var/cache/apt/archives/*.deb 2>/dev/null || true
 
+# Drop xfce4-{mail-reader,web-browser}.desktop launchers when no real
+# mail/browser is installed. They exec `exo-open --launch X` which
+# fails on the core-ubuntu-noble base (no firefox/chromium/thunderbird
+# installed); the menu entry just confuses the user.
+if ! command -v firefox >/dev/null 2>&1 \
+        && ! command -v chromium >/dev/null 2>&1 \
+        && ! command -v google-chrome >/dev/null 2>&1; then
+    rm -f /usr/share/applications/xfce4-web-browser.desktop
+fi
+if ! command -v thunderbird >/dev/null 2>&1 \
+        && ! command -v evolution >/dev/null 2>&1 \
+        && ! command -v geary >/dev/null 2>&1; then
+    rm -f /usr/share/applications/xfce4-mail-reader.desktop
+fi
+
 # Pre-create the X server's UNIX-socket directories so the session running as
 # uid 1000 doesn't trip _IceTransmkdir / _XSERVTransmkdir errors at every boot.
 install -d -m 1777 /tmp/.ICE-unix /tmp/.X11-unix

@@ -9,7 +9,7 @@ ConditionEnvironment=KASM_VNC=1
 Type=simple
 User=${KASM_OS_USER:-kasm-user}
 Group=${KASM_OS_GROUP:-kasm-user}
-WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
 Environment=DISPLAY=:1
 ExecStart=/usr/local/bin/kasm-window-manager
 Restart=on-failure

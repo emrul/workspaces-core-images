@@ -12,7 +12,17 @@ KASM_OS_USER=${KASM_OS_USER:-kasm-user}
 KASM_OS_UID=${KASM_OS_UID:-1000}
 KASM_OS_GID=${KASM_OS_GID:-1000}
 KASM_OS_GROUP=${KASM_OS_GROUP:-kasm-user}
-KASM_OS_HOME=${KASM_OS_HOME:-/home/kasm-user}
+# When the user passes only KASM_OS_USER=alice (no KASM_OS_HOME),
+# default the home dir to /home/alice rather than leaving it at the
+# original /home/kasm-user — which is unintuitive (`whoami` says
+# alice but `cd ~` lands in kasm-user's dir).
+if [ -z "${KASM_OS_HOME:-}" ]; then
+    if [ "$KASM_OS_USER" = "kasm-user" ]; then
+        KASM_OS_HOME=/home/kasm-user
+    else
+        KASM_OS_HOME=/home/$KASM_OS_USER
+    fi
+fi
 
 case "${DISTRO:-}" in
     alpine)

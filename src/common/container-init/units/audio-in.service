@@ -8,8 +8,8 @@ ConditionEnvironment=KASM_VNC=1
 Type=simple
 User=${KASM_OS_USER:-kasm-user}
 Group=${KASM_OS_GROUP:-kasm-user}
-WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
-ExecStart=/dockerstartup/audio_input/kasm_audio_input_server --ssl --port 14901 --auth-token ${KASM_AUDIO_AUTH:-${KASM_OS_USER:-kasm-user}:${VNC_PW}} --cert ${KASM_OS_HOME:-/home/kasm-user}/.vnc/self.pem --certkey ${KASM_OS_HOME:-/home/kasm-user}/.vnc/self.pem
+WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
+ExecStart=/dockerstartup/audio_input/kasm_audio_input_server --ssl --port 14901 --auth-token ${KASM_AUDIO_AUTH:-${KASM_OS_USER:-kasm-user}:${VNC_PW}} --cert ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.vnc/self.pem --certkey ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.vnc/self.pem
 Restart=on-failure
 RestartSec=1s
 StartLimitBurst=3

@@ -8,7 +8,7 @@ ConditionEnvironment=KASM_VNC=1
 Type=simple
 User=${KASM_OS_USER:-kasm-user}
 Group=${KASM_OS_GROUP:-kasm-user}
-WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
 ExecStart=/usr/local/bin/kasm-xvnc
 Restart=on-failure
 RestartSec=200ms

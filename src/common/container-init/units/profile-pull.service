@@ -9,7 +9,7 @@ Type=oneshot
 RemainAfterExit=yes
 User=${KASM_OS_USER:-kasm-user}
 Group=${KASM_OS_GROUP:-kasm-user}
-WorkingDirectory=${KASM_OS_HOME:-/home/kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
 ExecStart=/usr/local/bin/kasm-profile-pull
 TimeoutStartSec=600s
 

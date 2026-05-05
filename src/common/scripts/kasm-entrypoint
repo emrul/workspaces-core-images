@@ -9,4 +9,9 @@
 # legacy `CMD ["--wait"]` argv is a bash-chain artifact that the
 # supervisor does not understand, so the shim drops it on the floor.
 set -e
+# chdir away from the dockerfile WORKDIR before exec'ing the
+# supervisor — kasm-os-user-rename may move /home/kasm-user to
+# /home/$KASM_OS_USER, which would invalidate the supervisor's
+# inherited CWD and break every child process with `getcwd() failed`.
+cd /
 exec /usr/local/bin/container-init
