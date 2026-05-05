@@ -25,8 +25,12 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
+	"os/signal"
 	"runtime"
 	"strings"
 	"syscall"
@@ -34,16 +38,99 @@ import (
 
 const xvncBinary = "/usr/bin/Xvnc"
 
+// frameTookPrefix is the leading text of an Xvnc per-frame debug print
+// ("TOTAL FRAME TOOK: %d\n") that's compiled into the KasmVNC binary
+// at /usr/bin/Xvnc — it bypasses the `-Log` framework and goes straight
+// to stdout, drowning every other log line in the container journal.
+//
+// TODO(KASMVNC-UPSTREAM): drop this filter (and revert kasm-xvnc to
+// syscall.Exec) once Xvnc removes the printf — track the upstream fix
+// so we don't carry this hack longer than necessary.
+const frameTookPrefix = "TOTAL FRAME TOOK: "
+
 func main() {
 	args, env, err := buildXvncArgs(envMap(os.Environ()), runtime.GOARCH, statExists, hostname)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kasm-xvnc: %v\n", err)
 		os.Exit(64)
 	}
-	if err := syscall.Exec(args[0], args, env); err != nil {
-		fmt.Fprintf(os.Stderr, "kasm-xvnc: exec %s: %v\n", args[0], err)
-		os.Exit(127)
+	os.Exit(runXvnc(args, env))
+}
+
+// runXvnc forks Xvnc with its stdout piped through a line filter that
+// drops the per-frame "TOTAL FRAME TOOK:" debug spam. stderr is left
+// inherited so KasmVNC's real diagnostics still surface unchanged.
+// We also forward common termination signals — container-init sends
+// SIGTERM on shutdown and we want Xvnc to see it directly so it
+// finishes its EncodeManager flush.
+func runXvnc(args, env []string) int {
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Env = env
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kasm-xvnc: stdout pipe: %v\n", err)
+		return 127
 	}
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "kasm-xvnc: start %s: %v\n", args[0], err)
+		return 127
+	}
+
+	sigs := make(chan os.Signal, 4)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGQUIT)
+	go func() {
+		for s := range sigs {
+			if cmd.Process != nil {
+				_ = cmd.Process.Signal(s)
+			}
+		}
+	}()
+
+	filterFrameTook(stdout, os.Stdout)
+
+	if err := cmd.Wait(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				return 128 + int(ws.Signal())
+			}
+			return ee.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "kasm-xvnc: wait: %v\n", err)
+		return 127
+	}
+	return 0
+}
+
+// filterFrameTook copies r to w line-by-line, dropping any line whose
+// payload starts with frameTookPrefix. Buffer size is bumped from the
+// 64KB default so a single huge log line can't deadlock the pipe.
+func filterFrameTook(r io.Reader, w io.Writer) {
+	br := bufio.NewReaderSize(r, 1<<20)
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(line) > 0 {
+			if !startsWith(line, frameTookPrefix) {
+				_, _ = w.Write(line)
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func startsWith(b []byte, s string) bool {
+	if len(b) < len(s) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if b[i] != s[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func envMap(env []string) map[string]string {
