@@ -33,7 +33,7 @@ if [ "$KASM_OS_USER" != kasm-user ] || [ "$KASM_OS_UID" != 1000 ] \
 fi
 
 # 2) Required runtime directories.
-install -d -m 0755 -o "$KASM_OS_USER" -g "$KASM_OS_GROUP" "$KASM_OS_HOME/.vnc" "$KASM_OS_HOME/.config" "$KASM_OS_HOME/Uploads" "$KASM_OS_HOME/PDF" 2>/dev/null || true
+install -d -m 0755 -o "$KASM_OS_USER" -g "$KASM_OS_GROUP" "$KASM_OS_HOME/.vnc" "$KASM_OS_HOME/.config" "$KASM_OS_HOME/Uploads" "$KASM_OS_HOME/Downloads" "$KASM_OS_HOME/Desktop" "$KASM_OS_HOME/PDF" 2>/dev/null || true
 install -d -m 0755 /var/run/pulse /var/log/journal 2>/dev/null || true
 install -d -m 1777 /tmp/.ICE-unix /tmp/.X11-unix 2>/dev/null || true
 
@@ -47,6 +47,25 @@ install -d -m 1777 /tmp/.ICE-unix /tmp/.X11-unix 2>/dev/null || true
 if [ -d /home/kasm-default-profile ] && [ ! -f "$KASM_OS_HOME/.bashrc" ]; then
     cp -rp /home/kasm-default-profile/. "$KASM_OS_HOME/"
     chown -R "$KASM_OS_USER:$KASM_OS_GROUP" "$KASM_OS_HOME"
+fi
+
+# 2b) Desktop shortcuts for Uploads/Downloads. Mirrors the bash
+# chain's kasm_default_profile.sh `verify_profile_config` step —
+# OOTB Kasm puts both folders on the desktop so users have a one-
+# click path to drop files into the upload pipeline / pull files
+# out via the noVNC RX panel. ln -sfn keeps the link idempotent
+# across container restarts and survives profile-sync replays.
+ln -sfn "$KASM_OS_HOME/Uploads"   "$KASM_OS_HOME/Desktop/Uploads"   2>/dev/null || true
+ln -sfn "$KASM_OS_HOME/Downloads" "$KASM_OS_HOME/Desktop/Downloads" 2>/dev/null || true
+chown -h "$KASM_OS_USER:$KASM_OS_GROUP" "$KASM_OS_HOME/Desktop/Uploads" "$KASM_OS_HOME/Desktop/Downloads" 2>/dev/null || true
+
+# 2c) RX-panel Downloads symlink. The KasmVNC HTTP server serves
+# /Downloads/ from $KASM_VNC_PATH/www/Downloads — the noVNC client
+# reads it to render the in-browser file list. Point it at the
+# active user's home so files written there show up in the RX UI.
+if [ -n "${KASM_VNC_PATH:-}" ] && [ -d "$KASM_VNC_PATH/www/Downloads" ]; then
+    rm -f "$KASM_VNC_PATH/www/Downloads/Downloads"
+    ln -sfn "$KASM_OS_HOME/Downloads" "$KASM_VNC_PATH/www/Downloads/Downloads"
 fi
 
 # 3) Session D-Bus. Spawn dbus-launch AS the OS user — XFCE's
