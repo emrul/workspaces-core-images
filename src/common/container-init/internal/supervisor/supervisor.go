@@ -343,14 +343,16 @@ func (s *Supervisor) spawnAndWait(u *unit.Unit, extra *socketact.Bound, onSpawne
 	}
 	cmd := exec.Command(u.ExecStart[0], u.ExecStart[1:]...)
 	cmd.Env = append(os.Environ(), u.Environment...)
-	// Raw os.Stdout / os.Stderr — see "Logging" note in
-	// design/vnc-startup-replacement.md. With the pid1.Dispatcher in
-	// place, switching to per-line prefixed wrappers is safe (no
-	// cmd.Wait pipe-EOF dependency); the per-unit prefix is restored
-	// by the trace JSONL events for now to keep the spike's clean
-	// shutdown semantics.
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Per-unit log tagging. exec.Cmd's internal io.Copy goroutines
+	// drain the child's stdout/stderr into these writers, which inject
+	// "[unit] " in front of every newline-terminated line. The
+	// goroutines exit when the child closes the pipes (i.e. on exit),
+	// so we don't need to call cmd.Wait — the pid1 dispatcher still
+	// owns reaping. Mimics journald's _SYSTEMD_UNIT= grouping for
+	// people grepping the container log.
+	prefix := "[" + unitLabel(u.Name) + "] "
+	cmd.Stdout = newLinePrefixWriter(prefix, os.Stdout)
+	cmd.Stderr = newLinePrefixWriter(prefix, os.Stderr)
 	cmd.SysProcAttr = procAttr()
 	if u.WorkingDirectory != "" {
 		cmd.Dir = u.WorkingDirectory
