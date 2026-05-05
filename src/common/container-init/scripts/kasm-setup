@@ -31,6 +31,18 @@ install -d -m 0755 -o "$KASM_OS_USER" -g "$KASM_OS_GROUP" "$KASM_OS_HOME/.vnc" "
 install -d -m 0755 /var/run/pulse /var/log/journal 2>/dev/null || true
 install -d -m 1777 /tmp/.ICE-unix /tmp/.X11-unix 2>/dev/null || true
 
+# 2a) Default-profile sync. The bash chain's kasm_default_profile.sh
+# copied /home/kasm-default-profile/. into the user's $HOME on first
+# boot — that's where the OOTB image's customised XFCE config
+# (xfce4-panel.xml, xfwm4.xml, xfce4-desktop.xml, theme, background)
+# lives. Without this step the user gets vanilla XFCE — different
+# panel, missing background, etc. Skip when the user already has a
+# .bashrc (i.e. profile-pull or operator volume already populated it).
+if [ -d /home/kasm-default-profile ] && [ ! -f "$KASM_OS_HOME/.bashrc" ]; then
+    cp -rp /home/kasm-default-profile/. "$KASM_OS_HOME/"
+    chown -R "$KASM_OS_USER:$KASM_OS_GROUP" "$KASM_OS_HOME"
+fi
+
 # 3) Session D-Bus. Spawn dbus-launch AS the OS user — XFCE's
 # xfconfd / xfsettingsd autostart breaks if the bus belongs to a
 # different uid. Mirrors what OOTB's vnc_startup.sh does
