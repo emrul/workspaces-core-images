@@ -4,6 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
+> **Fork status:** this is a soft fork of Kasm's upstream at
+> `https://gitlab.com/kasm-technologies/internal/workspaces-core-images`
+> (remote `kasm`, branch `develop`). The work lives on `feat/container-init`
+> on the fork (`origin = https://github.com/emrul/workspaces-core-images`).
+> Upstream changes are absorbed via merge + `git rerere`; we never push
+> our work back. See `design/` for the multi-phase migration that
+> replaced the bash boot supervisor with a Go PID 1 supervisor
+> (`container-init`).
+
 **workspaces-core-images** produces the base ("core") Docker images from which every other Kasm Workspaces image is derived. These images bundle a Linux desktop environment, a VNC/browser-access stack (KasmVNC), and the in-container wiring that lets a workspace integrate with the Kasm platform (audio, clipboard, uploads/downloads, webcam, microphone, printing, profile sync, session recording, etc.).
 
 The output is a family of images published as `kasmweb/core-<distro>:<tag>` (e.g. `kasmweb/core-ubuntu-noble`, `kasmweb/core-fedora-41`, `kasmweb/core-alpine-321`). Downstream repos — notably `workspaces-images` (single-app images like Chrome, Firefox, VS Code) and customer-built workspaces — inherit `FROM` these core images.
@@ -30,9 +39,13 @@ workspaces-core-images/
 ├── src/
 │   ├── common/                       # Shared across all distros
 │   │   ├── install/                  # kasm_vnc, profile_sync configs
+│   │   ├── kasm-go/                  # Go module: kasm-upload-server, kasm-xvnc,
+│   │   │                             #   container-init unit files, kasm-* shell helpers
 │   │   ├── resources/images/         # Backgrounds, icons, branding
 │   │   ├── scripts/kasm_hook_scripts # Session lifecycle hooks (see below)
-│   │   └── startup_scripts/          # vnc_startup.sh and friends
+│   │   ├── scripts/kasm-entrypoint   # 4-line shim that execs container-init
+│   │   └── startup_scripts/          # generate_container_user + utility scripts
+│   │                                 #   (vnc_startup.sh removed; see Runtime lifecycle)
 │   │
 │   ├── ubuntu/                       # Ubuntu/Debian install scripts
 │   │   ├── install/                  # One subdir per feature (audio, webcam, …)
@@ -59,12 +72,28 @@ workspaces-core-images/
 ├── docs/core-<distro>/               # Per-image README/description for Dockerhub
 │                                     # (README.md, description.txt, demo.txt)
 │
+├── design/                           # Phase notes for the container-init migration
+│                                     # (phase4–6 status, before/after probes, work_sequence)
+│
+├── runs/                             # Smoke-test scripts + trace JSONL captures
+│                                     # (lean-noble-build.sh, noble-functional-smoke.sh, ...)
+│
 └── kasm-desktop-kde/                 # KDE desktop variant (WIP/placeholder)
 ```
 
 ## What's inside a core image
 
-Every dockerfile follows the same shape — a series of `COPY` + `RUN bash $INST_SCRIPTS/<feature>/install_<feature>.sh` blocks — and installs (roughly in order):
+Every dockerfile has two leading multi-stage builders specific to this fork:
+
+- `containerinit_fetch` (alpine:3) — `ADD`s the upstream `container-init`
+  release binary from `github.com/emrul/container-init/releases` (pinned via
+  `CONTAINER_INIT_VERSION`, default `v1.0.0`). Bump that ARG to update.
+- `kasmgo_builder` (golang:1.24-alpine) — `go build`s `kasm-upload-server`
+  and `kasm-xvnc` from `src/common/kasm-go/cmd/`.
+
+The runtime stage then copies the supervisor binary, the two Go helpers,
+and the unit/scripts trees into the image. After that, dockerfiles follow
+the same shape — a series of `COPY` + `RUN bash $INST_SCRIPTS/<feature>/install_<feature>.sh` blocks — and install (roughly in order):
 
 1. **Package rules** — apt/yum/apk pinning and repo setup
 2. **Base tools** — curl, jq, sudo, xz, etc.
@@ -88,26 +117,52 @@ Every dockerfile follows the same shape — a series of `COPY` + `RUN bash $INST
 
 Environment variables set by every core image:
 
-- `HOME=/home/kasm-default-profile` — template profile copied to `/home/kasm-user` at startup
-- `STARTUPDIR=/dockerstartup` — houses `vnc_startup.sh` and the hook scripts
+- `HOME=/home/kasm-user` — runtime home (overridable per session via `KASM_OS_USER` / `KASM_OS_HOME`)
+- `STARTUPDIR=/dockerstartup` — houses the hook scripts and per-feature runtime assets
 - `INST_SCRIPTS=/dockerstartup/install` — scratch dir used only during build (removed after each install)
 - `KASM_VNC_PATH=/usr/share/kasmvnc`
 
+OS-user identity is owned by container-init's `kasm-setup.service` (in
+`src/common/kasm-go/units/`), which honours `KASM_OS_USER` / `KASM_OS_UID`
+/ `KASM_OS_GID` / `KASM_OS_HOME` for per-session renames.
+
 ## Runtime lifecycle
 
-Containers start at `vnc_startup.sh` (in `src/common/startup_scripts/`). It:
+`ENTRYPOINT` is `/usr/local/bin/kasm-entrypoint`, a 4-line shim that
+execs `/usr/local/bin/container-init` as PID 1. The supervisor:
 
-1. Logs to the Kasm API via `KASM_API_JWT` / `KASM_API_HOST` / `KASM_API_PORT` if set
-2. Regenerates the container user (`generate_container_user`) so UIDs match the workspace config
-3. Starts dbus, PulseAudio, KasmVNC, the desktop (XFCE by default, overridable via `START_XFCE4` / `START_ICEWM` / etc.), kasm_upload_server, the squid adapter, cups, profile_sync, the recorder
-4. Invokes lifecycle hook scripts in `src/common/scripts/kasm_hook_scripts/` at the right moments:
-   - `kasm_post_run_root.sh`   — runs as root after core services are up
-   - `kasm_post_run_user.sh`   — runs as `kasm-user` after login
-   - `kasm_pre_shutdown_root.sh` / `kasm_pre_shutdown_user.sh` — graceful teardown
-   - `kasm_end_session_recoverable.sh` — for persistent/resumable sessions
-5. Tails the running processes; exits when the main desktop process dies
+1. Reads units from `/etc/container-init/units/` (core, populated from
+   `src/common/kasm-go/units/`) plus drop-ins from `/etc/container-init.d/`
+   (additive or override; downstream images extend the unit set here).
+2. Resolves `After=` / `Requires=` ordering, starts services concurrently
+   when independent. Sockets bind eagerly via `sd_listen_fds` (native) or
+   proxy mode so cold-start latency lands on first-connect, not at boot.
+3. Owns identity setup via `kasm-setup.service`: regenerates the container
+   user (`KASM_OS_USER`/`_UID`/`_GID`/`_HOME`), seeds the default profile,
+   maintains `Desktop/Uploads` + `Desktop/Downloads` symlinks.
+4. Supervises KasmVNC (via `kasm-xvnc`, our Go launcher that bypasses
+   the perl `vncserver` wrapper), the desktop window-manager, audio in/out,
+   the upload server, recorder, webcam, gamepad, smartcard, printer, etc.
+5. Reaps zombies via a dedicated SIGCHLD `wait4(-1)` loop; forwards
+   SIGTERM to all children on shutdown with reverse-dependency ordering.
+6. Emits a JSONL boot trace to `/tmp/container-init-trace.jsonl` when
+   `CONTAINER_INIT_TRACE=1`.
 
-Downstream images can override hooks by placing replacements at the same path during their own build.
+**Lifecycle hooks** — the legacy `src/common/scripts/kasm_hook_scripts/`
+hooks (`kasm_post_run_root.sh`, `kasm_post_run_user.sh`,
+`kasm_pre_shutdown_root.sh` / `kasm_pre_shutdown_user.sh`,
+`kasm_end_session_recoverable.sh`) are invoked from unit files at the
+equivalent moments. Downstream images can override them by dropping
+replacements at the same path during their own build, or wire entirely
+new lifecycle services via `/etc/container-init.d/<name>.service`.
+
+**Sysbox special case** — when running under real systemd via sysbox,
+container-init runs as a system unit (`kasm.service`) rather than PID 1.
+See `src/ubuntu/install/sysbox/install_systemd.sh`.
+
+**Boot trace** — `bash runs/lean-noble-build.sh && podman run --rm -e CONTAINER_INIT_TRACE=1 kasm-noble-lean:latest`,
+then `podman exec ... cat /tmp/container-init-trace.jsonl | jq` to see
+per-phase `dt_ms`, unit start order, and the `supervisor_start` event.
 
 ## Build system
 
@@ -168,14 +223,24 @@ Key scripts invoked from the template:
 
 1. Create `src/ubuntu/install/<feature>/install_<feature>.sh` (and peers for other distro families)
 2. Add `COPY` + `RUN bash $INST_SCRIPTS/<feature>/install_<feature>.sh` to every relevant dockerfile
-3. Wire the feature into `src/common/startup_scripts/vnc_startup.sh` if it needs a runtime process
+3. If the feature needs a runtime process: drop a unit file at
+   `src/common/kasm-go/units/<feature>.service` (and `.socket` for socket
+   activation). Use `After=` / `Requires=` to slot it into the dep graph.
+   Validate locally with `make -C src/common/kasm-go test` plus a build —
+   the Dockerfile's `container-init --strict-units --validate` gate
+   fails the build on any parse warning.
 4. Add the path to `UNIVERSAL_CHANGE_FILES` in `template-vars.yaml` so all images rebuild on change
 
 **Debug a failing image at runtime:**
 
 - Start with `-e VNC_PW=password` and connect to `https://<host>:6901` as `kasm_user` / `password`
-- Check `/var/log/kasm-*` and the container's stdout (vnc_startup.sh logs go there)
-- If running inside a real Kasm deployment, logs are also forwarded to the Kasm API via the `KASM_API_JWT` path in vnc_startup.sh
+- Check `/var/log/kasm-*` and the container's stdout — container-init tags
+  each line with `[unit-name]` so you can attribute output to its service.
+- For boot-time issues, set `-e CONTAINER_INIT_TRACE=1` and inspect
+  `/tmp/container-init-trace.jsonl` — per-phase `dt_ms`, unit start
+  events, and `mem_snapshot` labels.
+- If running inside a real Kasm deployment, logs are forwarded to the
+  Kasm API via `KASM_API_JWT` / `KASM_API_HOST` / `KASM_API_PORT`.
 
 ## Conventions / gotchas
 
@@ -184,7 +249,8 @@ Key scripts invoked from the template:
 - **Multi-arch.** Every dockerfile must work on both `amd64` and `arm64`. Shell out to `$(arch)` or `dpkg --print-architecture` rather than hardcoding.
 - **No secrets in images.** Anything in `$HOME/kasm-default-profile` ships in the public image.
 - **Cleanup matters.** Each feature's install script is expected to remove its own build-time caches before the layer closes (`apt clean`, `rm -rf /var/lib/apt/lists/*`, etc.) — missing cleanup bloats every downstream image.
-- **`dockerfile-kasm-core` is the reference.** The other dockerfiles are variants with equivalent structure; when adding a feature, update them all in the same commit to avoid drift.
+- **`dockerfile-kasm-core` is the reference.** The other 6 dockerfiles are variants with equivalent structure; when adding a feature, update them all in the same commit to avoid drift. Use `grep -n` across all 7 first — some have subtle ordering differences (kasmos has no VirtualGL; sysbox is per-distro).
+- **Upstream syncs use rerere.** This repo has `rerere.enabled=true rerere.autoupdate=false` set in `.git/config`. After a `git merge kasm/develop`, resolve conflicts manually once; identical conflict signatures auto-replay on subsequent syncs (the `vnc_startup.sh` modify/delete and the `install_kasm_upload_server.sh` `COMMIT_ID` bump are recurring offenders). Don't enable `rerere.autoupdate` — manual staging is the safety net.
 
 ## License
 
