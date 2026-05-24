@@ -1,0 +1,67 @@
+#!/bin/sh
+# kasm-nix-launch — exec wrapper for menu-launched Nix-built apps.
+#
+# Sets the env Nix-built GUI apps need to run inside Kasm's KasmVNC
+# headless container. The WM-inherited env is wrong for them in
+# several ways, and we correct each here:
+#
+#   - DBUS_SESSION_BUS_ADDRESS: from /tmp/kasm-dbus.env (kasm-setup
+#     spawned). GTK4 apps and KDE KDBusService need this.
+#
+#   - XDG_RUNTIME_DIR: KDE/Qt apps consult this for sockets and lock
+#     files. Default /run/user/<uid> isn't pre-created by Kasm.
+#
+#   - LD_LIBRARY_PATH: UNSET. Kasm's image bakes a path including
+#     /opt/libjpeg-turbo, /usr/lib/x86_64-linux-gnu, /usr/local/nvidia
+#     into the WM's env — designed for system apps, breaks Nix-built
+#     apps that find mismatched libva/libjpeg/etc. The activation
+#     script has already added /opt/kasm-nix-libs to ld.so.conf.d
+#     and rebuilt the cache, so libGLX_mesa et al are reachable via
+#     the system cache (lower-priority than RUNPATH — nix's own libs
+#     still win for things in their closure).
+#
+#   - QtWebEngine envelope: --no-sandbox + zygote disabled. Chromium's
+#     sandbox model needs CAP_SYS_ADMIN which rootless podman doesn't
+#     grant, and its zygote IPC fails in this environment. Single-
+#     process collapses Chromium to one PID. dev-shm-usage disabled
+#     because /dev/shm is small and chromium falls back to /tmp.
+#
+#   - Software rendering: LIBGL_ALWAYS_SOFTWARE + Qt software backends
+#     keep Qt/QtWebEngine from probing EGL on Xvnc (which doesn't
+#     expose it). Slight CPU cost for chromium/electron apps that
+#     could otherwise GPU-accelerate, but in software-Xvnc that path
+#     was never going to work anyway.
+
+[ -f /tmp/kasm-dbus.env ] && {
+    . /tmp/kasm-dbus.env 2>/dev/null
+    [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && export DBUS_SESSION_BUS_ADDRESS
+    [ -n "${DBUS_SESSION_BUS_PID:-}" ]     && export DBUS_SESSION_BUS_PID
+}
+
+# XDG_RUNTIME_DIR for KDE/Qt apps; create on demand.
+if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+    uid=$(id -u)
+    XDG_RUNTIME_DIR="/run/user/${uid}"
+    [ -d "${XDG_RUNTIME_DIR}" ] || install -d -m 0700 -o "${uid}" -g "${uid}" "${XDG_RUNTIME_DIR}" 2>/dev/null || \
+        mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null
+    export XDG_RUNTIME_DIR
+fi
+
+# Drop the Kasm-baked LD_LIBRARY_PATH (designed for system apps; breaks
+# Nix apps with library version clashes). Nix's RUNPATH already finds
+# its own libs; system fallbacks come via /etc/ld.so.cache.
+unset LD_LIBRARY_PATH
+
+# Software rendering — Xvnc doesn't expose GPU/EGL, and these vars
+# keep Qt apps off the GL probe path that would otherwise abort.
+export LIBGL_ALWAYS_SOFTWARE=1
+export QT_QUICK_BACKEND=software
+export QSG_RHI_BACKEND=software
+export QT_XCB_GL_INTEGRATION=none
+
+# QtWebEngine in rootless container: bypass sandbox/zygote/dev-shm.
+# Other apps ignore these env vars.
+export QTWEBENGINE_DISABLE_SANDBOX=1
+export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-seccomp-sandbox --disable-gpu --disable-software-rasterizer --no-zygote --single-process --disable-dev-shm-usage"
+
+exec "$@"

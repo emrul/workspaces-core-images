@@ -1,0 +1,116 @@
+# Default profile set for build-nix-store-volume.
+#
+# See design/nix-package-process.md for the design and update-cadence
+# policy. In short:
+#   - [nixpkgs].ref pins the *base* layer; bump at nixpkgs stable
+#     release boundaries (~6 months).
+#   - Profiles that need a faster cadence override `ref` to a rolling
+#     branch. Their delta layer grows (carries its own libs) but the
+#     base layer's digest stays stable across their bumps.
+
+[nixpkgs]
+ref = "github:NixOS/nixpkgs/nixos-25.05"
+
+# Packages that go in the base OCI layer. The build script also includes
+# the closures of these packages — glibc pulls in its own deps, etc.
+# Stable digest across profile-set churn.
+[base]
+pkgs = [
+    "nixpkgs#glibc",
+    "nixpkgs#openssl",
+    "nixpkgs#zlib",
+    "nixpkgs#libffi",
+    "nixpkgs#xorg.libX11",
+    "nixpkgs#xorg.libXi",
+    "nixpkgs#fontconfig",
+    "nixpkgs#freetype",
+    "nixpkgs#gtk3",
+    "nixpkgs#dbus",
+    "nixpkgs#alsa-lib",
+    "nixpkgs#nspr",
+    "nixpkgs#nss",
+]
+
+# Build script warns when a non-base store path appears in >= N% of
+# profiles. Operator decides whether to promote it to [base].
+[promote]
+threshold_percent = 80
+
+# One section per profile. Profile names become directory names under
+# /nix/var/nix/profiles/kasm/ in the final volume.
+
+[profiles.chromium]
+pkgs = ["nixpkgs#chromium"]
+ref  = "github:NixOS/nixpkgs/nixos-unstable"
+
+[profiles.onlyoffice]
+pkgs      = ["nixpkgs#onlyoffice-desktopeditors"]
+# nixpkgs ships an x86_64-linux binary only — skip on arm64 builds.
+# Drop or extend the list once an upstream arm64 build exists.
+platforms = ["amd64"]
+
+[profiles.vscode]
+pkgs = ["nixpkgs#vscode"]
+
+[profiles.obsidian]
+pkgs = ["nixpkgs#obsidian"]
+
+# KDE Angelfish: lightweight QtWebEngine-based browser. Demonstrates
+# the kdePackages.<name> attribute path (Plasma 6 / KF6 namespace).
+# Requires the env wiring in /usr/local/bin/kasm-nix-launch (drops
+# Kasm's baked LD_LIBRARY_PATH, adds Qt software-render env vars,
+# disables Chromium zygote/sandbox) — works in headless KasmVNC once
+# that wrapper is in place.
+[profiles.angelfish]
+pkgs = ["nixpkgs#kdePackages.angelfish"]
+
+# AI coding CLIs — separate profiles so users can activate any subset.
+# All three ride nixos-unstable for fast (often weekly) security and
+# feature updates. Trade-off: their shared unstable-Node closure
+# duplicates across the three deltas — the auto-promote analyzer will
+# surface this (each unstable lib appears in 100% of AI-CLI profiles).
+# For a richer registry footprint optimisation, see the phase-2 note
+# on Nix overlays in design/nix-package-process.md.
+[profiles.claude-code]
+pkgs     = ["nixpkgs#claude-code"]
+ref      = "github:NixOS/nixpkgs/nixos-unstable"
+requires = ["node"]
+
+[profiles.opencode]
+pkgs     = ["nixpkgs#opencode"]
+ref      = "github:NixOS/nixpkgs/nixos-unstable"
+requires = ["node"]
+
+[profiles.codex]
+pkgs     = ["nixpkgs#codex"]
+ref      = "github:NixOS/nixpkgs/nixos-unstable"
+requires = ["node"]
+
+# Terminal emulators were trialled here (wezterm, ptyxis) but both
+# fail in Kasm's headless KasmVNC container:
+#   - wezterm-gui: eglGetDisplay returns null (Xvnc doesn't expose
+#     EGL natively). The CLI still works.
+#   - ptyxis: spawns its shell via systemd transient scopes; without
+#     systemd as PID 1, the shell never starts.
+# Kasm's base image already ships xfce4-terminal which works fine via
+# the WM's normal launch path. Dropped from the default profile set;
+# revisit if/when KasmVNC gains EGL passthrough or someone ports
+# ptyxis to a systemd-less spawn path.
+
+# Language runtimes. Nix ships the runtime + global CLIs; per-project
+# libraries land in user home via npm/pip/uv (NPM_CONFIG_PREFIX and
+# PIPX_HOME are exported by kasm-nix-activate so installs go to
+# ~/.local/share/{npm,pipx}).
+[profiles.node]
+pkgs = [
+    "nixpkgs#nodejs_22",
+    "nixpkgs#pnpm",
+    "nixpkgs#corepack",
+]
+
+[profiles.python]
+pkgs = [
+    "nixpkgs#python3",
+    "nixpkgs#uv",
+    "nixpkgs#pipx",
+]

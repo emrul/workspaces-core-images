@@ -352,6 +352,30 @@ multiImages:
       - src/alpine/xfce/.config/xfce4/**
       - src/alpine/xfce/.config/xfce4/xfconf/**
       - src/alpine/xfce/.config/xfce4/xfconf/xfce-perchannel-xml/**
+  # Downstream image: kasm-nix-ubuntu adds Nix-store activation hooks
+  # on top of THIS fork's core-ubuntu-noble (which uses container-init,
+  # not the upstream bash supervisor). The /nix volume is mounted at
+  # runtime from a separately-built OCI image (see design/nix-package-
+  # process.md).
+  #
+  # CI integration TODO: the `base:` field below currently points at the
+  # upstream Dockerhub tag, which would NOT work — it's the bash-
+  # supervisor flavour and has no /etc/container-init.d/. Wiring CI to
+  # use the in-pipeline ubuntu-noble cache tag (image-cache-private:
+  # amd64-core-ubuntu-noble-<branch>-<pipeline-id>) is a follow-up;
+  # local builds should override with --build-arg BASE_IMAGE=localhost/
+  # kasm-core-ubuntu-noble:dev. See docs/nix-how-to.md.
+  - name1: nix
+    name2: ubuntu
+    base: kasmweb/core-ubuntu-noble:develop  # TODO: fork-built tag, not upstream
+    bg: bg_noble.png
+    distro: ubuntu
+    dockerfile: dockerfile-kasm-nix-ubuntu
+    changeFiles:
+      - dockerfile-kasm-nix-ubuntu
+      - src/ubuntu/install/nix/**
+      - bin/build-nix-store-volume
+      - bin/nix-profiles.toml
 singleImages:
   - name1: cuda
     name2: jammy

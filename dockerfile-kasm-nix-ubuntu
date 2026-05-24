@@ -1,0 +1,48 @@
+# kasm-nix-ubuntu: ubuntu core + Nix activation hooks.
+#
+# This image does NOT install Nix. It expects an OCI image built by
+# bin/build-nix-store-volume to be mounted read-only at /nix at run
+# time. Boot-time activation reads KASM_NIX_PROFILES (CSV); per-user
+# overrides live at $HOME/.config/kasm-nix/active.
+#
+# IMPORTANT: BASE_IMAGE must be a core image built from THIS fork's
+# dockerfile-kasm-core — not the upstream kasmweb/core-ubuntu-noble.
+# We drop a unit into /etc/container-init.d/, which only exists in
+# container-init-based images. See docs/nix-how-to.md § "Step 1: build
+# the core image" for the local build commands.
+#
+# See design/nix-package-process.md for the full design.
+
+ARG BASE_IMAGE="localhost/kasm-core-ubuntu-noble:dev"
+FROM $BASE_IMAGE
+
+ARG DISTRO=ubuntu
+USER 0
+
+# Drop-in unit + scripts. The supervisor scans /etc/container-init.d/
+# for additive units; ours is gated by ConditionPathIsDirectory so the
+# image is still functional without the /nix volume mounted.
+COPY src/ubuntu/install/nix/units/kasm-nix-activate.service \
+     /etc/container-init.d/
+COPY src/ubuntu/install/nix/scripts/kasm-nix-activate \
+     src/ubuntu/install/nix/scripts/kasm-nix \
+     src/ubuntu/install/nix/scripts/kasm-nix-launch \
+     /usr/local/bin/
+
+RUN chmod 0755 /usr/local/bin/kasm-nix-activate /usr/local/bin/kasm-nix /usr/local/bin/kasm-nix-launch && \
+    /usr/local/bin/container-init \
+        --units /etc/container-init/units \
+        --drop-in /etc/container-init.d \
+        --strict-units --validate
+
+# Ubuntu's /etc/bash.bashrc (system-wide bashrc) is sourced by every
+# interactive shell — including the non-login bash that XFCE-Terminal
+# spawns. Source our generated /etc/profile.d/kasm-nix.sh from there
+# so PATH and XDG_DATA_DIRS are visible in every terminal, not just
+# login shells. The conditional `[ -f ]` makes this a no-op when no
+# /nix volume is mounted (the file simply doesn't exist).
+RUN { \
+      echo ''; \
+      echo '# kasm-nix: ensure interactive shells see the activated profiles.'; \
+      echo '[ -f /etc/profile.d/kasm-nix.sh ] && . /etc/profile.d/kasm-nix.sh'; \
+    } >> /etc/bash.bashrc

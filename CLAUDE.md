@@ -11,7 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > Upstream changes are absorbed via merge + `git rerere`; we never push
 > our work back. See `design/` for the multi-phase migration that
 > replaced the bash boot supervisor with a Go PID 1 supervisor
-> (`container-init`).
+> (`container-init`) and the design of the `kasm-nix-ubuntu` Nix-store
+> image variant (`design/nix-package-process.md`).
 
 **workspaces-core-images** produces the base ("core") Docker images from which every other Kasm Workspaces image is derived. These images bundle a Linux desktop environment, a VNC/browser-access stack (KasmVNC), and the in-container wiring that lets a workspace integrate with the Kasm platform (audio, clipboard, uploads/downloads, webcam, microphone, printing, profile sync, session recording, etc.).
 
@@ -73,10 +74,19 @@ workspaces-core-images/
 │                                     # (README.md, description.txt, demo.txt)
 │
 ├── design/                           # Phase notes for the container-init migration
-│                                     # (phase4–6 status, before/after probes, work_sequence)
+│                                     # plus design/nix-package-process.md (Nix variant)
+│
+├── docs/                             # Dockerhub readmes per image, plus:
+│   └── nix-how-to.md                 #   user-facing build/run/extend guide for the Nix variant
 │
 ├── runs/                             # Smoke-test scripts + trace JSONL captures
 │                                     # (lean-noble-build.sh, noble-functional-smoke.sh, ...)
+│
+├── bin/                              # Operator-side build tools
+│   ├── build-nix-store-volume        # Builds multi-layer OCI Nix store
+│   └── nix-profiles.toml             # Profile set for the Nix store image
+│
+├── dockerfile-kasm-nix-ubuntu        # Fork-specific: ubuntu core + Nix activation hooks
 │
 └── kasm-desktop-kde/                 # KDE desktop variant (WIP/placeholder)
 ```

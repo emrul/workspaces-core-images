@@ -1,0 +1,584 @@
+#!/usr/bin/env bash
+# build-nix-store-volume — emit a multi-layer OCI image whose payload
+# is a Nix store containing the configured profiles.
+#
+# Architecture: all the heavy lifting happens inside a `nixos/nix`
+# container. Host requirements collapse to podman OR docker only —
+# no Python, no jq, no APFS sparseimage. The Nix store is staged in a
+# named podman volume (lives in the container engine's filesystem,
+# which is ext4 / case-sensitive even on macOS+lima), and the inner
+# container tars a build context that the host then feeds to
+# `podman build` via stdin. The host's filesystem never touches a Nix
+# store path.
+#
+# See design/nix-package-process.md for the layer-split logic.
+#
+# Usage:
+#   build-nix-store-volume [--config FILE] [--profile NAME ...]
+#                          [--tag REPO:TAG] [--push REGISTRY]
+#                          [--arch amd64|arm64] [--nix-image REF]
+#                          [--prune-stage] [--keep-output]
+
+set -euo pipefail
+
+# ───── Defaults ────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="${SCRIPT_DIR}/nix-profiles.toml"
+NIX_IMAGE_DEFAULT="nixos/nix:2.28.4"
+ONLY_PROFILES=()
+TAG=""
+PUSH_REGISTRY=""
+ARCH=""
+PRUNE_STAGE=0
+KEEP_OUTPUT=0
+
+# ───── Helpers ─────────────────────────────────────────────────────────
+log()  { printf '%s %s\n' "[build-nix-store-volume]" "$*" >&2; }
+fail() { printf '%s FATAL: %s\n' "[build-nix-store-volume]" "$*" >&2; exit 1; }
+
+usage() {
+  cat <<EOF
+build-nix-store-volume — build a Nix-store OCI image
+
+  --config FILE        TOML config (default: ${CONFIG_FILE})
+  --profile NAME       Build only this profile (repeatable). When any
+                       --profile is given, all others are skipped.
+  --tag REPO:TAG       Output image tag
+                       (default: localhost/kasm-nix-store-<arch>:dev)
+  --push REGISTRY      Push to REGISTRY/<image> after build
+  --arch amd64|arm64   Target arch (default: host arch). Cross-arch
+                       runs through qemu-user emulation — slow.
+  --nix-image REF      Container image for nix builds
+                       (default: ${NIX_IMAGE_DEFAULT})
+  --prune-stage        Delete the cached staging volume after a
+                       successful build (forces a clean rebuild next
+                       run; otherwise Nix dedup speeds things up).
+  --keep-output        Keep \$HOME/.cache/kasm-nix-build-output around
+                       after the build for forensics. By default the
+                       context tar is removed once consumed.
+  -h, --help           This text
+
+Host requirements: podman (preferred) OR docker. That's it.
+Staging volume: podman volume kasm-nix-build-stage-<arch> (cached).
+Tear down with:  ${0##*/} --prune-stage   or
+                 podman volume rm kasm-nix-build-stage-<arch>
+EOF
+}
+
+# ───── Arg parsing ─────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config)       CONFIG_FILE="$2"; shift 2 ;;
+    --profile)      ONLY_PROFILES+=("$2"); shift 2 ;;
+    --tag)          TAG="$2"; shift 2 ;;
+    --push)         PUSH_REGISTRY="$2"; shift 2 ;;
+    --arch)         ARCH="$2"; shift 2 ;;
+    --nix-image)    NIX_IMAGE_DEFAULT="$2"; shift 2 ;;
+    --prune-stage)  PRUNE_STAGE=1; shift ;;
+    --keep-output)  KEEP_OUTPUT=1; shift ;;
+    -h|--help)      usage; exit 0 ;;
+    *)              usage >&2; fail "unknown arg: $1" ;;
+  esac
+done
+
+# ───── Toolchain detection (host needs nothing else) ───────────────────
+if command -v podman >/dev/null 2>&1; then
+  CONTAINER_CLI=podman
+elif command -v docker >/dev/null 2>&1; then
+  CONTAINER_CLI=docker
+else
+  fail "need podman or docker on PATH"
+fi
+
+# ───── Arch detection ──────────────────────────────────────────────────
+if [[ -z "${ARCH}" ]]; then
+  case "$(uname -m)" in
+    x86_64|amd64)  ARCH=amd64 ;;
+    aarch64|arm64) ARCH=arm64 ;;
+    *) fail "unsupported host arch: $(uname -m); pass --arch explicitly" ;;
+  esac
+fi
+[[ -z "${TAG}" ]] && TAG="localhost/kasm-nix-store-${ARCH}:dev"
+PLATFORM="linux/${ARCH}"
+STAGE_VOLUME="kasm-nix-build-stage-${ARCH}"
+
+# ───── Config ──────────────────────────────────────────────────────────
+[[ -f "${CONFIG_FILE}" ]] || fail "config not found: ${CONFIG_FILE}"
+
+# ───── Output dir for the context tar (only the tar; no nix paths) ─────
+OUTPUT_DIR="${HOME}/.cache/kasm-nix-build-output"
+mkdir -p "${OUTPUT_DIR}"
+INNER_SCRIPT="${OUTPUT_DIR}/inner-build.sh"
+
+cleanup() {
+  if [[ "${KEEP_OUTPUT}" == 1 ]]; then
+    log "output kept at ${OUTPUT_DIR}"
+  else
+    rm -f "${OUTPUT_DIR}/image.tar" "${INNER_SCRIPT}"
+  fi
+}
+trap cleanup EXIT
+
+# ───── Announce ────────────────────────────────────────────────────────
+log "config:      ${CONFIG_FILE}"
+log "tag:         ${TAG}"
+log "arch:        ${ARCH}"
+log "platform:    ${PLATFORM}"
+log "container:   ${CONTAINER_CLI}"
+log "nix image:   ${NIX_IMAGE_DEFAULT}"
+log "stage vol:   ${STAGE_VOLUME} (persistent; --prune-stage to reset)"
+
+# ───── Ensure named volume exists + seeded with /nix from image ───────
+# The volume is mounted at /nix in the inner build, so the image's
+# bundled nix binary (which itself lives in /nix/store) would be
+# masked. Seed the volume with the image's /nix on first run; the
+# sentinel file makes this idempotent (single stat() on every later
+# run).
+if ! "${CONTAINER_CLI}" volume inspect "${STAGE_VOLUME}" >/dev/null 2>&1; then
+  log "creating named volume ${STAGE_VOLUME}"
+  "${CONTAINER_CLI}" volume create "${STAGE_VOLUME}" >/dev/null
+fi
+
+log "ensuring ${STAGE_VOLUME} is seeded with ${NIX_IMAGE_DEFAULT}'s /nix"
+# The :z mount flag tells podman to apply a *shared* SELinux label to
+# the volume so multiple containers (seed + the inner build, possibly
+# probe containers later) can all access it. Without it, lima's VM
+# applies a restrictive label to the volume and subsequent container
+# reads fail with "Permission denied" even though file modes look fine.
+"${CONTAINER_CLI}" run --rm \
+    --platform "${PLATFORM}" \
+    --volume "${STAGE_VOLUME}:/volume-data:rw,z" \
+    --entrypoint /bin/sh \
+    "${NIX_IMAGE_DEFAULT}" \
+    -c '
+      if [ ! -f /volume-data/.kasm-nix-init-done ]; then
+        echo "[seed] first-time init: copying /nix → volume" >&2
+        cp -a /nix/. /volume-data/
+        touch /volume-data/.kasm-nix-init-done
+        echo "[seed] done" >&2
+      fi
+    '
+
+# ───── Inner build script (runs inside nixos/nix) ──────────────────────
+# Stages into /build (the named volume). Uses Nix builtins.fromTOML to
+# parse the config — no host python required. Tars the resulting build
+# context into /output/context.tar for the host's outer build.
+
+cat > "${INNER_SCRIPT}" <<'INNER'
+#!/bin/sh
+set -eu
+
+# The named volume is mounted at /nix. The bundled nix binary, its
+# closure, and all our installed profiles/store paths live in the
+# volume so they persist across runs. Per-build ephemeral staging
+# (closures, layer trees, json) goes under /nix/.build/ — same
+# filesystem as /nix/store so cp -al hardlinks work.
+STAGE_IN=/nix/.build
+CONFIG_IN=/config/profiles.toml
+OUTPUT_IN=/output
+KASM_PROFILE_DIR=/nix/var/nix/profiles/kasm
+KASM_GCROOT_DIR=/nix/var/nix/gcroots/kasm
+
+# Wipe per-build staging from prior run; the live store stays.
+rm -rf "${STAGE_IN}"
+mkdir -p "${STAGE_IN}/closures" "${STAGE_IN}/layers"
+
+# Ensure kasm-owned profile + gcroot directories exist before any
+# `nix profile install --profile <kasm/...>` call. The image's /nix
+# only ships /nix/var/nix/profiles/{default,per-user/...} — kasm/ is
+# our addition.
+mkdir -p "${KASM_PROFILE_DIR}" "${KASM_GCROOT_DIR}"
+
+# Many PoC packages have proprietary upstreams (claude-code, opencode,
+# codex, vscode, slack, obsidian, etc.). Nix gates these behind an
+# unfree-license check; the env var + --impure pair is the standard
+# escape hatch. We also allow `insecure` packages because some Electron
+# CLIs ship known-CVE'd transitive Node versions in their closure —
+# they get fixed quickly upstream, but a fresh ref bump can briefly
+# trip the insecure check.
+export NIXPKGS_ALLOW_UNFREE=1
+export NIXPKGS_ALLOW_INSECURE=1
+
+# Bump the binary-cache download buffer from the 64 MiB default — the
+# heavy closures (Chromium, OnlyOffice, Electron apps) keep the
+# default buffer full and Nix prints
+#   "warning: download buffer is full; consider increasing the
+#    'download-buffer-size' setting"
+# while it waits to drain. Set via NIX_CONFIG so every nix invocation
+# inside this container honours it without per-call flags.
+export NIX_CONFIG="download-buffer-size = 536870912"
+
+# ── 0. helper tools ────────────────────────────────────────────────────
+# nixos/nix:* is FROM scratch + nix's own closure — no apk, no awk, no
+# jq by default. Install whatever we need via nix profile install into
+# a dedicated `.helpers` profile under the named volume, so the cost is
+# paid once and reused on every subsequent run.
+needs=""
+command -v jq      >/dev/null 2>&1 || needs="${needs} nixpkgs#jq"
+# awk: only used by the auto-promote loop which now goes through POSIX
+# `set --` instead, but keep gawk available as a helper in case any
+# future addition reaches for it.
+command -v awk     >/dev/null 2>&1 || needs="${needs} nixpkgs#gawk"
+# buildah: assembles the final multi-layer OCI image from the staging
+# tree (Dockerfile + layer dirs) and exports it as a docker-archive
+# tarball. We use buildah instead of `podman build - < context.tar`
+# because podman 4.8 bufio.Scanner trips with "token too long" parsing
+# a multi-GB stdin tar (it tries to read the binary tar as a line of
+# Dockerfile text). buildah ingests the staging dir as a real
+# directory context and avoids that path entirely.
+command -v buildah >/dev/null 2>&1 || needs="${needs} nixpkgs#buildah"
+
+if [ -n "${needs}" ]; then
+  echo "[inner] installing helper tools:${needs}" >&2
+  # shellcheck disable=SC2086
+  nix --extra-experimental-features 'nix-command flakes' \
+      profile install --impure \
+      --profile /nix/var/nix/profiles/kasm/.helpers \
+      ${needs}
+fi
+# Always source the helpers profile path (idempotent across runs).
+if [ -d /nix/var/nix/profiles/kasm/.helpers/bin ]; then
+  export PATH="/nix/var/nix/profiles/kasm/.helpers/bin:${PATH}"
+fi
+
+# ── 1. TOML → JSON via builtins.fromTOML ───────────────────────────────
+nix --extra-experimental-features 'nix-command flakes' \
+    eval --raw --impure --expr \
+    "builtins.toJSON (builtins.fromTOML (builtins.readFile ${CONFIG_IN}))" \
+    > "${STAGE_IN}/profiles.json"
+
+# ── 2. profile selection ───────────────────────────────────────────────
+# ONLY_PROFILES env var (CSV) restricts to a subset.
+if [ -n "${ONLY_PROFILES:-}" ]; then
+  printf '%s\n' "${ONLY_PROFILES}" | tr ',' '\n' | grep -v '^$' \
+      > "${STAGE_IN}/selected.txt"
+else
+  jq -r '.profiles | keys[]' "${STAGE_IN}/profiles.json" \
+      > "${STAGE_IN}/selected.txt"
+fi
+
+# Filter by per-profile `platforms = [...]`. An empty/missing platforms
+# list means "no restriction"; if the list is present, the target arch
+# (from TARGET_ARCH env, set by the host) must be in it.
+TARGET_ARCH="${TARGET_ARCH:-amd64}"
+TMP_SEL="${STAGE_IN}/selected.txt.tmp"
+: > "${TMP_SEL}"
+while IFS= read -r p; do
+  [ -z "$p" ] && continue
+  plats="$(jq -r --arg p "$p" \
+              '.profiles[$p].platforms // [] | join(" ")' \
+              "${STAGE_IN}/profiles.json")"
+  if [ -z "$plats" ]; then
+    printf '%s\n' "$p" >> "${TMP_SEL}"
+  elif printf '%s\n' $plats | grep -qxF "${TARGET_ARCH}"; then
+    printf '%s\n' "$p" >> "${TMP_SEL}"
+  else
+    echo "[inner] SKIP profile '$p' — platforms=[${plats}] does not include ${TARGET_ARCH}" >&2
+  fi
+done < "${STAGE_IN}/selected.txt"
+mv "${TMP_SEL}" "${STAGE_IN}/selected.txt"
+
+THRESHOLD="$(jq -r '.promote.threshold_percent // 80' "${STAGE_IN}/profiles.json")"
+DEFAULT_REF="$(jq -r '.nixpkgs.ref' "${STAGE_IN}/profiles.json")"
+
+echo "[inner] default ref:  ${DEFAULT_REF}" >&2
+echo "[inner] target arch:  ${TARGET_ARCH}" >&2
+echo "[inner] profiles:     $(tr '\n' ' ' < "${STAGE_IN}/selected.txt")" >&2
+
+# (kasm profile + gcroot dirs were ensured earlier, before the helpers
+# install runs — both need the kasm/ prefix to exist.)
+
+nix_install() {
+  prof_path="$1"; shift
+  echo "  installing $(basename "$prof_path") (attrs: $*)" >&2
+  nix --extra-experimental-features 'nix-command flakes' \
+      profile install --impure --profile "$prof_path" "$@"
+  ln -sfn "$prof_path" "${KASM_GCROOT_DIR}/$(basename "$prof_path")"
+}
+
+rewrite_attr() {
+  attr="$1"; ref="$2"
+  case "$attr" in
+    nixpkgs#*) printf '%s#%s\n' "$ref" "${attr#nixpkgs#}" ;;
+    *)         printf '%s\n' "$attr" ;;
+  esac
+}
+
+collect_attrs() {
+  jq_path="$1"; ref="$2"
+  jq -r "$jq_path" "${STAGE_IN}/profiles.json" | while IFS= read -r a; do
+    [ -z "$a" ] && continue
+    rewrite_attr "$a" "$ref"
+  done
+}
+
+# ── 3. bootstrap profile (bundled nix CLI) ─────────────────────────────
+nix_install "${KASM_PROFILE_DIR}/bootstrap" \
+            "$(rewrite_attr "nixpkgs#nix" "${DEFAULT_REF}")"
+
+# ── 4. _base profile ───────────────────────────────────────────────────
+collect_attrs '.base.pkgs[]' "${DEFAULT_REF}" \
+  | xargs nix --extra-experimental-features 'nix-command flakes' \
+      profile install --impure --profile "${KASM_PROFILE_DIR}/_base"
+ln -sfn "${KASM_PROFILE_DIR}/_base" "${KASM_GCROOT_DIR}/_base"
+
+# ── 5. named profiles ──────────────────────────────────────────────────
+while IFS= read -r p; do
+  [ -z "$p" ] && continue
+  p_ref="$(jq -r --arg p "$p" '.profiles[$p].ref // empty' \
+              "${STAGE_IN}/profiles.json")"
+  [ -z "$p_ref" ] && p_ref="${DEFAULT_REF}"
+  echo "  ($p uses ref $p_ref)" >&2
+  collect_attrs ".profiles.\"$p\".pkgs[]" "$p_ref" \
+    | xargs nix --extra-experimental-features 'nix-command flakes' \
+        profile install --impure --profile "${KASM_PROFILE_DIR}/$p"
+  ln -sfn "${KASM_PROFILE_DIR}/$p" "${KASM_GCROOT_DIR}/$p"
+done < "${STAGE_IN}/selected.txt"
+
+# ── 6. capture closures ────────────────────────────────────────────────
+echo "[inner] capturing closures" >&2
+nix-store -qR "${KASM_PROFILE_DIR}/bootstrap" | sort -u \
+    > "${STAGE_IN}/closures/bootstrap.txt"
+nix-store -qR "${KASM_PROFILE_DIR}/_base"     | sort -u \
+    > "${STAGE_IN}/closures/_base.txt"
+sort -u -m "${STAGE_IN}/closures/_base.txt" \
+            "${STAGE_IN}/closures/bootstrap.txt" \
+    > "${STAGE_IN}/closures/base_set.txt"
+
+while IFS= read -r p; do
+  [ -z "$p" ] && continue
+  nix-store -qR "${KASM_PROFILE_DIR}/$p" | sort -u \
+      > "${STAGE_IN}/closures/$p.txt"
+done < "${STAGE_IN}/selected.txt"
+
+# ── 7. auto-promote heuristic ──────────────────────────────────────────
+echo "[inner] auto-promote analysis (threshold ${THRESHOLD}%)" >&2
+total="$(wc -l < "${STAGE_IN}/selected.txt")"
+{
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    cat "${STAGE_IN}/closures/$p.txt"
+  done < "${STAGE_IN}/selected.txt"
+} | sort | uniq -c | while IFS= read -r line; do
+  # Pure POSIX field extraction — uniq -c output is "  <count> <path>"
+  # with leading whitespace. `set --` word-splits the line on IFS
+  # (default whitespace), so $1=count and $2=path with the leading
+  # blanks dropped.
+  # shellcheck disable=SC2086
+  set -- $line
+  count="${1:-}"
+  path="${2:-}"
+  [ -z "$path" ] && continue
+  pct=$(( count * 100 / total ))
+  if [ "$pct" -ge "$THRESHOLD" ] && \
+     ! grep -qxF "$path" "${STAGE_IN}/closures/base_set.txt"; then
+    echo "  PROMOTE-CANDIDATE ${pct}% ($count/$total profiles): $path" >&2
+  fi
+done
+
+# ── 8. partition store across layer-staging dirs ──────────────────────
+echo "[inner] partitioning store across layers" >&2
+# Clean any stale layer staging from a previous run (named volume persists).
+rm -rf "${STAGE_IN}/layers"
+mkdir -p "${STAGE_IN}/layers/base/store" \
+         "${STAGE_IN}/layers/meta/var/nix/db" \
+         "${STAGE_IN}/layers/meta/var/nix/profiles/kasm"
+
+link_path() {
+  src="$1"; dst="$2"
+  bn="$(basename "$src")"
+  [ -e "${dst}/${bn}" ] && return 0
+  if [ -d "${src}" ]; then
+    cp -al "${src}" "${dst}/${bn}"
+  else
+    ln -f "${src}" "${dst}/${bn}"
+  fi
+}
+
+while IFS= read -r path; do
+  [ -z "$path" ] && continue
+  link_path "$path" "${STAGE_IN}/layers/base/store"
+done < "${STAGE_IN}/closures/base_set.txt"
+
+while IFS= read -r p; do
+  [ -z "$p" ] && continue
+  mkdir -p "${STAGE_IN}/layers/profile-${p}/store"
+  comm -23 "${STAGE_IN}/closures/${p}.txt" \
+           "${STAGE_IN}/closures/base_set.txt" \
+           > "${STAGE_IN}/closures/${p}-delta.txt"
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    link_path "$path" "${STAGE_IN}/layers/profile-${p}/store"
+  done < "${STAGE_IN}/closures/${p}-delta.txt"
+done < "${STAGE_IN}/selected.txt"
+
+# ── 9. meta layer ──────────────────────────────────────────────────────
+echo "[inner] assembling meta layer" >&2
+cp -a /nix/var/nix/db/db.sqlite \
+      "${STAGE_IN}/layers/meta/var/nix/db/"
+cp -a "${KASM_PROFILE_DIR}/." \
+      "${STAGE_IN}/layers/meta/var/nix/profiles/kasm/"
+
+# _meta.json with the profile dep graph (read at runtime by kasm-nix-activate).
+jq '
+  .profiles
+  | to_entries
+  | map({
+      key: .key,
+      value: {
+        ref:      (.value.ref      // null),
+        requires: (.value.requires // [])
+      }
+    })
+  | from_entries
+  | {profiles: .}
+' "${STAGE_IN}/profiles.json" \
+  > "${STAGE_IN}/layers/meta/var/nix/profiles/kasm/_meta.json"
+
+# ── 10. emit Dockerfile ────────────────────────────────────────────────
+# Image content lands at /store and /var (root paths, NOT /nix/store).
+# Consumers mount this image at /nix via `--mount type=image,
+# destination=/nix`, which puts image's /store at the consumer's
+# /nix/store. If we built with /nix/store inside the image, the mount
+# would nest as /nix/nix/store — wrong.
+#
+# Internal references inside store paths (e.g. shebangs pointing at
+# /nix/store/<hash>-bash) are unaffected: they're absolute paths
+# correct at runtime once the volume is mounted at /nix.
+{
+  echo "FROM scratch"
+  echo "COPY base/store /store"
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    echo "COPY profile-${p}/store /store"
+  done < "${STAGE_IN}/selected.txt"
+  echo "COPY meta/var /var"
+} > "${STAGE_IN}/layers/Dockerfile"
+
+# ── 11. buildah: assemble the multi-layer OCI image ───────────────────
+# Build directly from the staging directory (Dockerfile + layer dirs).
+# --isolation=chroot avoids needing the host kernel's user/mount
+# namespaces; --storage-driver=vfs avoids fuse-overlayfs which would
+# need /dev/fuse passed through to the container.
+
+# buildah / skopeo / podman tooling needs a `policy.json` to decide
+# whether to verify image signatures on pull/push/commit. The minimal
+# nixos/nix image ships none. Drop a permissive default; we're only
+# producing a local docker-archive (no signatures involved).
+if [ ! -f /etc/containers/policy.json ]; then
+  mkdir -p /etc/containers
+  cat > /etc/containers/policy.json <<'JSON'
+{ "default": [ { "type": "insecureAcceptAnything" } ] }
+JSON
+fi
+
+echo "[inner] running buildah build → ${TARGET_TAG}" >&2
+cd "${STAGE_IN}/layers"
+buildah \
+    --isolation=chroot \
+    --storage-driver=vfs \
+    build \
+    -t "${TARGET_TAG}" \
+    -f Dockerfile \
+    .
+
+# Export as a docker-archive tarball. The host then `podman load`s
+# this — moves the image into the host's container engine storage.
+echo "[inner] exporting image → ${OUTPUT_IN}/image.tar" >&2
+buildah --storage-driver=vfs push \
+    "${TARGET_TAG}" \
+    "docker-archive:${OUTPUT_IN}/image.tar:${TARGET_TAG}"
+
+# buildah's intermediate storage at /var/lib/containers/storage lives
+# in the container's writable overlay, not the named volume — it
+# vanishes on container exit. Nothing to clean up here.
+
+# ── 12. prune stale gcroots + GC unreachable store paths ──────────────
+# Profiles removed from the config still have gcroots pinning their
+# closures from prior runs; unlink them so nix-collect-garbage can
+# reclaim the space. Then -d removes old profile generations too
+# (every ref bump on a profile leaves the previous closure around).
+echo "[inner] pruning stale gcroots" >&2
+for gr in "${KASM_GCROOT_DIR}"/*; do
+  [ -e "$gr" ] || continue
+  name="$(basename "$gr")"
+  case "$name" in
+    bootstrap|_base) continue ;;
+  esac
+  if ! grep -qxF "$name" "${STAGE_IN}/selected.txt"; then
+    echo "  prune gcroot: $name (not in current config)" >&2
+    rm -f "$gr" "${KASM_PROFILE_DIR}/${name}" "${KASM_PROFILE_DIR}/${name}-"*-link
+  fi
+done
+
+# nix-collect-garbage WITHOUT -d: only remove paths unreachable from
+# any gcroot. -d would also delete "old generations" of every profile
+# and has been observed to nuke the image's default profile
+# (default-1-link) when /nix/var/nix/gcroots/profiles isn't preserved
+# from the seed — wedging the volume. The non-destructive form is
+# enough for our use case: stale profile generations from prior
+# config diffs accumulate slowly and a periodic --prune-stage handles
+# them.
+echo "[inner] running nix-collect-garbage (removes unreachable paths only)" >&2
+nix-collect-garbage 2>&1 | tail -3
+
+echo "[inner] complete; context.tar ready for outer build" >&2
+INNER
+
+chmod +x "${INNER_SCRIPT}"
+
+# ───── Inner build run ─────────────────────────────────────────────────
+# Build the ONLY_PROFILES env var (CSV) if the user asked for a subset.
+ONLY_CSV=""
+if [[ ${#ONLY_PROFILES[@]} -gt 0 ]]; then
+  ONLY_CSV="$(IFS=, ; echo "${ONLY_PROFILES[*]}")"
+fi
+
+log "[1/3] running nix build inside ${NIX_IMAGE_DEFAULT}"
+log "  (named volume ${STAGE_VOLUME} caches between runs — first run is slow)"
+# Same `:z` here as on the seed step — keeps the SELinux label
+# consistent across runs so the inner container can read what the seed
+# wrote (and any prior inner build wrote).
+"${CONTAINER_CLI}" run --rm \
+    --platform "${PLATFORM}" \
+    --volume "${STAGE_VOLUME}:/nix:rw,z" \
+    --volume "${CONFIG_FILE}:/config/profiles.toml:ro" \
+    --volume "${OUTPUT_DIR}:/output:rw" \
+    --volume "${INNER_SCRIPT}:/inner-build.sh:ro" \
+    -e "ONLY_PROFILES=${ONLY_CSV}" \
+    -e "TARGET_ARCH=${ARCH}" \
+    -e "TARGET_TAG=${TAG}" \
+    --entrypoint /bin/sh \
+    "${NIX_IMAGE_DEFAULT}" \
+    /inner-build.sh
+
+IMAGE_TAR="${OUTPUT_DIR}/image.tar"
+[[ -f "${IMAGE_TAR}" ]] || fail "inner build produced no ${IMAGE_TAR}"
+tar_size_mb=$(( $(stat -f%z "${IMAGE_TAR}" 2>/dev/null || stat -c%s "${IMAGE_TAR}") / 1024 / 1024 ))
+log "  image tar: ${tar_size_mb} MiB"
+
+# ───── Load the image into the host's container engine ─────────────────
+# buildah inside the inner container wrote a docker-archive tarball.
+# podman load reads it and registers the image in local storage, where
+# it's then accessible to `podman run --mount type=image,…`.
+log "[2/3] loading image into ${CONTAINER_CLI} local store: ${TAG}"
+"${CONTAINER_CLI}" load -i "${IMAGE_TAR}"
+
+# ───── Optional push ───────────────────────────────────────────────────
+if [[ -n "${PUSH_REGISTRY}" ]]; then
+  log "[3/3] pushing to ${PUSH_REGISTRY}"
+  remote_tag="${PUSH_REGISTRY}/${TAG#localhost/}"
+  "${CONTAINER_CLI}" tag "${TAG}" "${remote_tag}"
+  "${CONTAINER_CLI}" push "${remote_tag}"
+  log "pushed: ${remote_tag}"
+fi
+
+# ───── Optional volume prune ───────────────────────────────────────────
+if [[ "${PRUNE_STAGE}" == 1 ]]; then
+  log "removing named volume ${STAGE_VOLUME}"
+  "${CONTAINER_CLI}" volume rm "${STAGE_VOLUME}" >/dev/null
+fi
+
+log "done: ${TAG}"
+log "to inspect layers:"
+log "  ${CONTAINER_CLI} image inspect ${TAG} | grep RootFS -A 20"
