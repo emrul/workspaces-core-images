@@ -1,11 +1,11 @@
 # CI fixture: layers /etc/container-init.d/ drop-ins exercising every
-# documented worked example onto the production-probe image. The probe
-# script (design/spike/scripts/probe-extension.sh) builds + runs this
-# image and asserts the supervisor wires each pattern correctly.
+# documented worked example onto the production-probe image, asserting
+# the supervisor wires each pattern correctly.
 FROM kasm-prod-probe:latest
 USER 0
 
-# Drop-in unit files — patterns 1..5 from src/common/container-init/README.md.
+# Drop-in unit files — patterns 1..5 from the upstream container-init
+# README at https://github.com/emrul/container-init#worked-examples.
 RUN mkdir -p /etc/container-init.d /usr/local/bin
 COPY dropins/ /etc/container-init.d/
 COPY scripts/ /usr/local/bin/

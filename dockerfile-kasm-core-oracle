@@ -3,29 +3,28 @@
 # previous stage, which breaks `FROM $BASE_IMAGE` later in the file).
 ARG BASE_IMAGE="oraclelinux:8"
 
-#### Upload-server build stage ####
-# Compile the Go drop-in for kasm_upload_server. Output goes into
-# $INST_SCRIPTS/kasm_upload_server/ in the runtime stage; the install
-# script picks it up from there. See design/work_sequence.md Phase 3.
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS upload_builder
+#### container-init fetch stage ####
+# Pull the PID 1 supervisor from the upstream release at
+# https://github.com/emrul/container-init. Bump CONTAINER_INIT_VERSION
+# to update.
+FROM --platform=$BUILDPLATFORM alpine:3 AS containerinit_fetch
+ARG CONTAINER_INIT_VERSION=v1.0.0
 ARG TARGETARCH
-WORKDIR /src
-COPY src/common/container-init /src
-RUN GOOS=linux GOARCH=${TARGETARCH} CGO_ENABLED=0 \
-    go build -trimpath -tags 'osusergo,netgo' -ldflags '-s -w' \
-    -o /out/kasm-upload-server ./cmd/kasm-upload-server
+ADD https://github.com/emrul/container-init/releases/download/${CONTAINER_INIT_VERSION}/container-init.linux-${TARGETARCH} /out/container-init
+RUN chmod 0755 /out/container-init
 
-#### container-init build stage ####
-# Compile the PID 1 supervisor + kasm-xvnc launcher. Phase 6 retired
-# the bash supervisor; container-init is now the only boot path and
-# kasm-entrypoint is a thin shim that execs into it.
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS containerinit_builder
+#### kasm-go build stage ####
+# Compile the Kasm-specific Go binaries: kasm-upload-server (drop-in
+# for the Flask upload helper) and kasm-xvnc (Xvnc launcher used by
+# kasmvnc.service). --platform=$BUILDPLATFORM keeps the builder native;
+# ARG TARGETARCH drives the Go cross-compile so multi-arch buildx works.
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS kasmgo_builder
 ARG TARGETARCH
 WORKDIR /src
-COPY src/common/container-init /src
+COPY src/common/kasm-go /src
 RUN GOOS=linux GOARCH=${TARGETARCH} CGO_ENABLED=0 \
     go build -trimpath -tags 'osusergo,netgo' -ldflags '-s -w' \
-    -o /out/container-init ./cmd/container-init && \
+    -o /out/kasm-upload-server ./cmd/kasm-upload-server && \
     GOOS=linux GOARCH=${TARGETARCH} CGO_ENABLED=0 \
     go build -trimpath -tags 'osusergo,netgo' -ldflags '-s -w' \
     -o /out/kasm-xvnc ./cmd/kasm-xvnc
@@ -119,7 +118,7 @@ RUN bash $INST_SCRIPTS/profile_sync/install_profile_sync.sh
 
 ### Install Kasm Upload Server
 COPY ./src/ubuntu/install/kasm_upload_server $INST_SCRIPTS/kasm_upload_server/
-COPY --from=upload_builder /out/kasm-upload-server $INST_SCRIPTS/kasm_upload_server/kasm-upload-server
+COPY --from=kasmgo_builder /out/kasm-upload-server $INST_SCRIPTS/kasm_upload_server/kasm-upload-server
 RUN bash $INST_SCRIPTS/kasm_upload_server/install_kasm_upload_server.sh  && rm -rf $INST_SCRIPTS/kasm_upload_server/
 
 ### Install custom cursors
@@ -189,11 +188,11 @@ COPY ./src/common/startup_scripts $STARTUPDIR
 RUN bash $STARTUPDIR/set_user_permission.sh $STARTUPDIR $HOME && \
     echo 'source $STARTUPDIR/generate_container_user' >> $HOME/.bashrc
 
-### Install container-init (Phase 4.8 — PID 1 supervisor, the only boot path)
-COPY --from=containerinit_builder /out/container-init /usr/local/bin/container-init
-COPY --from=containerinit_builder /out/kasm-xvnc      /usr/local/bin/kasm-xvnc
-COPY ./src/common/container-init/units/   /etc/container-init/units/
-COPY ./src/common/container-init/scripts/ /usr/local/bin/
+### Install container-init (PID 1 supervisor) and kasm-go binaries
+COPY --from=containerinit_fetch /out/container-init /usr/local/bin/container-init
+COPY --from=kasmgo_builder      /out/kasm-xvnc     /usr/local/bin/kasm-xvnc
+COPY ./src/common/kasm-go/units/   /etc/container-init/units/
+COPY ./src/common/kasm-go/scripts/ /usr/local/bin/
 COPY ./src/common/scripts/kasm-entrypoint /usr/local/bin/kasm-entrypoint
 RUN chmod 0755 /usr/local/bin/container-init /usr/local/bin/kasm-xvnc /usr/local/bin/kasm-entrypoint && \
     find /usr/local/bin -maxdepth 1 -type f -name 'kasm-*' -exec chmod 0755 {} \; && \

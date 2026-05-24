@@ -4,6 +4,6 @@
 
 # Strip Go build artefacts so a developer's local `make` doesn't
 # inflate the build context or leak host-built binaries into the
-# upload_builder stage (Phase 3 — design/work_sequence.md).
-src/common/container-init/bin
+# kasmgo_builder stage.
+src/common/kasm-go/bin
 
