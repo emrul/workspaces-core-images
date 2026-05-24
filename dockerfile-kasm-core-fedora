@@ -193,6 +193,10 @@ RUN chmod 0755 /usr/local/bin/container-init /usr/local/bin/kasm-xvnc /usr/local
 COPY ./src/ubuntu/install/extra $INST_SCRIPTS/extra/
 RUN bash $INST_SCRIPTS/extra/$EXTRA_SH  && rm -rf $INST_SCRIPTS/extra/
 
+### VirtualGL
+COPY ./src/ubuntu/install/virtualgl $INST_SCRIPTS/virtualgl/
+RUN bash $INST_SCRIPTS/virtualgl/install_virtualgl.sh && rm -rf $INST_SCRIPTS/virtualgl/
+
 ### Custom Folder Emblems
 COPY ./src/ubuntu/install/emblems $INST_SCRIPTS/emblems/
 RUN bash $INST_SCRIPTS/emblems/install_emblems.sh && rm -rf $INST_SCRIPTS/emblems/
@@ -202,6 +206,8 @@ RUN mkdir -p /usr/share/extra/icons/
 ADD /src/common/resources/images/egress_info.svg /usr/share/extra/icons/egress_info.svg
 ADD /src/common/resources/images/egress_error.svg /usr/share/extra/icons/egress_error.svg
 ADD /src/common/resources/images/egress_offline.svg /usr/share/extra/icons/egress_offline.svg
+
+RUN rm -f "$HOME/.local/share/wget/.wget-hsts"
 
 ### Create user and home directory for base images that don't already define it
 RUN (groupadd -g 1000 kasm-user \

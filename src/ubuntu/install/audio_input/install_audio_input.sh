@@ -2,7 +2,7 @@
 ### every exit != 0 fails the script
 set -e
 
-COMMIT_ID="10efaf2e06feb2c1e3f7ee05978bbb9f0142c01b"
+COMMIT_ID="d42f0ca30311beaed2c9833fbd71ba56ddae7ec6"
 BRANCH="develop"
 COMMIT_ID_SHORT=$(echo "${COMMIT_ID}" | cut -c1-6)
 ARCH=$(arch | sed 's/aarch64/arm64/g' | sed 's/x86_64/amd64/g')

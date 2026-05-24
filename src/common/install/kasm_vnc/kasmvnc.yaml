@@ -8,3 +8,5 @@ runtime_configuration:
   allow_override_standard_vnc_server_settings: true
   allow_override_list:
     - pointer.enabled
+server:
+  allow_environment_variables_to_override_config_settings: true

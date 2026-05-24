@@ -80,11 +80,9 @@ fi
 
 # Manifest for multi pull and push for single arch
 if [[ "${TYPE}" == "multi" ]]; then
-  docker login --username $DOCKER_HUB_USERNAME --password $DOCKER_HUB_PASSWORD
-
   # Pull images from cache repo
   docker pull ${ORG_NAME}/image-cache-private:x86_64-core-${NAME1}-${NAME2}-${PULL_BRANCH}-${CI_PIPELINE_ID}
-  docker pull ${ORG_NAME}/image-cache-private:aarch64-core-${NAME1}-${NAME2}-${PULL_BRANCH}-${CI_PIPELINE_ID}
+  docker pull --platform linux/arm64 ${ORG_NAME}/image-cache-private:aarch64-core-${NAME1}-${NAME2}-${PULL_BRANCH}-${CI_PIPELINE_ID}
 
   # Conditionally Process Public Build
   if [[ "${PUBLIC_BUILD}" == "true" ]]; then

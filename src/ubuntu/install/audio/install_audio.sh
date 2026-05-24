@@ -98,7 +98,7 @@ fi
 
 mkdir -p /var/run/pulse
 
-WS_COMMIT_ID="f7efb82dc59a02d1b99e2e2b3c6d127dc548ba72"
+WS_COMMIT_ID="f056f949e79a55217ec44c8fc4c79418ada0c05e"
 WS_BRANCH="develop"
 WS_COMMIT_ID_SHORT=$(echo "${WS_COMMIT_ID}" | cut -c1-6)
 

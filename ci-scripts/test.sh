@@ -19,10 +19,19 @@ export AWS_DEFAULT_REGION=us-east-1
 
 # Install tools for testing
 apk add \
-  aws-cli \
   curl \
   jq \
   openssh-client
+
+AWS_CLI_IMAGE=public.ecr.aws/aws-cli/aws-cli:2.34.33
+
+aws() {
+  docker run --rm \
+    -e AWS_ACCESS_KEY_ID \
+    -e AWS_SECRET_ACCESS_KEY \
+    -e AWS_DEFAULT_REGION \
+    "${AWS_CLI_IMAGE}" "$@"
+}
 
 ## Functions ##
 # Ami locater
@@ -88,7 +97,7 @@ aws ec2 run-instances \
   --security-group-ids sg-029d5bc88b001fbe5 \
   --subnet-id subnet-0ee70521f1f979f5f \
   --associate-public-ip-address \
-  --user-data file:///root/user-data \
+  --user-data "$(cat /root/user-data)" \
   --block-device-mapping '[ { "DeviceName": "/dev/sda1", "Ebs": { "VolumeSize": 120 } } ]' \
   --instance-initiated-shutdown-behavior terminate > /tmp/instance.json
 INSTANCE=$(cat /tmp/instance.json | jq -r " .Instances[0].InstanceId")
@@ -166,6 +175,12 @@ for IP in "${IPS[@]}"; do
     fi
   done
 done
+
+# Materialize docker config from env var if docker login was not run
+if [ ! -f /root/.docker/config.json ] && [ -n "${DOCKER_AUTH_CONFIG:-}" ]; then
+  mkdir -p /root/.docker
+  printf '%s' "${DOCKER_AUTH_CONFIG}" > /root/.docker/config.json
+fi
 
 # Copy over docker auth
 for IP in "${IPS[@]}"; do

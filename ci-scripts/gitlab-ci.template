@@ -1,9 +1,9 @@
 ############
 # Settings #
 ############
-image: docker:29.4.0
+image: docker:29.4.3
 services:
-  - docker:29.4.0-dind
+  - docker:29.4.3-dind
 stages:
   - readme
   - revert
@@ -18,11 +18,9 @@ variables:
   TEST_INSTALLER: "{{ TEST_INSTALLER }}"
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
+  DOCKER_AUTH_CONFIG: ${_DOCKER_AUTH_CONFIG}
   MIRROR_ORG_NAME: "{{ MIRROR_ORG_NAME }}"
 before_script:
-  - docker login --username $DOCKER_HUB_USERNAME --password $DOCKER_HUB_PASSWORD
-  - if [ "$CI_COMMIT_REF_PROTECTED" == "true" ]; then docker login --username $QUAY_USERNAME --password $QUAY_PASSWORD quay.io; fi 
-  - if [ "$CI_COMMIT_REF_PROTECTED" == "true" ]; then docker login --username $GHCR_USERNAME --password $GHCR_PASSWORD ghcr.io; fi 
   - export SANITIZED_BRANCH="$(echo ${CI_COMMIT_REF_NAME:0:64} | sed -r 's#^release/##' | sed 's/\//_/g')"
 
 include:
@@ -44,9 +42,9 @@ include:
 {% for IMAGE in multiImages %}
 build_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
   stage: build
-  image: docker:28.2.2
+  image: docker:29.4.3
   services:
-    - docker:28.2.2-dind
+    - docker:29.4.3-dind
   extends:
     - .run_rules
     - .monitor-in-grafana
@@ -77,9 +75,9 @@ build_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
 {% for IMAGE in singleImages %}
 build_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
   stage: build
-  image: docker:28.2.2
+  image: docker:29.4.3
   services:
-    - docker:28.2.2-dind
+    - docker:29.4.3-dind
   extends:
     - .run_rules
     - .monitor-in-grafana
@@ -197,6 +195,7 @@ scan_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
       {% endfor %}{% endif %}
   script:
     - apk add bash curl
+    - mkdir -p ~/.docker && echo "$DOCKER_AUTH_CONFIG" > ~/.docker/config.json
     - (cd ci-scripts && bash download-trivy)
     - bash ci-scripts/scan image ${ORG_NAME}/image-cache-private:$(arch)-core-{{ IMAGE.name1 }}-{{ IMAGE.name2 }}-${SANITIZED_BRANCH}-${CI_PIPELINE_ID}
   needs:
@@ -236,6 +235,7 @@ scan_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
       {% endfor %}{% endif %}
   script:
     - apk add bash curl
+    - mkdir -p ~/.docker && echo "$DOCKER_AUTH_CONFIG" > ~/.docker/config.json
     - (cd ci-scripts && bash download-trivy)
     - bash ci-scripts/scan image ${ORG_NAME}/image-cache-private:x86_64-core-{{ IMAGE.name1 }}-{{ IMAGE.name2 }}-${SANITIZED_BRANCH}-${CI_PIPELINE_ID}
   needs:
@@ -255,9 +255,9 @@ scan_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
 {% for IMAGE in multiImages %}
 manifest_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
   stage: manifest
-  image: docker:28.2.2
+  image: docker:29.4.3
   services:
-    - docker:28.2.2-dind
+    - docker:29.4.3-dind
   extends:
     - .run_rules
     - .monitor-in-grafana
@@ -288,9 +288,9 @@ manifest_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
 {% for IMAGE in singleImages %}
 manifest_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
   stage: manifest
-  image: docker:28.2.2
+  image: docker:29.4.3
   services:
-    - docker:28.2.2-dind
+    - docker:29.4.3-dind
   extends:
     - .run_rules
     - .monitor-in-grafana
@@ -325,9 +325,9 @@ manifest_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
 {% for IMAGE in multiImages %}
 manifest_weekly_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
   stage: manifest
-  image: docker:28.2.2
+  image: docker:29.4.3
   services:
-    - docker:28.2.2-dind
+    - docker:29.4.3-dind
   extends:
     - .monitor-in-grafana
   rules:
@@ -352,9 +352,9 @@ manifest_weekly_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
 {% for IMAGE in singleImages %}
 manifest_weekly_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
   stage: manifest
-  image: docker:28.2.2
+  image: docker:29.4.3
   services:
-    - docker:28.2.2-dind
+    - docker:29.4.3-dind
   extends:
     - .monitor-in-grafana
   rules:

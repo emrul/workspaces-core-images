@@ -2,7 +2,7 @@
 ### every exit != 0 fails the script
 set -e
 
-COMMIT_ID="a69c61013e4c3f9600099cf940a33cab3e21f795"
+COMMIT_ID="55a4cc861d77b6bbe736b23cc40669cf0a35706a"
 BRANCH="develop"
 COMMIT_ID_SHORT=$(echo "${COMMIT_ID}" | cut -c1-6)
 

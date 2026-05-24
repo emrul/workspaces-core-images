@@ -1,16 +1,40 @@
-BUILD_ARCH=$(uname -p)
+download_rpm() {
+  if [[ "${BUILD_ARCH}" =~ ^aarch64$ ]] ; then
+    url=https://github.com/VirtualGL/virtualgl/releases/download/3.1.3/VirtualGL-3.1.3.aarch64.rpm
+  else
+    url=https://github.com/VirtualGL/virtualgl/releases/download/3.1.3/VirtualGL-3.1.3.x86_64.rpm
+  fi
 
-if [ "$DISTRO" = "ubuntu" ]; then
-  #install virtualgl
-  #wget https://sourceforge.net/projects/virtualgl/files/2.6.95%20%283.0rc1%29/virtualgl_2.6.95_amd64.deb -P /tmp
+  wget -O "$virtualgl_rpm" "$url"
+}
 
+cleanup_rpm() {
+  rm "$virtualgl_rpm"
+}
+
+skip_parrotos_due_to_i386_dependencies_lacking() {
+  if [[ "$DISTRO" == @(parrotos6|parrotos7) ]]; then
+    exit
+  fi
+}
+
+set -e
+
+virtualgl_deb=/tmp/virtualgl.deb
+virtualgl_rpm=/tmp/virtualgl.rpm
+
+BUILD_ARCH=$(arch)
+
+skip_parrotos_due_to_i386_dependencies_lacking
+
+if command -v apt-get &>/dev/null; then
   if [[ "${BUILD_ARCH}" =~ ^aarch64$ ]] ; then
     apt-get update && apt-get install -y --no-install-recommends \
         libxau6 libxdmcp6 libxcb1 libxext6 libx11-6
     apt-get update && apt-get install -y --no-install-recommends \
         libglvnd0 libgl1 libglx0 libegl1 libgles2
 
-    dpkg -i $INST_SCRIPTS/virtualgl/virtualgl_*arm64.deb
+    wget -O "$virtualgl_deb" https://github.com/VirtualGL/virtualgl/releases/download/3.1.3/virtualgl_3.1.3_arm64.deb
   else
     dpkg --add-architecture i386
     apt-get update && apt-get install -y --no-install-recommends \
@@ -26,13 +50,25 @@ if [ "$DISTRO" = "ubuntu" ]; then
         libegl1 libegl1:i386 \
         libgles2 libgles2:i386
 
-    if ! grep -q "24.04" /etc/os-release; then
+    if [[ "$DISTRO" = "ubuntu" ]] && ! grep -q "24.04" /etc/os-release; then
       add-apt-repository ppa:kisak/turtle
       apt full-upgrade -y
     fi
-    dpkg -i $INST_SCRIPTS/virtualgl/virtualgl_*amd64.deb
+    wget -O "$virtualgl_deb"  https://github.com/VirtualGL/virtualgl/releases/download/3.1.3/virtualgl_3.1.3_amd64.deb
   fi
 
-  apt install -f -y
-  rm -rf $INST_SCRIPTS/virtualgl/
+  apt-get install -y "$virtualgl_deb"
+  rm "$virtualgl_deb"
 fi
+
+if [[ "$DISTRO" =~ ^opensuse ]]; then
+  download_rpm
+  zypper --no-gpg-checks install -y "$virtualgl_rpm"
+  cleanup_rpm
+elif command -v dnf &>/dev/null; then
+  download_rpm
+  dnf install -y "$virtualgl_rpm"
+  cleanup_rpm
+fi
+
+rm -rf $INST_SCRIPTS/virtualgl/

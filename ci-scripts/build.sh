@@ -9,7 +9,7 @@ DISTRO=$5
 DOCKERFILE=$6
 
 ## Build/Push image to cache endpoint by pipeline ID ##
-docker build \
+docker build --provenance=false \
   -t ${ORG_NAME}/image-cache-private:$(arch)-core-${NAME1}-${NAME2}-${SANITIZED_BRANCH}-${CI_PIPELINE_ID} \
   --build-arg BASE_IMAGE="${BASE}" \
   --build-arg DISTRO="${DISTRO}" \

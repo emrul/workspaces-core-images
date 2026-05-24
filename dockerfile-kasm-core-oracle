@@ -198,6 +198,10 @@ RUN chmod 0755 /usr/local/bin/container-init /usr/local/bin/kasm-xvnc /usr/local
     find /usr/local/bin -maxdepth 1 -type f -name 'kasm-*' -exec chmod 0755 {} \; && \
     /usr/local/bin/container-init --units /etc/container-init/units --strict-units --validate
 
+### VirtualGL
+COPY ./src/ubuntu/install/virtualgl $INST_SCRIPTS/virtualgl/
+RUN bash $INST_SCRIPTS/virtualgl/install_virtualgl.sh && rm -rf $INST_SCRIPTS/virtualgl/
+
 ### extra configurations needed per distro variant
 COPY ./src/ubuntu/install/extra $INST_SCRIPTS/extra/
 RUN bash $INST_SCRIPTS/extra/$EXTRA_SH  && rm -rf $INST_SCRIPTS/extra/
