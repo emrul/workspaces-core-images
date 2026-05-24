@@ -8,8 +8,17 @@ OUT=runs/lean
 mkdir -p "$OUT"
 LOG="$OUT/lean-noble.build.log"
 
-echo "[lean-noble] building with all opt-outs + KASM_LANG_PROFILE=en"
-podman build --platform=linux/arm64 \
+# Build for the host arch by default; override with PLATFORM=linux/arm64
+# (or amd64) to cross-build via qemu-user emulation.
+case "$(uname -m)" in
+    x86_64|amd64)  HOST_PLATFORM=linux/amd64 ;;
+    aarch64|arm64) HOST_PLATFORM=linux/arm64 ;;
+    *) echo "[lean-noble] unsupported arch: $(uname -m); pass PLATFORM=linux/<arch>" >&2; exit 1 ;;
+esac
+PLATFORM="${PLATFORM:-${HOST_PLATFORM}}"
+
+echo "[lean-noble] building with all opt-outs + KASM_LANG_PROFILE=en (${PLATFORM})"
+podman build --platform="${PLATFORM}" \
     --build-arg BASE_IMAGE=ubuntu:24.04 \
     --build-arg DISTRO=ubuntu \
     --build-arg LANG=en_US.UTF-8 --build-arg LANGUAGE=en_US:en --build-arg LC_ALL=en_US.UTF-8 \

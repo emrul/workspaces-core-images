@@ -28,6 +28,17 @@ EOF
 OUT=runs/phase6
 mkdir -p "$OUT"
 : > "$OUT/summary.tsv"
+
+# Build for the host arch by default; override with PLATFORM=linux/<arch>
+# to cross-build via qemu-user emulation.
+case "$(uname -m)" in
+    x86_64|amd64)  HOST_PLATFORM=linux/amd64 ;;
+    aarch64|arm64) HOST_PLATFORM=linux/arm64 ;;
+    *) echo "all-distros: unsupported arch: $(uname -m); pass PLATFORM=linux/<arch>" >&2; exit 1 ;;
+esac
+PLATFORM="${PLATFORM:-${HOST_PLATFORM}}"
+echo "all-distros: building for ${PLATFORM}"
+
 echo -e "distro\tbuild\tttfl_trace_ci_median\tcgmem_ci_MiB\taudio_out_ws_fails\tos_user_uid_correct\tfind_uid1000_count" >> "$OUT/summary.tsv"
 
 while IFS=$'\t' read -r tag df base bg distro; do
@@ -40,7 +51,7 @@ while IFS=$'\t' read -r tag df base bg distro; do
     echo "###    df=$df base=$base bg=$bg DISTRO=$distro"
     echo "############################"
     build_out="$OUT/${tag}.build.log"
-    if ! podman build --platform=linux/arm64 \
+    if ! podman build --platform="${PLATFORM}" \
             --build-arg BASE_IMAGE="$base" \
             --build-arg DISTRO="$distro" \
             --build-arg LANG=en_US.UTF-8 --build-arg LANGUAGE=en_US:en --build-arg LC_ALL=en_US.UTF-8 \
