@@ -191,7 +191,10 @@ The runtime image expects two things:
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 podman run --rm -d --name kasm-nix \
     --mount type=image,source=localhost/kasm-nix-store-${ARCH}:v1,destination=/nix \
-    -e KASM_NIX_PROFILES=claude-code,vscode,angelfish,node,python,obsidian \
+    # If using chrome/chromium be sure to copy seccomp profile from [chrome.json](../src/common/seccomp/chrome.json)
+    # to a location on host (e.g. `/etc/containers/seccomp/chrome.json`)
+    # --security-opt seccomp=/etc/containers/seccomp/chrome.json \
+    -e KASM_NIX_PROFILES=claude-code,vscode,angelfish,node,python,obsidian,chromium \
     -e VNC_PW=password \
     -p 6901:6901 \
     kasm-nix-ubuntu:v1
