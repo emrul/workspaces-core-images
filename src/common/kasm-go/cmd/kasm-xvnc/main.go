@@ -21,7 +21,9 @@
 //     subsumes the OOTB kasmvnc.yaml's effective config)
 //   - multi-display lock files (container-init starts clean per boot)
 //   - desktop log rotation (container-init's stdout takes the place
-//     of $desktopLog; -Log *:stdout:100 emits to our pipe)
+//     of $desktopLog; -Log *:stdout:30 emits to our pipe at INFO
+//     level, matching the OOTB vncserver perl wrapper -- level 100
+//     turns on per-frame DEBUG and floods the container journal)
 package main
 
 import (
@@ -282,7 +284,7 @@ func buildXvncArgs(env map[string]string, arch string, fileExists func(string) b
 		"-DLP_ClipAcceptMax", "0",
 		"-IgnoreClientSettingsKasm", "0",
 		"-PrintVideoArea", "0",
-		"-Log", "*:stdout:100",
+		"-Log", "*:stdout:30",
 		"-BlacklistTimeout", "10",
 		"-DisconnectClients", "0",
 		"-FrameRate", "60",
