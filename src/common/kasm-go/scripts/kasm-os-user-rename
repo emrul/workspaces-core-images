@@ -31,7 +31,7 @@ case "${DISTRO:-}" in
         deluser kasm-user 2>/dev/null || true
         delgroup kasm-user 2>/dev/null || true
         addgroup -g "$KASM_OS_GID" "$KASM_OS_GROUP"
-        adduser -D -h "$KASM_OS_HOME" -u "$KASM_OS_UID" -G "$KASM_OS_GROUP" -s /bin/sh "$KASM_OS_USER"
+        adduser -D -h "$KASM_OS_HOME" -u "$KASM_OS_UID" -G "$KASM_OS_GROUP" -s /bin/bash "$KASM_OS_USER"
         if [ "$old_home" != "$KASM_OS_HOME" ] && [ -d "$old_home" ]; then
             mkdir -p "$(dirname "$KASM_OS_HOME")"
             mv "$old_home" "$KASM_OS_HOME"
