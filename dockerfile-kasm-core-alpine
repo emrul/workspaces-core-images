@@ -8,10 +8,11 @@ ARG BASE_IMAGE="alpine:3.19"
 # https://github.com/emrul/container-init. Bump CONTAINER_INIT_VERSION
 # to update.
 FROM --platform=$BUILDPLATFORM alpine:3 AS containerinit_fetch
-ARG CONTAINER_INIT_VERSION=v1.0.0
+ARG CONTAINER_INIT_VERSION=v1.1.0
 ARG TARGETARCH
 ADD https://github.com/emrul/container-init/releases/download/${CONTAINER_INIT_VERSION}/container-init.linux-${TARGETARCH} /out/container-init
-RUN chmod 0755 /out/container-init
+ADD https://github.com/emrul/container-init/releases/download/${CONTAINER_INIT_VERSION}/systemd1-shim.linux-${TARGETARCH} /out/systemd1-shim
+RUN chmod 0755 /out/container-init /out/systemd1-shim
 
 #### kasm-go build stage ####
 # Compile the Kasm-specific Go binaries: kasm-upload-server (drop-in
@@ -168,11 +169,12 @@ RUN bash $STARTUPDIR/set_user_permission.sh $STARTUPDIR $HOME && \
 
 ### Install container-init (PID 1 supervisor) and kasm-go binaries
 COPY --from=containerinit_fetch /out/container-init /usr/local/bin/container-init
+COPY --from=containerinit_fetch /out/systemd1-shim  /usr/local/bin/systemd1-shim
 COPY --from=kasmgo_builder      /out/kasm-xvnc     /usr/local/bin/kasm-xvnc
 COPY ./src/common/kasm-go/units/   /etc/container-init/units/
 COPY ./src/common/kasm-go/scripts/ /usr/local/bin/
 COPY ./src/common/scripts/kasm-entrypoint /usr/local/bin/kasm-entrypoint
-RUN chmod 0755 /usr/local/bin/container-init /usr/local/bin/kasm-xvnc /usr/local/bin/kasm-entrypoint && \
+RUN chmod 0755 /usr/local/bin/container-init /usr/local/bin/systemd1-shim /usr/local/bin/kasm-xvnc /usr/local/bin/kasm-entrypoint && \
     find /usr/local/bin -maxdepth 1 -type f -name 'kasm-*' -exec chmod 0755 {} \; && \
     /usr/local/bin/container-init --units /etc/container-init/units --strict-units --validate
 

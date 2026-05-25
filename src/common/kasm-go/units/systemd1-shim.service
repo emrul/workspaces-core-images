@@ -1,0 +1,29 @@
+[Unit]
+Description=org.freedesktop.systemd1 D-Bus compatibility shim
+# kasm-setup spawns the per-user dbus-daemon and writes the bus
+# address to /tmp/kasm-dbus.env; we register on that bus, so wait
+# for it. Without the session bus there is nothing to attach to.
+After=kasm-setup.service
+Requires=kasm-setup.service
+# Only useful when the desktop stack is up. In non-VNC modes (e.g.
+# pure CLI workspaces) there is no session bus and no client that
+# would call systemd-run.
+ConditionEnvironment=KASM_VNC=1
+
+[Service]
+# Run as the OS user so EXTERNAL auth on the session bus accepts the
+# RequestName. A root process would be rejected at auth time by the
+# bus daemon's uid-match check.
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+# /tmp/kasm-dbus.env is produced by kasm-setup; the parser tolerates
+# the `KEY='value'` shape that dbus-launch --sh-syntax emits.
+EnvironmentFile=/tmp/kasm-dbus.env
+ExecStart=/usr/local/bin/systemd1-shim
+Restart=on-failure
+RestartSec=2s
+StartLimitBurst=5
+StartLimitIntervalSec=60s
+
+[Install]
+WantedBy=multi-user.target
