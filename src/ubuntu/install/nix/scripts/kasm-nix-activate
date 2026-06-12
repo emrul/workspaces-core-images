@@ -22,8 +22,8 @@
 
 set -eu
 
-KASM_PROFILE_DIR=/nix/var/nix/profiles/kasm
-META_JSON=/nix/var/nix/profiles/kasm/_meta.json
+KASM_PROFILE_DIR=/nix/var/nix/profiles
+META_JSON=/nix/var/nix/profiles/_meta.json
 SHIM_PREFIX=/usr/share/applications/kasm-nix-
 PROFILE_D=/etc/profile.d/kasm-nix.sh
 PROFILE_D_STATE=/etc/profile.d/kasm-nix-state.sh
@@ -241,8 +241,8 @@ trust_shims_as_user() {
 }
 
 # ───── main ────────────────────────────────────────────────────────────
-[ -d "${KASM_PROFILE_DIR}" ] || {
-  log "no /nix volume mounted (${KASM_PROFILE_DIR} absent); nothing to do"
+[ -f "${META_JSON}" ] || {
+  log "no /nix volume mounted (${META_JSON} absent); nothing to do"
   exit 0
 }
 

@@ -272,7 +272,7 @@ sourcing `~/.config/kasm-nix/profile.sh` in the current one.
 ### 2.4 Running without a `/nix` mount
 
 The image is functional with no volume — the activation unit's
-`ConditionPathExists=/nix/var/nix/profiles/kasm` no-ops, and you get
+`ConditionPathExists=/nix/var/nix/profiles/_meta.json` no-ops, and you get
 a `kasmweb/core-ubuntu-noble` experience with unused activation
 tooling sitting idle. Handy for `kasm-nix list` smoke checks before
 attaching a real store image.

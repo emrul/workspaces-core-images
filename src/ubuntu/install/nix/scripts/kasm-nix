@@ -24,8 +24,8 @@
 
 set -eu
 
-KASM_PROFILE_DIR=/nix/var/nix/profiles/kasm
-META_JSON=/nix/var/nix/profiles/kasm/_meta.json
+KASM_PROFILE_DIR=/nix/var/nix/profiles
+META_JSON=/nix/var/nix/profiles/_meta.json
 ACTIVE_FILE="${HOME}/.config/kasm-nix/active"
 USER_APPS="${HOME}/.local/share/applications"
 USER_SHIM_PREFIX="${USER_APPS}/kasm-nix-"
@@ -33,8 +33,8 @@ USER_PROFILE_SH="${HOME}/.config/kasm-nix/profile.sh"
 
 # ───── helpers ─────────────────────────────────────────────────────────
 need_volume() {
-  [ -d "${KASM_PROFILE_DIR}" ] || {
-    echo "kasm-nix: /nix volume not mounted (expected ${KASM_PROFILE_DIR})" >&2
+  [ -f "${META_JSON}" ] || {
+    echo "kasm-nix: /nix volume not mounted (expected ${META_JSON})" >&2
     exit 1
   }
 }
@@ -151,7 +151,11 @@ cmd_list() {
     [ -e "$p" ] || continue
     n="$(basename "$p")"
     case "$n" in
-      bootstrap|_base) continue ;;
+      # Internal: bootstrap (nix CLI), _base (shared closure).
+      # Bundled by nixos/nix base image: default, per-user.
+      # Metadata: _meta.json. Generation links: <name>-<N>-link.
+      bootstrap|_base|default|per-user|_meta.json) continue ;;
+      *-link) continue ;;
     esac
     bin_count=0
     [ -d "$p/bin" ] && bin_count="$(find "$p/bin" -maxdepth 1 -type f -executable 2>/dev/null | wc -l | tr -d ' ')"

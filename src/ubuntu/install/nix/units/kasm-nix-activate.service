@@ -3,7 +3,7 @@ Description=Activate Kasm Nix profiles from KASM_NIX_PROFILES
 After=kasm-setup.service
 Before=window-manager.service
 Requires=kasm-setup.service
-ConditionPathExists=/nix/var/nix/profiles/kasm
+ConditionPathExists=/nix/var/nix/profiles/_meta.json
 
 [Service]
 Type=oneshot

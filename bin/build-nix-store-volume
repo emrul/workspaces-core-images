@@ -176,17 +176,19 @@ set -eu
 STAGE_IN=/nix/.build
 CONFIG_IN=/config/profiles.toml
 OUTPUT_IN=/output
-KASM_PROFILE_DIR=/nix/var/nix/profiles/kasm
-KASM_GCROOT_DIR=/nix/var/nix/gcroots/kasm
+KASM_PROFILE_DIR=/nix/var/nix/profiles
+KASM_GCROOT_DIR=/nix/var/nix/gcroots
 
 # Wipe per-build staging from prior run; the live store stays.
 rm -rf "${STAGE_IN}"
 mkdir -p "${STAGE_IN}/closures" "${STAGE_IN}/layers"
 
-# Ensure kasm-owned profile + gcroot directories exist before any
-# `nix profile install --profile <kasm/...>` call. The image's /nix
-# only ships /nix/var/nix/profiles/{default,per-user/...} — kasm/ is
-# our addition.
+# Profiles + gcroots live directly under /nix/var/nix/{profiles,gcroots}/
+# (no namespace subdir). The seeded nixos/nix volume already ships
+# /nix/var/nix/profiles/{default,per-user/...} and the matching gcroots;
+# we add our own profile names alongside them. The selective meta-layer
+# copy below picks out only our additions so the bundled default profile
+# doesn't leak into the final image.
 mkdir -p "${KASM_PROFILE_DIR}" "${KASM_GCROOT_DIR}"
 
 # Many PoC packages have proprietary upstreams (claude-code, opencode,
@@ -233,12 +235,12 @@ if [ -n "${needs}" ]; then
   # shellcheck disable=SC2086
   nix --extra-experimental-features 'nix-command flakes' \
       profile install --impure \
-      --profile /nix/var/nix/profiles/kasm/.helpers \
+      --profile "${KASM_PROFILE_DIR}/.helpers" \
       ${needs}
 fi
 # Always source the helpers profile path (idempotent across runs).
-if [ -d /nix/var/nix/profiles/kasm/.helpers/bin ]; then
-  export PATH="/nix/var/nix/profiles/kasm/.helpers/bin:${PATH}"
+if [ -d "${KASM_PROFILE_DIR}/.helpers/bin" ]; then
+  export PATH="${KASM_PROFILE_DIR}/.helpers/bin:${PATH}"
 fi
 
 # ── 1. TOML → JSON via builtins.fromTOML ───────────────────────────────
@@ -285,8 +287,8 @@ echo "[inner] default ref:  ${DEFAULT_REF}" >&2
 echo "[inner] target arch:  ${TARGET_ARCH}" >&2
 echo "[inner] profiles:     $(tr '\n' ' ' < "${STAGE_IN}/selected.txt")" >&2
 
-# (kasm profile + gcroot dirs were ensured earlier, before the helpers
-# install runs — both need the kasm/ prefix to exist.)
+# (profile + gcroot dirs were ensured earlier, before the helpers
+# install runs.)
 
 nix_install() {
   prof_path="$1"; shift
@@ -382,7 +384,7 @@ echo "[inner] partitioning store across layers" >&2
 rm -rf "${STAGE_IN}/layers"
 mkdir -p "${STAGE_IN}/layers/base/store" \
          "${STAGE_IN}/layers/meta/var/nix/db" \
-         "${STAGE_IN}/layers/meta/var/nix/profiles/kasm"
+         "${STAGE_IN}/layers/meta/var/nix/profiles"
 
 link_path() {
   src="$1"; dst="$2"
@@ -413,11 +415,33 @@ while IFS= read -r p; do
 done < "${STAGE_IN}/selected.txt"
 
 # ── 9. meta layer ──────────────────────────────────────────────────────
+# Selective copy: pick only our profile entries (bootstrap + _base +
+# everything in selected.txt) plus their generation `-link` symlinks.
+# The seeded volume also holds the bundled `default` profile (and its
+# generations) and a `per-user/` dir from the nixos/nix base image; the
+# helpers profile is build-side only. None of those should ship.
 echo "[inner] assembling meta layer" >&2
 cp -a /nix/var/nix/db/db.sqlite \
       "${STAGE_IN}/layers/meta/var/nix/db/"
-cp -a "${KASM_PROFILE_DIR}/." \
-      "${STAGE_IN}/layers/meta/var/nix/profiles/kasm/"
+
+copy_meta_profile() {
+  name="$1"
+  src="${KASM_PROFILE_DIR}/${name}"
+  if [ -e "${src}" ] || [ -L "${src}" ]; then
+    cp -a "${src}" "${STAGE_IN}/layers/meta/var/nix/profiles/${name}"
+  fi
+  for link in "${KASM_PROFILE_DIR}/${name}-"*-link; do
+    [ -e "${link}" ] || [ -L "${link}" ] || continue
+    cp -a "${link}" "${STAGE_IN}/layers/meta/var/nix/profiles/$(basename "${link}")"
+  done
+}
+
+copy_meta_profile bootstrap
+copy_meta_profile _base
+while IFS= read -r p; do
+  [ -z "$p" ] && continue
+  copy_meta_profile "$p"
+done < "${STAGE_IN}/selected.txt"
 
 # _meta.json with the profile dep graph (read at runtime by kasm-nix-activate).
 jq '
@@ -433,7 +457,7 @@ jq '
   | from_entries
   | {profiles: .}
 ' "${STAGE_IN}/profiles.json" \
-  > "${STAGE_IN}/layers/meta/var/nix/profiles/kasm/_meta.json"
+  > "${STAGE_IN}/layers/meta/var/nix/profiles/_meta.json"
 
 # ── 10. emit Dockerfile ────────────────────────────────────────────────
 # Image content lands at /store and /var (root paths, NOT /nix/store).
@@ -498,12 +522,22 @@ buildah --storage-driver=vfs push \
 # closures from prior runs; unlink them so nix-collect-garbage can
 # reclaim the space. Then -d removes old profile generations too
 # (every ref bump on a profile leaves the previous closure around).
+#
+# gcroots/ shares the dir with bundled entries from the seeded volume
+# (e.g. the `profiles` indirect gcroot pointing at /nix/var/nix/profiles,
+# plus `auto/`). Only act on plain symlinks that resolve into our
+# profile dir and don't match a name we still want to keep.
 echo "[inner] pruning stale gcroots" >&2
 for gr in "${KASM_GCROOT_DIR}"/*; do
-  [ -e "$gr" ] || continue
+  [ -L "$gr" ] || continue
+  target="$(readlink "$gr")"
+  case "$target" in
+    "${KASM_PROFILE_DIR}"/*) ;;
+    *) continue ;;
+  esac
   name="$(basename "$gr")"
   case "$name" in
-    bootstrap|_base) continue ;;
+    bootstrap|_base|.helpers|default) continue ;;
   esac
   if ! grep -qxF "$name" "${STAGE_IN}/selected.txt"; then
     echo "  prune gcroot: $name (not in current config)" >&2

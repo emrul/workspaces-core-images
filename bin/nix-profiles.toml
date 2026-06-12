@@ -37,7 +37,7 @@ pkgs = [
 threshold_percent = 80
 
 # One section per profile. Profile names become directory names under
-# /nix/var/nix/profiles/kasm/ in the final volume.
+# /nix/var/nix/profiles/ in the final volume.
 
 [profiles.chromium]
 pkgs = ["nixpkgs#chromium"]

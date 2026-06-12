@@ -28,7 +28,7 @@ extension-point unit under `/etc/container-init.d/`.
    │  - spins up a nixos/nix builder        │      │                                  │
    │    container with $stage/nix mounted   │      │  + /etc/container-init.d/        │
    │  - nix profile install per profile     │      │      kasm-nix-activate.service   │
-   │    into $stage/var/nix/profiles/kasm/  │      │  + /usr/local/bin/               │
+   │    into $stage/var/nix/profiles/       │      │  + /usr/local/bin/               │
    │  - partitions store across layers      │      │      kasm-nix-activate           │
    │    (base + per-profile + meta)         │      │      kasm-nix          (CLI)     │
    │  - emits multi-layer OCI image         │      │                                  │
@@ -47,7 +47,7 @@ extension-point unit under `/etc/container-init.d/`.
 2. **NEW** `kasm-nix-activate.service` runs as `$KASM_OS_USER`,
    `After=kasm-setup.service`, `Before=window-manager.service`. Reads
    `KASM_NIX_PROFILES=chromium,onlyoffice` and:
-   - Validates each profile name exists at `/nix/var/nix/profiles/kasm/<name>`.
+   - Validates each profile name exists at `/nix/var/nix/profiles/<name>`.
    - Writes `/etc/profile.d/kasm-nix.sh` with PATH and XDG_DATA_DIRS prepends.
    - Symlinks each profile's `share/applications/*.desktop` to
      `/usr/share/applications/kasm-nix-<orig-name>.desktop` (`Exec=` rewritten
@@ -121,7 +121,7 @@ no special-cased paths.
           > /build/profiles.json
 
 4. for each profile, run nix profile install into a per-profile gcroot
-   under /nix/var/nix/profiles/kasm/<name>. The volume is the
+   under /nix/var/nix/profiles/<name>. The volume is the
    container's /build, but profiles install to /nix (the live store),
    which dedups across profiles automatically.
 
@@ -143,8 +143,10 @@ no special-cased paths.
 
 7. extract meta:
       /build/layers/meta/var/nix/db/db.sqlite     ← copy verbatim
-      /build/layers/meta/var/nix/profiles/kasm/   ← profile symlinks
-      /build/layers/meta/var/nix/profiles/kasm/_meta.json (dep graph)
+      /build/layers/meta/var/nix/profiles/<name>  ← profile symlinks (selectively
+                                                    copied: bootstrap + _base +
+                                                    every name in selected.txt)
+      /build/layers/meta/var/nix/profiles/_meta.json (dep graph)
 
 8. emit Dockerfile at /build/layers/Dockerfile:
       FROM scratch
@@ -214,7 +216,7 @@ Description=Activate Kasm Nix profiles from KASM_NIX_PROFILES
 After=kasm-setup.service
 Before=window-manager.service
 Requires=kasm-setup.service
-ConditionPathExists=/nix/var/nix/profiles/kasm
+ConditionPathExists=/nix/var/nix/profiles/_meta.json
 
 [Service]
 Type=oneshot
@@ -233,8 +235,10 @@ TimeoutStartSec=30s
   ad-hoc cases). container-init's supported subset only includes
   `ConditionPathExists` / `ConditionPathExistsGlob` /
   `ConditionEnvironment`, not the systemd `*IsDirectory` variants.
-  The script's own early-exit (`[ -d "${KASM_PROFILE_DIR}" ] || exit 0`)
-  is a belt-and-suspenders second check.
+  The script's own early-exit (`[ -f "${META_JSON}" ] || exit 0`)
+  is a belt-and-suspenders second check. Gating on `_meta.json` (rather
+  than `${KASM_PROFILE_DIR}` itself) avoids a false positive when the
+  base image happens to ship an empty `/nix/var/nix/profiles/` directory.
 
 ### `src/ubuntu/install/nix/scripts/kasm-nix-activate`
 
@@ -249,7 +253,7 @@ POSIX sh, single entrypoint, runs as root. Steps:
 2. **Resolve active list.** `$KASM_OS_HOME/.config/kasm-nix/active`
    wins if present; otherwise parse `KASM_NIX_PROFILES` (CSV). Filter
    names that don't resolve to a profile under
-   `/nix/var/nix/profiles/kasm/`; log a warning for each skip.
+   `/nix/var/nix/profiles/`; log a warning for each skip.
 3. **Write `/etc/profile.d/kasm-nix.sh`.** Exports `PATH` (each
    profile's `bin/` prepended) and `XDG_DATA_DIRS` (each profile's
    `share/` prepended). `KASM_NIX_ACTIVE` is exported as the CSV for
@@ -275,9 +279,11 @@ can activate/deactivate without `sudo`.
 
 POSIX sh, ~80 lines. Subcommands:
 
-- `kasm-nix list` — enumerates `/nix/var/nix/profiles/kasm/*` (excluding
-  `bootstrap`), prints name + size + package count (parsed from
-  `<prof>/share/...` enumeration). Reads-only against /nix.
+- `kasm-nix list` — enumerates `/nix/var/nix/profiles/*` (excluding
+  `bootstrap`, `_base`, the bundled `default`/`per-user/`, `_meta.json`,
+  and `<name>-<N>-link` generation symlinks), prints name + size +
+  package count (parsed from `<prof>/share/...` enumeration). Read-only
+  against /nix.
 - `kasm-nix activated` — prints currently activated profile names by
   reading `~/.config/kasm-nix/active`.
 - `kasm-nix activate <name>` — adds `<name>` to
@@ -331,7 +337,7 @@ pkgs = [
 threshold_percent = 80
 
 # One section per profile. Profile names become directory names under
-# /nix/var/nix/profiles/kasm/ in the final volume.
+# /nix/var/nix/profiles/ in the final volume.
 #
 # Profiles can override [nixpkgs].ref to decouple their cadence from
 # the base — see "Update cadence" below.
@@ -527,8 +533,8 @@ in `docs/core-nix-ubuntu/README.md` but not automated in the initial PR.
        kasm-nix-ubuntu:smoke
 
    podman exec kasm-nix-smoke ls /usr/share/applications/kasm-nix-*
-   podman exec kasm-nix-smoke /nix/var/nix/profiles/kasm/chromium/bin/chromium --version
-   podman exec kasm-nix-smoke /nix/var/nix/profiles/kasm/vscode/bin/code --version
+   podman exec kasm-nix-smoke /nix/var/nix/profiles/chromium/bin/chromium --version
+   podman exec kasm-nix-smoke /nix/var/nix/profiles/vscode/bin/code --version
    podman exec -u kasm-user kasm-nix-smoke kasm-nix list
    podman exec -u kasm-user kasm-nix-smoke kasm-nix activated
    ```

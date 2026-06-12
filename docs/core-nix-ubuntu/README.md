@@ -187,7 +187,7 @@ time — bumping Chromium re-emits ~600 MiB rather than the whole image.
 ## Building without a /nix volume
 
 The image is functional without the volume mounted. The activation
-unit has `ConditionPathIsDirectory=/nix/var/nix/profiles/kasm`, so it
+unit has `ConditionPathExists=/nix/var/nix/profiles/_meta.json`, so it
 no-ops cleanly. The result is equivalent to `kasmweb/core-ubuntu-noble`
 plus the unused activation tooling.
 
