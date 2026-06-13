@@ -1,4 +1,4 @@
-# Nix-store-as-OCI-volume + kasm-nix-ubuntu image
+# Nix-store-as-OCI-volume + nix-ubuntu image
 
 ## Context
 
@@ -8,7 +8,7 @@ core image. A core image with all of these would balloon past 5 GiB and
 force a full re-pull on every app update. The alternative: build the apps
 once into a content-addressed Nix store, publish that store as a
 multi-layer OCI image (one layer per profile + base + meta), and mount it
-read-only into a new `kasm-nix-ubuntu` image at runtime. Updating any
+read-only into a new `nix-ubuntu` image at runtime. Updating any
 single app then means re-emitting one layer — registries and clients pull
 only the delta.
 
@@ -22,15 +22,15 @@ extension-point unit under `/etc/container-init.d/`.
 ```
                 build-time (operator)                          runtime (per session)
    ┌────────────────────────────────────────┐      ┌──────────────────────────────────┐
-   │  bin/build-nix-store-volume            │      │ kasmweb/kasm-nix-ubuntu:<tag>    │
+   │  bin/build-nix-store-volume            │      │ kasmweb/nix-ubuntu:<tag>    │
    │                                        │      │   (FROM kasmweb/core-ubuntu-     │
    │  - reads bin/nix-profiles.toml         │      │      noble:<core-tag>)           │
    │  - spins up a nixos/nix builder        │      │                                  │
    │    container with $stage/nix mounted   │      │  + /etc/container-init.d/        │
-   │  - nix profile install per profile     │      │      kasm-nix-activate.service   │
+   │  - nix profile install per profile     │      │      nix-activate.service   │
    │    into $stage/var/nix/profiles/       │      │  + /usr/local/bin/               │
-   │  - partitions store across layers      │      │      kasm-nix-activate           │
-   │    (base + per-profile + meta)         │      │      kasm-nix          (CLI)     │
+   │  - partitions store across layers      │      │      nix-activate           │
+   │    (base + per-profile + meta)         │      │      nix-app          (CLI)     │
    │  - emits multi-layer OCI image         │      │                                  │
    │      kasmweb/nix-store-<arch>:<tag>    │      │  no Nix install in image —       │
    └────────────────────────────────────────┘      │  PATH/desktop integration only   │
@@ -44,13 +44,13 @@ extension-point unit under `/etc/container-init.d/`.
 ### Runtime flow inside the container
 
 1. `kasm-setup.service` runs (existing) — identity, dbus, cert, password.
-2. **NEW** `kasm-nix-activate.service` runs as `$KASM_OS_USER`,
+2. **NEW** `nix-activate.service` runs as `$KASM_OS_USER`,
    `After=kasm-setup.service`, `Before=window-manager.service`. Reads
-   `KASM_NIX_PROFILES=chromium,onlyoffice` and:
+   `NIX_APP_PROFILES=chromium,onlyoffice` and:
    - Validates each profile name exists at `/nix/var/nix/profiles/<name>`.
-   - Writes `/etc/profile.d/kasm-nix.sh` with PATH and XDG_DATA_DIRS prepends.
+   - Writes `/etc/profile.d/nix-app.sh` with PATH and XDG_DATA_DIRS prepends.
    - Symlinks each profile's `share/applications/*.desktop` to
-     `/usr/share/applications/kasm-nix-<orig-name>.desktop` (`Exec=` rewritten
+     `/usr/share/applications/nix-<orig-name>.desktop` (`Exec=` rewritten
      to the absolute profile-bin path).
    - Symlinks `share/icons/`.
    - Sources `/tmp/kasm-dbus.env` and runs
@@ -71,12 +71,12 @@ extension-point unit under `/etc/container-init.d/`.
 - `--profile <name>` CLI args (additive override; if any are present,
   only those profiles are built).
 - `--tag <repo:tag>` for the output OCI image (default
-  `localhost/kasm-nix-store-<arch>:dev`).
+  `localhost/nix-store-<arch>:dev`).
 - `--push <registry>` optional, uses `podman push` if present else
   `docker push`.
 - `--prune-stage` deletes the cached named volume after a successful
   build (forces clean rebuild next run).
-- `--keep-output` retains the small `~/.cache/kasm-nix-build-output/`
+- `--keep-output` retains the small `~/.cache/nix-build-output/`
   directory (just the context tar + inner script) for forensics.
 - `--arch <amd64|arm64>` default = host arch; cross-arch via qemu-user.
 
@@ -89,7 +89,7 @@ partitioning runs inside the `nixos/nix` container.
 ### Staging
 
 The Nix store stages into a persistent named podman volume,
-`kasm-nix-build-stage-<arch>`, that lives in the container engine's
+`nix-build-stage-<arch>`, that lives in the container engine's
 filesystem (ext4 on Linux and macOS+lima alike — case-sensitive).
 The host filesystem only handles one build artifact: a context tar
 produced by the inner container and fed back to `podman build` via
@@ -102,7 +102,7 @@ no special-cased paths.
 
 ```
 0. host: parse args; detect podman/docker; ensure named volume exists;
-   create ~/.cache/kasm-nix-build-output/ for the context tar.
+   create ~/.cache/nix-build-output/ for the context tar.
 
 1. host: $CONTAINER_CLI run \
         --volume $STAGE_VOL:/build:rw \                # named volume
@@ -172,10 +172,10 @@ no special-cased paths.
 
 ### Output
 
-An OCI image tagged `localhost/kasm-nix-store-<arch>:<tag>` (or the
+An OCI image tagged `localhost/nix-store-<arch>:<tag>` (or the
 explicit `--tag` value), `N+2` layers, ready for `--mount type=image,…`.
 
-## Component 2 — `dockerfile-kasm-nix-ubuntu`
+## Component 2 — `dockerfile-nix-ubuntu`
 
 Top-level Dockerfile, sibling of `dockerfile-kasm-core*`. Adds nothing
 to `/nix`; only adds the activation unit + scripts.
@@ -189,12 +189,12 @@ USER 0
 
 # Per-image extension: activation unit + scripts.
 RUN mkdir -p /etc/container-init.d
-COPY src/ubuntu/install/nix/units/kasm-nix-activate.service \
+COPY src/ubuntu/install/nix/units/nix-activate.service \
      /etc/container-init.d/
-COPY src/ubuntu/install/nix/scripts/kasm-nix-activate \
-     src/ubuntu/install/nix/scripts/kasm-nix \
+COPY src/ubuntu/install/nix/scripts/nix-activate \
+     src/ubuntu/install/nix/scripts/nix-app \
      /usr/local/bin/
-RUN chmod 0755 /usr/local/bin/kasm-nix-activate /usr/local/bin/kasm-nix && \
+RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app && \
     /usr/local/bin/container-init --units /etc/container-init/units \
         --drop-in /etc/container-init.d \
         --strict-units --validate
@@ -208,11 +208,11 @@ image; production builds override to a pinned core tag.
 
 ## Component 3 — boot-time activation
 
-### `src/ubuntu/install/nix/units/kasm-nix-activate.service`
+### `src/ubuntu/install/nix/units/nix-activate.service`
 
 ```ini
 [Unit]
-Description=Activate Kasm Nix profiles from KASM_NIX_PROFILES
+Description=Activate Kasm Nix profiles from NIX_APP_PROFILES
 After=kasm-setup.service
 Before=window-manager.service
 Requires=kasm-setup.service
@@ -221,7 +221,7 @@ ConditionPathExists=/nix/var/nix/profiles/_meta.json
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/kasm-nix-activate
+ExecStart=/usr/local/bin/nix-activate
 TimeoutStartSec=30s
 ```
 
@@ -231,7 +231,7 @@ TimeoutStartSec=30s
   do the privilege drop internally via `su` (mirrors the pattern
   `kasm-setup.service` uses for `dbus-launch`).
 - `ConditionPathExists` makes the unit a no-op when no Nix volume is
-  mounted (so `kasm-nix-ubuntu` is still a usable thin wrapper for
+  mounted (so `nix-ubuntu` is still a usable thin wrapper for
   ad-hoc cases). container-init's supported subset only includes
   `ConditionPathExists` / `ConditionPathExistsGlob` /
   `ConditionEnvironment`, not the systemd `*IsDirectory` variants.
@@ -240,27 +240,27 @@ TimeoutStartSec=30s
   than `${KASM_PROFILE_DIR}` itself) avoids a false positive when the
   base image happens to ship an empty `/nix/var/nix/profiles/` directory.
 
-### `src/ubuntu/install/nix/scripts/kasm-nix-activate`
+### `src/ubuntu/install/nix/scripts/nix-activate`
 
 POSIX sh, single entrypoint, runs as root. Steps:
 
 1. **State bootstrap.** Create `/run/nix-state/{db,temproots,gcroots,profiles}`,
    copy the read-only `db.sqlite` into `/run/nix-state/db/`, write
-   `/etc/profile.d/kasm-nix-state.sh` exporting `NIX_STATE_DIR=/run/nix-state`
+   `/etc/profile.d/nix-app-state.sh` exporting `NIX_STATE_DIR=/run/nix-state`
    and prepending `${KASM_PROFILE_DIR}/bootstrap/bin` to `PATH`. This
    is required because the read-only `/nix/var/` cannot host
    `temproots/` lockfiles or SQLite WAL files.
-2. **Resolve active list.** `$KASM_OS_HOME/.config/kasm-nix/active`
-   wins if present; otherwise parse `KASM_NIX_PROFILES` (CSV). Filter
+2. **Resolve active list.** `$KASM_OS_HOME/.config/nix-app/active`
+   wins if present; otherwise parse `NIX_APP_PROFILES` (CSV). Filter
    names that don't resolve to a profile under
    `/nix/var/nix/profiles/`; log a warning for each skip.
-3. **Write `/etc/profile.d/kasm-nix.sh`.** Exports `PATH` (each
+3. **Write `/etc/profile.d/nix-app.sh`.** Exports `PATH` (each
    profile's `bin/` prepended) and `XDG_DATA_DIRS` (each profile's
-   `share/` prepended). `KASM_NIX_ACTIVE` is exported as the CSV for
+   `share/` prepended). `NIX_APP_ACTIVE` is exported as the CSV for
    downstream inspection.
 4. **Generate system-wide `.desktop` shims.** Copy each
    `$prof/share/applications/*.desktop` into
-   `/usr/share/applications/kasm-nix-<basename>` with `Exec=` and
+   `/usr/share/applications/nix-<basename>` with `Exec=` and
    `TryExec=` rewritten to absolute paths.
 5. **Trust the shims as the user.** `su -s /bin/sh "$KASM_OS_USER"`
    sources `/tmp/kasm-dbus.env` (written earlier by
@@ -270,38 +270,38 @@ POSIX sh, single entrypoint, runs as root. Steps:
    `gio` fails, log a warning and continue — non-fatal.
 
 The script is idempotent. Re-running it (manually after editing
-`~/.config/kasm-nix/active`, for example) gives a consistent result.
-The user-facing `kasm-nix` CLI does NOT re-invoke this; the CLI
+`~/.config/nix-app/active`, for example) gives a consistent result.
+The user-facing `nix-app` CLI does NOT re-invoke this; the CLI
 manages a per-user view at `~/.local/share/applications/` so users
 can activate/deactivate without `sudo`.
 
-## Component 4 — `kasm-nix` CLI helper
+## Component 4 — `nix-app` CLI helper
 
 POSIX sh, ~80 lines. Subcommands:
 
-- `kasm-nix list` — enumerates `/nix/var/nix/profiles/*` (excluding
+- `nix-app list` — enumerates `/nix/var/nix/profiles/*` (excluding
   `bootstrap`, `_base`, the bundled `default`/`per-user/`, `_meta.json`,
   and `<name>-<N>-link` generation symlinks), prints name + size +
   package count (parsed from `<prof>/share/...` enumeration). Read-only
   against /nix.
-- `kasm-nix activated` — prints currently activated profile names by
-  reading `~/.config/kasm-nix/active`.
-- `kasm-nix activate <name>` — adds `<name>` to
-  `~/.config/kasm-nix/active`, regenerates per-user shims at
-  `~/.local/share/applications/kasm-nix-*.desktop`, and writes
-  `~/.config/kasm-nix/profile.sh` so the user can `source` it to pick
+- `nix-app activated` — prints currently activated profile names by
+  reading `~/.config/nix-app/active`.
+- `nix-app activate <name>` — adds `<name>` to
+  `~/.config/nix-app/active`, regenerates per-user shims at
+  `~/.local/share/applications/nix-*.desktop`, and writes
+  `~/.config/nix-app/profile.sh` so the user can `source` it to pick
   up PATH changes in the current shell. XFCE picks up the new shims
   from the per-user applications dir without needing root.
-- `kasm-nix deactivate <name>` — reverse: removes `<name>` from
-  `~/.config/kasm-nix/active`, removes matching per-user shims,
+- `nix-app deactivate <name>` — reverse: removes `<name>` from
+  `~/.config/nix-app/active`, removes matching per-user shims,
   regenerates `profile.sh`. The system-wide
-  `/usr/share/applications/kasm-nix-*` shims (set at boot) stay until
+  `/usr/share/applications/nix-*` shims (set at boot) stay until
   the next container restart — a minor wart documented in the readme.
-- `kasm-nix info <name>` — `nix-store -qR` against the profile path,
+- `nix-app info <name>` — `nix-store -qR` against the profile path,
   total closure size (via `du -sh`).
 
 The CLI requires no root and no `sudo`. PATH for existing shells is
-not updated automatically; users source `~/.config/kasm-nix/profile.sh`
+not updated automatically; users source `~/.config/nix-app/profile.sh`
 when they want a CLI-activated profile to be on `PATH` in the current
 shell. Next session inherits the boot-time set as before.
 
@@ -383,13 +383,13 @@ small `_meta.json` into the meta layer recording the dep graph:
 }
 ```
 
-The activation script (and the `kasm-nix` CLI for live activations)
+The activation script (and the `nix-app` CLI for live activations)
 reads this and expands the user-requested set transitively via a
 fixed-point loop (cycle-safe: the set is monotonically growing and
 bounded). Activating `claude-code` therefore pulls `node` along.
 
 Semantics mirror systemd's `Requires=`: deps are auto-added regardless
-of whether the user listed them. `kasm-nix deactivate node` while
+of whether the user listed them. `nix-app deactivate node` while
 `claude-code` is active is a soft no-op — the CLI removes `node` from
 the requested set but `expand_deps` puts it back, and the CLI prints a
 clear "still active because claude-code requires it" message.
@@ -475,9 +475,9 @@ Add a row to `ci-scripts/template-vars.yaml` under `multiImages`:
   base: kasmweb/core-ubuntu-noble:develop
   bg: bg_noble.png
   distro: ubuntu
-  dockerfile: dockerfile-kasm-nix-ubuntu
+  dockerfile: dockerfile-nix-ubuntu
   changeFiles:
-    - dockerfile-kasm-nix-ubuntu
+    - dockerfile-nix-ubuntu
     - src/ubuntu/install/nix/**
     - bin/build-nix-store-volume
     - bin/nix-profiles.toml
@@ -494,14 +494,14 @@ in `docs/core-nix-ubuntu/README.md` but not automated in the initial PR.
 1. **Build the store image (host-side):**
    ```
    ./bin/build-nix-store-volume --arch amd64 \
-       --tag localhost/kasm-nix-store-amd64:smoke \
+       --tag localhost/nix-store-amd64:smoke \
        --keep-staging
    ```
    Expected: ~4–5 GiB image, `N+2` layers — 1 base + 5 profile layers
    (chromium, audacity, onlyoffice, slack, vscode) + 1 meta = 7 layers.
    Verify with:
    ```
-   podman image inspect localhost/kasm-nix-store-amd64:smoke \
+   podman image inspect localhost/nix-store-amd64:smoke \
        | jq '.[].RootFS.Layers | length'
    ```
 
@@ -516,9 +516,9 @@ in `docs/core-nix-ubuntu/README.md` but not automated in the initial PR.
 
 4. **Build the image:**
    ```
-   podman build -f dockerfile-kasm-nix-ubuntu \
+   podman build -f dockerfile-nix-ubuntu \
        --build-arg BASE_IMAGE=kasmweb/core-ubuntu-noble:develop \
-       -t kasm-nix-ubuntu:smoke .
+       -t nix-ubuntu:smoke .
    ```
    Expected: passes the `container-init --strict-units --validate` gate.
    Image is essentially `core-ubuntu-noble` + ~10 KiB of activation
@@ -526,20 +526,20 @@ in `docs/core-nix-ubuntu/README.md` but not automated in the initial PR.
 
 5. **Run with the store mounted, three profiles activated:**
    ```
-   podman run --rm -d --name kasm-nix-smoke \
-       --mount type=image,source=localhost/kasm-nix-store-amd64:smoke,destination=/nix,readonly=true \
-       -e KASM_NIX_PROFILES=chromium,onlyoffice,vscode \
+   podman run --rm -d --name nix-smoke \
+       --mount type=image,source=localhost/nix-store-amd64:smoke,destination=/nix,readonly=true \
+       -e NIX_APP_PROFILES=chromium,onlyoffice,vscode \
        -e VNC_PW=password -p 6901:6901 \
-       kasm-nix-ubuntu:smoke
+       nix-ubuntu:smoke
 
-   podman exec kasm-nix-smoke ls /usr/share/applications/kasm-nix-*
-   podman exec kasm-nix-smoke /nix/var/nix/profiles/chromium/bin/chromium --version
-   podman exec kasm-nix-smoke /nix/var/nix/profiles/vscode/bin/code --version
-   podman exec -u kasm-user kasm-nix-smoke kasm-nix list
-   podman exec -u kasm-user kasm-nix-smoke kasm-nix activated
+   podman exec nix-smoke ls /usr/share/applications/nix-*
+   podman exec nix-smoke /nix/var/nix/profiles/chromium/bin/chromium --version
+   podman exec nix-smoke /nix/var/nix/profiles/vscode/bin/code --version
+   podman exec -u kasm-user nix-smoke nix-app list
+   podman exec -u kasm-user nix-smoke nix-app activated
    ```
    Expected: chromium, onlyoffice, and vscode `.desktop` shims present;
-   both binaries report their version; `kasm-nix activated` prints the
+   both binaries report their version; `nix-app activated` prints the
    three names.
 
 6. **XFCE trust check.** Browse to `https://localhost:6901`, open the
@@ -548,17 +548,17 @@ in `docs/core-nix-ubuntu/README.md` but not automated in the initial PR.
 
 7. **Deactivation:**
    ```
-   podman exec -u kasm-user kasm-nix-smoke kasm-nix deactivate onlyoffice
-   podman exec kasm-nix-smoke sh -c 'ls /usr/share/applications/kasm-nix-* | grep -c onlyoffice'
+   podman exec -u kasm-user nix-smoke nix-app deactivate onlyoffice
+   podman exec nix-smoke sh -c 'ls /usr/share/applications/nix-* | grep -c onlyoffice'
    ```
    Expected: 0 matching shims; XFCE panel re-scan
    (`xfce4-panel --restart` from inside the session) removes the launcher.
 
-8. **No-volume-mounted regression.** Running `kasm-nix-ubuntu:smoke`
+8. **No-volume-mounted regression.** Running `nix-ubuntu:smoke`
    *without* the `/nix` mount should be functionally identical to
    `core-ubuntu-noble` (the `ConditionPathIsDirectory` on the unit
    makes it skip cleanly). Verify with
-   `podman run --rm kasm-nix-ubuntu:smoke /usr/local/bin/container-init --validate`
+   `podman run --rm nix-ubuntu:smoke /usr/local/bin/container-init --validate`
    and a smoke desktop boot.
 
 ## Known limitations / future work

@@ -1,9 +1,9 @@
-# kasm-nix-ubuntu: ubuntu core + Nix activation hooks.
+# nix-ubuntu: ubuntu core + Nix activation hooks.
 #
 # This image does NOT install Nix. It expects an OCI image built by
 # bin/build-nix-store-volume to be mounted read-only at /nix at run
-# time. Boot-time activation reads KASM_NIX_PROFILES (CSV); per-user
-# overrides live at $HOME/.config/kasm-nix/active.
+# time. Boot-time activation reads NIX_APP_PROFILES (CSV); per-user
+# overrides live at $HOME/.config/nix-app/active.
 #
 # IMPORTANT: BASE_IMAGE must be a core image built from THIS fork's
 # dockerfile-kasm-core — not the upstream kasmweb/core-ubuntu-noble.
@@ -22,14 +22,14 @@ USER 0
 # Drop-in unit + scripts. The supervisor scans /etc/container-init.d/
 # for additive units; ours is gated by ConditionPathIsDirectory so the
 # image is still functional without the /nix volume mounted.
-COPY src/ubuntu/install/nix/units/kasm-nix-activate.service \
+COPY src/ubuntu/install/nix/units/nix-activate.service \
      /etc/container-init.d/
-COPY src/ubuntu/install/nix/scripts/kasm-nix-activate \
-     src/ubuntu/install/nix/scripts/kasm-nix \
-     src/ubuntu/install/nix/scripts/kasm-nix-launch \
+COPY src/ubuntu/install/nix/scripts/nix-activate \
+     src/ubuntu/install/nix/scripts/nix-app \
+     src/ubuntu/install/nix/scripts/nix-launch \
      /usr/local/bin/
 
-RUN chmod 0755 /usr/local/bin/kasm-nix-activate /usr/local/bin/kasm-nix /usr/local/bin/kasm-nix-launch && \
+RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app /usr/local/bin/nix-launch && \
     /usr/local/bin/container-init \
         --units /etc/container-init/units \
         --drop-in /etc/container-init.d \
@@ -37,12 +37,12 @@ RUN chmod 0755 /usr/local/bin/kasm-nix-activate /usr/local/bin/kasm-nix /usr/loc
 
 # Ubuntu's /etc/bash.bashrc (system-wide bashrc) is sourced by every
 # interactive shell — including the non-login bash that XFCE-Terminal
-# spawns. Source our generated /etc/profile.d/kasm-nix.sh from there
+# spawns. Source our generated /etc/profile.d/nix-app.sh from there
 # so PATH and XDG_DATA_DIRS are visible in every terminal, not just
 # login shells. The conditional `[ -f ]` makes this a no-op when no
 # /nix volume is mounted (the file simply doesn't exist).
 RUN { \
       echo ''; \
-      echo '# kasm-nix: ensure interactive shells see the activated profiles.'; \
-      echo '[ -f /etc/profile.d/kasm-nix.sh ] && . /etc/profile.d/kasm-nix.sh'; \
+      echo '# nix-app: ensure interactive shells see the activated profiles.'; \
+      echo '[ -f /etc/profile.d/nix-app.sh ] && . /etc/profile.d/nix-app.sh'; \
     } >> /etc/bash.bashrc

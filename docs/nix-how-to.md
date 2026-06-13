@@ -1,4 +1,4 @@
-# How to build, run, and extend kasm-nix-ubuntu
+# How to build, run, and extend nix-ubuntu
 
 A practical guide. For the design rationale (why two-tier nixpkgs
 pinning, multi-layer OCI image, etc.) see
@@ -10,8 +10,8 @@ The PoC has two images:
 
 | Image | Purpose | Built by |
 |---|---|---|
-| `kasm-nix-ubuntu` | Runtime container — ubuntu core + activation hooks | `dockerfile-kasm-nix-ubuntu` |
-| `kasm-nix-store-<arch>` | Read-only Nix store volume (the apps) | `bin/build-nix-store-volume` |
+| `nix-ubuntu` | Runtime container — ubuntu core + activation hooks | `dockerfile-nix-ubuntu` |
+| `nix-store-<arch>` | Read-only Nix store volume (the apps) | `bin/build-nix-store-volume` |
 
 The runtime image stays tiny (~50 MiB over `core-ubuntu-noble`). All
 the heavyweight apps live in the store image, mounted read-only at
@@ -23,7 +23,7 @@ the heavyweight apps live in the store image, mounted read-only at
 
 ### 1.1 Build the core image first (the container-init base)
 
-`kasm-nix-ubuntu` extends the core ubuntu image and drops a unit into
+`nix-ubuntu` extends the core ubuntu image and drops a unit into
 `/etc/container-init.d/` — a directory that only exists in core
 images built from **this fork**'s `dockerfile-kasm-core` (which uses
 the `container-init` PID 1 supervisor). The upstream
@@ -48,14 +48,14 @@ the existing `runs/lean-noble-build.sh` does the same thing in ~5
 minutes and tags as `localhost/kasm-noble-lean:latest`. Useful while
 iterating; not what you'd ship.
 
-### 1.2 Build the runtime image (kasm-nix-ubuntu)
+### 1.2 Build the runtime image (nix-ubuntu)
 
 ```bash
 # Same command works under podman or docker. Thin layer on top of the
 # core image, finishes in seconds.
-podman build -f dockerfile-kasm-nix-ubuntu \
+podman build -f dockerfile-nix-ubuntu \
     --build-arg BASE_IMAGE=localhost/kasm-core-ubuntu-noble:dev \
-    -t kasm-nix-ubuntu:v1 .
+    -t nix-ubuntu:v1 .
 ```
 
 For docker, substitute `docker` — the syntax is identical.
@@ -64,19 +64,19 @@ For docker, substitute `docker` — the syntax is identical.
 
 ```bash
 # Default tag interpolates the target arch automatically:
-#   localhost/kasm-nix-store-amd64:dev   on x86_64 hosts
-#   localhost/kasm-nix-store-arm64:dev   on aarch64 hosts (lima on macOS)
+#   localhost/nix-store-amd64:dev   on x86_64 hosts
+#   localhost/nix-store-arm64:dev   on aarch64 hosts (lima on macOS)
 # So you can usually just run the script without --tag during dev:
 ./bin/build-nix-store-volume
 
 # For a versioned tag, include the arch yourself so amd64 and arm64
 # builds don't collide in your local store:
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-./bin/build-nix-store-volume --tag localhost/kasm-nix-store-${ARCH}:v1
+./bin/build-nix-store-volume --tag localhost/nix-store-${ARCH}:v1
 ```
 
 What this does, end-to-end:
-1. Ensures a named podman volume `kasm-nix-build-stage-<arch>` exists
+1. Ensures a named podman volume `nix-build-stage-<arch>` exists
    (created on first run, cached between runs for Nix dedup speed-up).
 2. Spins up a `nixos/nix:2.28.4` container with:
    - the named volume mounted at `/build` (where Nix stages everything)
@@ -111,20 +111,20 @@ Useful flags:
 | `--arch amd64\|arm64` | Cross-arch via qemu-user (slow; prefer a native runner) |
 | `--push REGISTRY` | After build, push the image to `<registry>/<tag>` |
 | `--nix-image REF` | Override the `nixos/nix:<tag>` builder image |
-| `--prune-stage` | Delete the cached `kasm-nix-build-stage-<arch>` volume after a successful build. Forces a clean rebuild next run. |
-| `--keep-output` | Keep `~/.cache/kasm-nix-build-output/` after the build for forensics (the context tar etc.). Default behaviour deletes it. |
+| `--prune-stage` | Delete the cached `nix-build-stage-<arch>` volume after a successful build. Forces a clean rebuild next run. |
+| `--keep-output` | Keep `~/.cache/nix-build-output/` after the build for forensics (the context tar etc.). Default behaviour deletes it. |
 
 To wipe the cache without running a build:
 ```bash
-podman volume rm kasm-nix-build-stage-arm64   # or -amd64
+podman volume rm nix-build-stage-arm64   # or -amd64
 ```
 
 ### 1.4 Push to a registry (required for k8s, optional for local podman/docker)
 
 ```bash
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-podman push localhost/kasm-nix-ubuntu:v1            registry.example.com/kasm-nix-ubuntu:v1
-podman push localhost/kasm-nix-store-${ARCH}:v1     registry.example.com/kasm-nix-store-${ARCH}:v1
+podman push localhost/nix-ubuntu:v1            registry.example.com/nix-ubuntu:v1
+podman push localhost/nix-store-${ARCH}:v1     registry.example.com/nix-store-${ARCH}:v1
 ```
 
 The store image is per-arch (separate amd64 and arm64 tags) — either
@@ -143,17 +143,17 @@ older clusters, see [§5 troubleshooting](#5-troubleshooting) for the
 init-container extraction fallback.
 
 ```yaml
-# kasm-nix-demo.yaml
+# nix-demo.yaml
 apiVersion: v1
 kind: Pod
 metadata:
-  name: kasm-nix-demo
+  name: nix-demo
 spec:
   containers:
     - name: kasm
-      image: registry.example.com/kasm-nix-ubuntu:v1
+      image: registry.example.com/nix-ubuntu:v1
       env:
-        - name: KASM_NIX_PROFILES
+        - name: NIX_APP_PROFILES
           value: "claude-code,vscode"
         - name: VNC_PW
           value: "password"
@@ -168,11 +168,11 @@ spec:
       image:
         # Match the node's arch: -amd64 or -arm64 (or a multi-arch
         # manifest that points at both).
-        reference: registry.example.com/kasm-nix-store-amd64:v1
+        reference: registry.example.com/nix-store-amd64:v1
         pullPolicy: IfNotPresent
 ```
 
-`kubectl apply -f kasm-nix-demo.yaml` and connect to
+`kubectl apply -f nix-demo.yaml` and connect to
 `https://<node-ip>:6901`. Auth for private registries uses the pod's
 `imagePullSecrets` — the same secret used to pull container images is
 used for image-volume references too.
@@ -189,15 +189,15 @@ The runtime image expects two things:
 
 ```bash
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-podman run --rm -d --name kasm-nix \
-    --mount type=image,source=localhost/kasm-nix-store-${ARCH}:v1,destination=/nix \
+podman run --rm -d --name nix-app \
+    --mount type=image,source=localhost/nix-store-${ARCH}:v1,destination=/nix \
     # If using chrome/chromium be sure to copy seccomp profile from [chrome.json](../src/common/seccomp/chrome.json)
     # to a location on host (e.g. `/etc/containers/seccomp/chrome.json`)
     # --security-opt seccomp=/etc/containers/seccomp/chrome.json \
-    -e KASM_NIX_PROFILES=claude-code,vscode,angelfish,node,python,obsidian,chromium \
+    -e NIX_APP_PROFILES=claude-code,vscode,angelfish,node,python,obsidian,chromium \
     -e VNC_PW=password \
     -p 6901:6901 \
-    kasm-nix-ubuntu:v1
+    nix-ubuntu:v1
 ```
 
 Note: `type=image` mounts are read-only by default; no need for an
@@ -212,12 +212,12 @@ and on `PATH` in any terminal.
 
 ```bash
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-docker run --rm -d --name kasm-nix \
-    --mount type=image,source=localhost/kasm-nix-store-${ARCH}:v1,target=/nix,readonly \
-    -e KASM_NIX_PROFILES=claude-code,vscode,angelfish,node,python,obsidian \
+docker run --rm -d --name nix-app \
+    --mount type=image,source=localhost/nix-store-${ARCH}:v1,target=/nix,readonly \
+    -e NIX_APP_PROFILES=claude-code,vscode,angelfish,node,python,obsidian \
     -e VNC_PW=password \
     -p 6901:6901 \
-    kasm-nix-ubuntu:v1
+    nix-ubuntu:v1
 ```
 
 Note: docker uses bare `readonly` (no `=true`) where podman uses `rw=false`
@@ -234,7 +234,7 @@ Two ways to declare which profiles are active at session start:
 **Env var** (the simple path — set per-session by the orchestrator):
 
 ```bash
--e KASM_NIX_PROFILES=claude-code,vscode
+-e NIX_APP_PROFILES=claude-code,vscode
 ```
 
 **Per-user config file** (the persistent path — survives container
@@ -242,24 +242,24 @@ restarts when Kasm's profile sync preserves the user's home):
 
 ```bash
 # Inside the running container:
-mkdir -p ~/.config/kasm-nix
-printf 'claude-code\nvscode\n' > ~/.config/kasm-nix/active
+mkdir -p ~/.config/nix-app
+printf 'claude-code\nvscode\n' > ~/.config/nix-app/active
 # Re-apply (or restart the container):
-sudo /usr/local/bin/kasm-nix-activate   # if running as kasm-user with sudo
+sudo /usr/local/bin/nix-activate   # if running as kasm-user with sudo
 ```
 
-The config file wins over `KASM_NIX_PROFILES` when present. The
-user-facing `kasm-nix` CLI writes this file:
+The config file wins over `NIX_APP_PROFILES` when present. The
+user-facing `nix-app` CLI writes this file:
 
 ```bash
-$ kasm-nix activate claude-code
-kasm-nix: activated claude-code.
+$ nix-app activate claude-code
+nix-app: activated claude-code.
   Also activated (transitive deps):
     - node
-  Per-user .desktop shims dropped at $HOME/.local/share/applications/kasm-nix-*.
-  PATH for the current shell: source $HOME/.config/kasm-nix/profile.sh
+  Per-user .desktop shims dropped at $HOME/.local/share/applications/nix-*.
+  PATH for the current shell: source $HOME/.config/nix-app/profile.sh
 
-$ kasm-nix activated
+$ nix-app activated
 claude-code
 node   (auto: required by another active profile)
 ```
@@ -267,14 +267,14 @@ node   (auto: required by another active profile)
 The CLI updates per-user `.desktop` files under
 `~/.local/share/applications/` so XFCE picks them up without a
 container restart. `PATH` updates require either a new shell or
-sourcing `~/.config/kasm-nix/profile.sh` in the current one.
+sourcing `~/.config/nix-app/profile.sh` in the current one.
 
 ### 2.4 Running without a `/nix` mount
 
 The image is functional with no volume — the activation unit's
 `ConditionPathExists=/nix/var/nix/profiles/_meta.json` no-ops, and you get
 a `kasmweb/core-ubuntu-noble` experience with unused activation
-tooling sitting idle. Handy for `kasm-nix list` smoke checks before
+tooling sitting idle. Handy for `nix-app list` smoke checks before
 attaching a real store image.
 
 ---
@@ -298,7 +298,7 @@ Then rebuild:
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 ./bin/build-nix-store-volume \
     --profile my-tool \
-    --tag localhost/kasm-nix-store-${ARCH}:my-tool-v1
+    --tag localhost/nix-store-${ARCH}:my-tool-v1
 ```
 
 The `--profile my-tool` flag tells the build script to *only* build that
@@ -352,9 +352,9 @@ requires = ["node", "python"]
 
 When a user activates `my-cli`, both `node` and `python` get activated
 too — they show up on `PATH`, in the launcher menu, and in the
-`kasm-nix activated` output marked `(auto: required by another active
+`nix-app activated` output marked `(auto: required by another active
 profile)`. Semantics mirror systemd's `Requires=`: deps are added
-regardless of whether the user listed them. `kasm-nix deactivate node`
+regardless of whether the user listed them. `nix-app deactivate node`
 while `my-cli` is active is a soft no-op (the CLI tells you which
 profile is still holding it).
 
@@ -380,7 +380,7 @@ empty/missing list means "no restriction" (the default).
 
 This is a build-time filter, not a runtime one — profiles skipped at
 build time aren't in the volume at all. Users on an arm64 host don't
-see onlyoffice in `kasm-nix list`.
+see onlyoffice in `nix-app list`.
 
 ### 3.4 Finding nixpkgs attribute names
 
@@ -418,7 +418,7 @@ layer — the base layer's digest stays stable across the bump. See
 ## 4. Available profiles in the demo
 
 Defined in `bin/nix-profiles.toml`. Activate any subset via
-`KASM_NIX_PROFILES=<csv>` or `kasm-nix activate <name>`.
+`NIX_APP_PROFILES=<csv>` or `nix-app activate <name>`.
 
 | Profile | Packages | Ref | Requires | Platforms | Approx delta |
 |---|---|---|---|---|---|
@@ -443,12 +443,12 @@ Two internal profiles also ship in the volume but aren't user-selectable:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `kasm-nix list` says `/nix volume not mounted` | Mount destination wrong or image missing | Confirm `--mount type=image,…,destination=/nix` (podman) or `target=/nix` (docker). |
+| `nix-app list` says `/nix volume not mounted` | Mount destination wrong or image missing | Confirm `--mount type=image,…,destination=/nix` (podman) or `target=/nix` (docker). |
 | Image volume mount not recognised | Runtime predates support | Podman ≥ 4.0, Docker ≥ 28.0, k8s ≥ 1.33 (beta). For older, use an init-container that `cp -a /nix/* /shared/` from the store image into an emptyDir, then bind-mount that. |
 | Activated app missing from XFCE menu | gio trust race with WM startup | Restart the container, or run `xfce4-panel --restart` from a terminal. The activation script writes trust metadata via `gio set`; if `gvfsd-metadata` isn't ready, XFCE shows nothing for "untrusted" launchers. |
 | `nix profile install` hangs in builder | macOS APFS case-insensitive store | If you're building on macOS host directly, use a case-sensitive APFS sparseimage for the staging dir (Nix ncurses paths collide). Or build inside a Linux VM (lima, etc.) — the script already runs Nix inside a Linux container, so this only bites if `--keep-staging` is on. |
 | Auto-promote warnings on every build | Same store paths appear across many profiles | Edit `[base]` in your config to include them. Trade-off: bigger base layer for thinner profile deltas. See design doc § "Update cadence" caveat for the unstable-vs-base ref interaction. |
-| `kasm-nix deactivate node` doesn't actually remove node | Another active profile `requires` it | Deactivate the parent first (e.g., `kasm-nix deactivate claude-code`). The CLI prints this when it happens. |
+| `nix-app deactivate node` doesn't actually remove node | Another active profile `requires` it | Deactivate the parent first (e.g., `nix-app deactivate claude-code`). The CLI prints this when it happens. |
 | Chromium update pulled the whole image | Bumped `[nixpkgs].ref` instead of `[profiles.chromium].ref` | Use the per-profile ref override; base ref only at nixpkgs stable releases. |
 
 ---

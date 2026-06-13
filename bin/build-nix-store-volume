@@ -44,7 +44,7 @@ build-nix-store-volume — build a Nix-store OCI image
   --profile NAME       Build only this profile (repeatable). When any
                        --profile is given, all others are skipped.
   --tag REPO:TAG       Output image tag
-                       (default: localhost/kasm-nix-store-<arch>:dev)
+                       (default: localhost/nix-store-<arch>:dev)
   --push REGISTRY      Push to REGISTRY/<image> after build
   --arch amd64|arm64   Target arch (default: host arch). Cross-arch
                        runs through qemu-user emulation — slow.
@@ -53,15 +53,15 @@ build-nix-store-volume — build a Nix-store OCI image
   --prune-stage        Delete the cached staging volume after a
                        successful build (forces a clean rebuild next
                        run; otherwise Nix dedup speeds things up).
-  --keep-output        Keep \$HOME/.cache/kasm-nix-build-output around
+  --keep-output        Keep \$HOME/.cache/nix-build-output around
                        after the build for forensics. By default the
                        context tar is removed once consumed.
   -h, --help           This text
 
 Host requirements: podman (preferred) OR docker. That's it.
-Staging volume: podman volume kasm-nix-build-stage-<arch> (cached).
+Staging volume: podman volume nix-build-stage-<arch> (cached).
 Tear down with:  ${0##*/} --prune-stage   or
-                 podman volume rm kasm-nix-build-stage-<arch>
+                 podman volume rm nix-build-stage-<arch>
 EOF
 }
 
@@ -98,15 +98,15 @@ if [[ -z "${ARCH}" ]]; then
     *) fail "unsupported host arch: $(uname -m); pass --arch explicitly" ;;
   esac
 fi
-[[ -z "${TAG}" ]] && TAG="localhost/kasm-nix-store-${ARCH}:dev"
+[[ -z "${TAG}" ]] && TAG="localhost/nix-store-${ARCH}:dev"
 PLATFORM="linux/${ARCH}"
-STAGE_VOLUME="kasm-nix-build-stage-${ARCH}"
+STAGE_VOLUME="nix-build-stage-${ARCH}"
 
 # ───── Config ──────────────────────────────────────────────────────────
 [[ -f "${CONFIG_FILE}" ]] || fail "config not found: ${CONFIG_FILE}"
 
 # ───── Output dir for the context tar (only the tar; no nix paths) ─────
-OUTPUT_DIR="${HOME}/.cache/kasm-nix-build-output"
+OUTPUT_DIR="${HOME}/.cache/nix-build-output"
 mkdir -p "${OUTPUT_DIR}"
 INNER_SCRIPT="${OUTPUT_DIR}/inner-build.sh"
 
@@ -151,10 +151,10 @@ log "ensuring ${STAGE_VOLUME} is seeded with ${NIX_IMAGE_DEFAULT}'s /nix"
     --entrypoint /bin/sh \
     "${NIX_IMAGE_DEFAULT}" \
     -c '
-      if [ ! -f /volume-data/.kasm-nix-init-done ]; then
+      if [ ! -f /volume-data/.nix-init-done ]; then
         echo "[seed] first-time init: copying /nix → volume" >&2
         cp -a /nix/. /volume-data/
-        touch /volume-data/.kasm-nix-init-done
+        touch /volume-data/.nix-init-done
         echo "[seed] done" >&2
       fi
     '
@@ -443,7 +443,7 @@ while IFS= read -r p; do
   copy_meta_profile "$p"
 done < "${STAGE_IN}/selected.txt"
 
-# _meta.json with the profile dep graph (read at runtime by kasm-nix-activate).
+# _meta.json with the profile dep graph (read at runtime by nix-activate).
 jq '
   .profiles
   | to_entries

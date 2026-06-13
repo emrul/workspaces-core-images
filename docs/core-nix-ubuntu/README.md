@@ -1,4 +1,4 @@
-# kasm-nix-ubuntu
+# nix-ubuntu
 
 A Kasm Workspaces core image (Ubuntu noble) with hooks to mount a
 pre-built Nix store at `/nix` and activate one or more app profiles
@@ -28,22 +28,22 @@ podman build -f dockerfile-kasm-core \
 # 2. Build the store image (one-time, takes a while). Host arch is
 #    detected automatically; pass --arch <amd64|arm64> to cross-build.
 #    The default --tag interpolates the arch, so two parallel hosts
-#    produce kasm-nix-store-amd64:dev and kasm-nix-store-arm64:dev
+#    produce nix-store-amd64:dev and nix-store-arm64:dev
 #    without colliding.
-./bin/build-nix-store-volume --tag localhost/kasm-nix-store:v1
+./bin/build-nix-store-volume --tag localhost/nix-store:v1
 
 # 3. Build the runtime image:
-podman build -f dockerfile-kasm-nix-ubuntu \
+podman build -f dockerfile-nix-ubuntu \
     --build-arg BASE_IMAGE=localhost/kasm-core-ubuntu-noble:dev \
-    -t kasm-nix-ubuntu:v1 .
+    -t nix-ubuntu:v1 .
 
 # 4. Run with two profiles activated (type=image mounts are RO by default):
-podman run --rm -d --name kasm-nix \
-    --mount type=image,source=localhost/kasm-nix-store:v1,destination=/nix \
-    -e KASM_NIX_PROFILES=chromium,onlyoffice \
+podman run --rm -d --name nix-app \
+    --mount type=image,source=localhost/nix-store:v1,destination=/nix \
+    -e NIX_APP_PROFILES=chromium,onlyoffice \
     -e VNC_PW=password \
     -p 6901:6901 \
-    kasm-nix-ubuntu:v1
+    nix-ubuntu:v1
 
 # Open https://localhost:6901 (user: kasm_user, password: password).
 ```
@@ -56,11 +56,11 @@ activated profile's `bin/`, so `chromium` works in any terminal.
 
 | Variable | Type | Description |
 |---|---|---|
-| `KASM_NIX_PROFILES` | CSV | Profiles to activate at boot. Default empty. |
+| `NIX_APP_PROFILES` | CSV | Profiles to activate at boot. Default empty. |
 
-A per-user override file at `$HOME/.config/kasm-nix/active`
-(one profile name per line) takes precedence over `KASM_NIX_PROFILES`.
-The user-facing `kasm-nix` CLI writes this file.
+A per-user override file at `$HOME/.config/nix-app/active`
+(one profile name per line) takes precedence over `NIX_APP_PROFILES`.
+The user-facing `nix-app` CLI writes this file.
 
 ### Auto-activated dependencies
 
@@ -74,10 +74,10 @@ list. The current set:
 | opencode | node |
 | codex | node |
 
-So `-e KASM_NIX_PROFILES=claude-code` is equivalent to
-`-e KASM_NIX_PROFILES=claude-code,node`. `kasm-nix activated` prints
+So `-e NIX_APP_PROFILES=claude-code` is equivalent to
+`-e NIX_APP_PROFILES=claude-code,node`. `nix-app activated` prints
 auto-pulled profiles with a `(auto: required by another active profile)`
-suffix; `kasm-nix deactivate node` while an AI CLI is active will leave
+suffix; `nix-app deactivate node` while an AI CLI is active will leave
 `node` in the effective set and tell you which profile is holding it.
 
 ## Volume mount syntax
@@ -89,31 +89,31 @@ suffix; `kasm-nix deactivate node` while an AI CLI is active will leave
 | **Kubernetes ≥ 1.33 (beta), GA in 1.36** | `volumes: [{ name: nix, image: { reference: <ref>, pullPolicy: IfNotPresent } }]` — auth uses the pod's `imagePullSecrets`. |
 | **Older runtimes** | Use an init container that pulls the image and `cp -a`s `/nix/*` into an `emptyDir` or `hostPath`; the workspace container then bind-mounts that path. Sample manifest in `examples/k8s-extract-initcontainer.yaml` (TBD). |
 
-## The `kasm-nix` CLI
+## The `nix-app` CLI
 
 Inside a running session:
 
 ```bash
-kasm-nix list                     # profiles in the mounted /nix volume
-kasm-nix activated                # currently-activated profile names
-kasm-nix activate chromium        # add chromium (user view)
-kasm-nix deactivate chromium      # remove chromium (user view)
-kasm-nix info chromium            # closure paths and size
+nix-app list                     # profiles in the mounted /nix volume
+nix-app activated                # currently-activated profile names
+nix-app activate chromium        # add chromium (user view)
+nix-app deactivate chromium      # remove chromium (user view)
+nix-app info chromium            # closure paths and size
 ```
 
 The CLI manages a per-user view at
-`$HOME/.local/share/applications/kasm-nix-*.desktop` — no `sudo`
+`$HOME/.local/share/applications/nix-*.desktop` — no `sudo`
 required. XFCE picks up the new shims without a restart. The
-system-wide shims at `/usr/share/applications/kasm-nix-*` (set at
-boot from `KASM_NIX_PROFILES`) stay until next container restart.
+system-wide shims at `/usr/share/applications/nix-*` (set at
+boot from `NIX_APP_PROFILES`) stay until next container restart.
 
 To pick up CLI activations on `PATH` in the current shell:
 
 ```bash
-source $HOME/.config/kasm-nix/profile.sh
+source $HOME/.config/nix-app/profile.sh
 ```
 
-New sessions inherit whatever `$HOME/.config/kasm-nix/active` contains
+New sessions inherit whatever `$HOME/.config/nix-app/active` contains
 (via the boot-time activation), so user changes survive container
 restarts when the home volume is persisted by Kasm's profile sync.
 
@@ -142,7 +142,7 @@ Focused rebuilds (no config edit needed):
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 ./bin/build-nix-store-volume \
     --profile chromium \
-    --tag kasmweb/kasm-nix-store-${ARCH}:chromium-2026-06-01
+    --tag kasmweb/nix-store-${ARCH}:chromium-2026-06-01
 ```
 
 See `design/nix-package-process.md` for the rationale (why we don't
@@ -195,8 +195,8 @@ plus the unused activation tooling.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Activated app not in XFCE menu | gio trust failed; XFCE shows nothing for "untrusted" launchers | Check `/tmp/kasm-dbus.env` exists; ensure unit ordering puts `kasm-nix-activate.service` `Before=window-manager.service`. |
-| `kasm-nix list` says `/nix volume not mounted` | Image volume not attached, or attached at the wrong destination | Confirm `--mount type=image,…,destination=/nix` not e.g. `/opt/nix`. |
-| `nix` CLI on PATH but commands hang | `/nix/var` is read-only; SQLite WAL needs writable space | `kasm-nix-activate` should bootstrap `/run/nix-state`; check `/etc/profile.d/kasm-nix-state.sh` exists. |
-| New profile in volume not visible via `kasm-nix list` | Stale container; mounted image hasn't been re-resolved | Restart the container. Image volume mounts don't update live. |
+| Activated app not in XFCE menu | gio trust failed; XFCE shows nothing for "untrusted" launchers | Check `/tmp/kasm-dbus.env` exists; ensure unit ordering puts `nix-activate.service` `Before=window-manager.service`. |
+| `nix-app list` says `/nix volume not mounted` | Image volume not attached, or attached at the wrong destination | Confirm `--mount type=image,…,destination=/nix` not e.g. `/opt/nix`. |
+| `nix` CLI on PATH but commands hang | `/nix/var` is read-only; SQLite WAL needs writable space | `nix-activate` should bootstrap `/run/nix-state`; check `/etc/profile.d/nix-app-state.sh` exists. |
+| New profile in volume not visible via `nix-app list` | Stale container; mounted image hasn't been re-resolved | Restart the container. Image volume mounts don't update live. |
 | Chromium update pulled the entire base layer | Forgot per-profile `ref` override; bumped `[nixpkgs].ref` instead | Set `ref = "github:NixOS/nixpkgs/nixos-unstable"` in `[profiles.chromium]`. |

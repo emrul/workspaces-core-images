@@ -57,7 +57,7 @@ pkgs = ["nixpkgs#obsidian"]
 
 # KDE Angelfish: lightweight QtWebEngine-based browser. Demonstrates
 # the kdePackages.<name> attribute path (Plasma 6 / KF6 namespace).
-# Requires the env wiring in /usr/local/bin/kasm-nix-launch (drops
+# Requires the env wiring in /usr/local/bin/nix-launch (drops
 # Kasm's baked LD_LIBRARY_PATH, adds Qt software-render env vars,
 # disables Chromium zygote/sandbox) — works in headless KasmVNC once
 # that wrapper is in place.
@@ -102,7 +102,7 @@ pkgs = ["nixpkgs#ptyxis"]
 
 # Language runtimes. Nix ships the runtime + global CLIs; per-project
 # libraries land in user home via npm/pip/uv (NPM_CONFIG_PREFIX and
-# PIPX_HOME are exported by kasm-nix-activate so installs go to
+# PIPX_HOME are exported by nix-activate so installs go to
 # ~/.local/share/{npm,pipx}).
 [profiles.node]
 pkgs = [

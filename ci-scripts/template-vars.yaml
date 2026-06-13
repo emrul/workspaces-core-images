@@ -352,7 +352,7 @@ multiImages:
       - src/alpine/xfce/.config/xfce4/**
       - src/alpine/xfce/.config/xfce4/xfconf/**
       - src/alpine/xfce/.config/xfce4/xfconf/xfce-perchannel-xml/**
-  # Downstream image: kasm-nix-ubuntu adds Nix-store activation hooks
+  # Downstream image: nix-ubuntu adds Nix-store activation hooks
   # on top of THIS fork's core-ubuntu-noble (which uses container-init,
   # not the upstream bash supervisor). The /nix volume is mounted at
   # runtime from a separately-built OCI image (see design/nix-package-
@@ -370,9 +370,9 @@ multiImages:
     base: kasmweb/core-ubuntu-noble:develop  # TODO: fork-built tag, not upstream
     bg: bg_noble.png
     distro: ubuntu
-    dockerfile: dockerfile-kasm-nix-ubuntu
+    dockerfile: dockerfile-nix-ubuntu
     changeFiles:
-      - dockerfile-kasm-nix-ubuntu
+      - dockerfile-nix-ubuntu
       - src/ubuntu/install/nix/**
       - bin/build-nix-store-volume
       - bin/nix-profiles.toml

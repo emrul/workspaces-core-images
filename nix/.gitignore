@@ -1,0 +1,5 @@
+# Per-environment build artifacts (regenerate locally — see docs/nix-how-to.md
+# and design/nix/docs/demo-environment-setup.md).
+result
+result-*
+base-manifest.json

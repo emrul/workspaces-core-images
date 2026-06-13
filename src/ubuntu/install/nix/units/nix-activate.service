@@ -1,5 +1,5 @@
 [Unit]
-Description=Activate Kasm Nix profiles from KASM_NIX_PROFILES
+Description=Activate Kasm Nix profiles from NIX_APP_PROFILES
 After=kasm-setup.service
 Before=window-manager.service
 Requires=kasm-setup.service
@@ -8,7 +8,7 @@ ConditionPathExists=/nix/var/nix/profiles/_meta.json
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/kasm-nix-activate
+ExecStart=/usr/local/bin/nix-activate
 TimeoutStartSec=30s
 
 [Install]

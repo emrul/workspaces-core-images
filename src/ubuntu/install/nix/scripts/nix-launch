@@ -1,5 +1,5 @@
 #!/bin/sh
-# kasm-nix-launch — exec wrapper for menu-launched Nix-built apps.
+# nix-launch — exec wrapper for menu-launched Nix-built apps.
 #
 # Sets the env Nix-built GUI apps need to run inside Kasm's KasmVNC
 # headless container. The WM-inherited env is wrong for them in
@@ -15,7 +15,7 @@
 #     /opt/libjpeg-turbo, /usr/lib/x86_64-linux-gnu, /usr/local/nvidia
 #     into the WM's env — designed for system apps, breaks Nix-built
 #     apps that find mismatched libva/libjpeg/etc. The activation
-#     script has already added /opt/kasm-nix-libs to ld.so.conf.d
+#     script has already added /opt/nix-libs to ld.so.conf.d
 #     and rebuilt the cache, so libGLX_mesa et al are reachable via
 #     the system cache (lower-priority than RUNPATH — nix's own libs
 #     still win for things in their closure).
@@ -63,5 +63,37 @@ export QT_XCB_GL_INTEGRATION=none
 # Other apps ignore these env vars.
 export QTWEBENGINE_DISABLE_SANDBOX=1
 export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-seccomp-sandbox --disable-gpu --disable-software-rasterizer --no-zygote --single-process --disable-dev-shm-usage"
+
+# Standalone Chromium/Chrome/Electron apps need the sandbox/GPU flags on the
+# command line — the QTWEBENGINE_* env above only reaches Qt-EMBEDDED chromium.
+# chrome-sandbox lives in the read-only Nix store and can't be setuid-root, so
+# --no-sandbox is mandatory here. Other apps don't match and run unchanged.
+# Flag set mirrors the proven kasmweb/chrome image (src/ubuntu/install/chrome):
+#   --password-store=basic  — without it Chrome blocks on the gnome-keyring /
+#                             dbus secret service (absent here) and page loads
+#                             hang. This is the key one for "opens but sites
+#                             never load".
+#   --disable-gpu + software GL — Xvnc exposes no GPU/EGL (until a GPU/VirtualGL
+#                             path is wired; see design/nix for the GPU follow-up).
+#
+# NOTE: NO --no-sandbox. The container is expected to run with the tuned seccomp
+# profile (src/common/seccomp/chrome.json) — see docs/seccomp-how-to.md — which
+# permits unprivileged user namespaces, so Chrome uses its own namespace sandbox.
+# That keeps the sandbox (more secure) instead of disabling it. If the container
+# is run without that profile (and without seccomp=unconfined), Chrome will fail
+# to sandbox; run it with the profile.
+prog="${1:-}"
+case "$(basename "${prog}" 2>/dev/null)" in
+  *chrome*|*chromium*|*brave*|electron|electron[0-9]*|code)
+    shift
+    exec "${prog}" \
+        --password-store=basic \
+        --disable-gpu \
+        --disable-dev-shm-usage \
+        --no-first-run \
+        --disable-search-engine-choice-screen \
+        "$@"
+    ;;
+esac
 
 exec "$@"
