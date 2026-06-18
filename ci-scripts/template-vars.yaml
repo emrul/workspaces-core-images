@@ -376,6 +376,22 @@ multiImages:
       - src/ubuntu/install/nix/**
       - bin/build-nix-store-volume
       - bin/nix-profiles.toml
+  # Downstream single-app image: nix-angelfish bakes the Nix-built KDE
+  # Angelfish browser into the image (no /nix volume mount needed) and
+  # boots straight into it (LAUNCH_URL/KASM_URL), with GPU acceleration
+  # via VirtualGL when the platform allocates a GPU. FROM nix-ubuntu, so
+  # the same base-tag follow-up as above applies; local builds override
+  # with --build-arg BASE_IMAGE=localhost/nix-ubuntu:dev.
+  - name1: nix
+    name2: angelfish
+    base: kasmweb/core-ubuntu-noble:develop  # TODO: fork-built nix-ubuntu tag
+    bg: bg_noble.png
+    distro: ubuntu
+    dockerfile: dockerfile-nix-angelfish
+    changeFiles:
+      - dockerfile-nix-angelfish
+      - src/ubuntu/install/nix/angelfish/**
+      - src/ubuntu/install/nix/scripts/nix-launch
 singleImages:
   - name1: cuda
     name2: jammy

@@ -93,12 +93,20 @@ fi
 # chown the resulting file. Avoids `su` entirely — the login-shell
 # form hangs when invoked from container-init's supervised child
 # (PAM-session setup races against pid1 reaping on Ubuntu/Noble).
-# Full-access record uses the OS username so the noVNC connect prompt
-# accepts the same name operators set via KASM_OS_USER. Read-only
-# record stays "kasm_viewer" — it's a role designator, not an OS user
-# (matches the bash chain's two-record split).
+# Full-access records. The KasmVNC web login name is "kasm_user" — a
+# fixed VNC-auth username distinct from the OS account (default
+# kasm-user). The Kasm platform AND the OOTB noVNC client both connect
+# as "kasm_user", and upstream kasmweb images register exactly
+# "kasm_user" + "kasm_viewer". Register "kasm_user" so platform-
+# orchestrated sessions authenticate (otherwise KasmVNC logs
+# "user kasm_user does not exist"). Also register a *custom* KASM_OS_USER
+# (operator rename) so a direct noVNC connect under that name still
+# works. Read-only record stays "kasm_viewer" — a role designator.
 if command -v kasmvncpasswd >/dev/null 2>&1 && [ -n "${VNC_PW:-}" ]; then
-    HOME="$KASM_OS_HOME" sh -c "printf '%s\n%s\n\n' '$VNC_PW' '$VNC_PW' | kasmvncpasswd -u '$KASM_OS_USER' -wo" >/dev/null 2>&1 || true
+    HOME="$KASM_OS_HOME" sh -c "printf '%s\n%s\n\n' '$VNC_PW' '$VNC_PW' | kasmvncpasswd -u kasm_user -wo" >/dev/null 2>&1 || true
+    if [ "$KASM_OS_USER" != kasm_user ] && [ "$KASM_OS_USER" != kasm-user ]; then
+        HOME="$KASM_OS_HOME" sh -c "printf '%s\n%s\n\n' '$VNC_PW' '$VNC_PW' | kasmvncpasswd -u '$KASM_OS_USER' -wo" >/dev/null 2>&1 || true
+    fi
     if [ -n "${VNC_VIEW_ONLY_PW:-}" ]; then
         HOME="$KASM_OS_HOME" sh -c "printf '%s\n%s\n\n' '$VNC_VIEW_ONLY_PW' '$VNC_VIEW_ONLY_PW' | kasmvncpasswd -u kasm_viewer -r" >/dev/null 2>&1 || true
     fi

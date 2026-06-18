@@ -1,0 +1,86 @@
+#!/bin/sh
+# angelfish-launch — GPU-aware launcher for the Nix-built KDE Angelfish browser.
+#
+# Mirrors the kasmweb/chrome image's /usr/bin/google-chrome wrapper: use
+# VirtualGL (vglrun -d $KASM_EGL_CARD) when the Kasm platform has allocated a
+# GPU to this session and the EGL/render device nodes are owned by us;
+# otherwise fall back to the shared software-rendering path in
+# /usr/local/bin/nix-launch.
+#
+# Angelfish embeds QtWebEngine (Chromium), so it needs the same
+# sandbox/zygote handling as Chrome inside a rootless KasmVNC container.
+# We resolve the binary by absolute profile path rather than PATH, because
+# container-init services don't source /etc/profile.d.
+set -u
+
+PROFILE=/nix/var/nix/profiles/angelfish
+BIN="${PROFILE}/bin/angelfish"
+
+# ── Mobile device mode ──────────────────────────────────────────────
+# Angelfish IS KDE's Plasma Mobile browser; on a desktop it defaults to
+# the desktop layout. QT_QUICK_CONTROLS_MOBILE=1 forces Kirigami's
+# mobile/touch UI (the phone-style navbar etc. — note the kcfg navBar*
+# defaults key off isMobile()). Toggle off with ANGELFISH_MOBILE=0.
+# NOTE: this changes the in-app UI, not the web User-Agent — Angelfish
+# exposes no UA setting, so sites still see QtWebEngine's default UA.
+if [ "${ANGELFISH_MOBILE:-1}" != 0 ]; then
+    export QT_QUICK_CONTROLS_MOBILE=1
+fi
+
+# ── Start maximised ─────────────────────────────────────────────────
+# Angelfish has no --start-maximized flag, so maximise via the window
+# manager once its window appears. Backgrounded (with `&`) so it
+# survives the `exec` below; the maximised STATE tracks KasmVNC dynamic
+# resolution changes, unlike a fixed window geometry. Matches the
+# window by WM_CLASS. Toggle off with ANGELFISH_MAXIMIZE=0.
+if [ "${ANGELFISH_MAXIMIZE:-1}" != 0 ] && command -v wmctrl >/dev/null 2>&1; then
+    (
+        i=0
+        while [ "$i" -lt 60 ]; do
+            win=$(wmctrl -l -x 2>/dev/null | awk 'tolower($3) ~ /angelfish/ {print $1; exit}')
+            if [ -n "$win" ]; then
+                wmctrl -i -r "$win" -b add,maximized_vert,maximized_horz 2>/dev/null
+                break
+            fi
+            i=$((i + 1))
+            sleep 0.5
+        done
+    ) &
+fi
+
+# GPU is usable only when VirtualGL is present and the Kasm platform handed
+# us EGL + render nodes that we actually own (same gate as Chrome and
+# kasm-window-manager).
+gpu_available() {
+    [ -x /opt/VirtualGL/bin/vglrun ] \
+        && [ -n "${KASM_EGL_CARD:-}" ] && [ -n "${KASM_RENDERD:-}" ] \
+        && [ -O "${KASM_RENDERD}" ] && [ -O "${KASM_EGL_CARD}" ]
+}
+
+if gpu_available; then
+    # Same env corrections nix-launch applies (dbus address, XDG_RUNTIME_DIR,
+    # drop Kasm's baked LD_LIBRARY_PATH) but WITHOUT the software-render flags,
+    # so QtWebEngine renders through the GPU via VirtualGL.
+    if [ -f /tmp/kasm-dbus.env ]; then
+        . /tmp/kasm-dbus.env 2>/dev/null
+        [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && export DBUS_SESSION_BUS_ADDRESS
+        [ -n "${DBUS_SESSION_BUS_PID:-}" ]     && export DBUS_SESSION_BUS_PID
+    fi
+    if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+        XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        [ -d "${XDG_RUNTIME_DIR}" ] || mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null
+        export XDG_RUNTIME_DIR
+    fi
+    unset LD_LIBRARY_PATH
+    export QTWEBENGINE_DISABLE_SANDBOX=1
+    # No --disable-gpu / --disable-software-rasterizer here — we want the GPU.
+    export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-seccomp-sandbox --no-zygote --single-process --disable-dev-shm-usage --ignore-gpu-blocklist"
+    echo "angelfish-launch: GPU acceleration via VirtualGL on ${KASM_EGL_CARD}" >&2
+    exec /opt/VirtualGL/bin/vglrun -d "${KASM_EGL_CARD}" "${BIN}" "$@"
+fi
+
+# No GPU: hand off to nix-launch, which sets the software-render Qt env and
+# the QtWebEngine sandbox/dev-shm flags. Angelfish doesn't match nix-launch's
+# chrome/chromium name cases, so it runs unwrapped under that software env.
+echo "angelfish-launch: no GPU allocated; software rendering via nix-launch" >&2
+exec /usr/local/bin/nix-launch "${BIN}" "$@"

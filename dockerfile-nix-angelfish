@@ -1,0 +1,83 @@
+# nix-angelfish: single-application KDE Angelfish browser image.
+#
+# Modeled on the kasmweb/chrome single-app image, but the browser is a
+# Nix-built package (kdePackages.angelfish) baked into the image's /nix
+# store rather than apt-installed. The image is self-contained: it does
+# NOT require the build-nix-store-volume OCI store to be mounted at run
+# time (unlike plain nix-ubuntu).
+#
+# Behaviour mirrors the browser images' Kasm contract:
+#   LAUNCH_URL / KASM_URL  — page opened on startup
+#   APP_ARGS               — extra args to the launcher
+#   DISABLE_CUSTOM_STARTUP — skip the auto-launch loop
+# GPU acceleration is automatic when the Kasm platform allocates a GPU
+# (KASM_EGL_CARD / KASM_RENDERD); otherwise it renders in software.
+# See docs/nix-how-to.md and src/ubuntu/install/nix/angelfish/.
+
+# ── Stage 1: build the angelfish profile into a Nix store ──────────────
+# Pinned to the same nixpkgs the rest of the Nix work uses (nixos-25.05).
+# Fetched as a codeload tarball (not the GitHub flake API) to avoid rate
+# limits. nix-env builds a profile gcroot at /nix/var/nix/profiles/angelfish.
+# Global build args — declared before the first FROM so they're usable in
+# both stages' FROM lines.
+ARG NIX_IMAGE="docker.io/nixos/nix:2.28.4"
+ARG NIXPKGS_REV="ac62194c3917d5f474c1a844b6fd6da2db95077d"
+ARG BASE_IMAGE="localhost/nix-ubuntu:dev"
+
+FROM $NIX_IMAGE AS nixbuild
+ARG NIXPKGS_REV
+RUN nix-env --profile /nix/var/nix/profiles/angelfish \
+        -i -A kdePackages.angelfish \
+        -f "https://github.com/NixOS/nixpkgs/archive/${NIXPKGS_REV}.tar.gz"
+# _meta.json is the activation gate (ConditionPathExists) and the requires
+# graph. Angelfish has no profile deps.
+RUN printf '%s' '{"profiles":{"angelfish":{"ref":null,"requires":[]}}}' \
+        > /nix/var/nix/profiles/_meta.json
+
+# ── Stage 2: nix-ubuntu + baked store + single-app wiring ──────────────
+FROM $BASE_IMAGE
+ARG DISTRO=ubuntu
+USER 0
+
+# Bake the angelfish closure + profile tree into the image's /nix store.
+# (nix-ubuntu ships no /nix; activation is a no-op until this exists.)
+COPY --from=nixbuild /nix /nix
+
+# Activate angelfish at boot: nix-activate reads this CSV and wires the
+# profile into PATH / XDG_DATA_DIRS / ld.so + desktop trust.
+ENV NIX_APP_PROFILES=angelfish
+
+# Carry the shared kasm-setup fix (register the "kasm_user" VNC web login,
+# not just the OS account) ahead of a full core-image rebuild, so Kasm-
+# orchestrated sessions authenticate. Remove this COPY once the base core /
+# nix-ubuntu images are rebuilt from the updated src/common/kasm-go.
+COPY src/common/kasm-go/scripts/kasm-setup /usr/local/bin/kasm-setup
+
+# GPU-aware launcher + single-app startup loop.
+COPY src/ubuntu/install/nix/angelfish/angelfish-launch /usr/local/bin/angelfish-launch
+COPY src/ubuntu/install/nix/angelfish/custom_startup.sh /dockerstartup/custom_startup.sh
+RUN chmod 0755 /usr/local/bin/kasm-setup /usr/local/bin/angelfish-launch /dockerstartup/custom_startup.sh
+
+# Optimize the desktop for a single application: swap in the
+# single-application XFCE profile and drop the panel (matches the
+# kasmweb/chrome image). The default profile is seeded into the session
+# HOME by kasm-setup.service at run time.
+RUN XFCONF=/home/kasm-default-profile/.config/xfce4/xfconf && \
+    cp "$XFCONF/single-application-xfce-perchannel-xml/"* \
+       "$XFCONF/xfce-perchannel-xml/" && \
+    chown -R 1000:0 "$XFCONF/xfce-perchannel-xml" && \
+    apt-get remove -y xfce4-panel && \
+    apt-get autoclean && rm -rf /var/lib/apt/lists/*
+
+# Same validation gate as dockerfile-nix-ubuntu: fail the build on any
+# unit parse warning.
+RUN /usr/local/bin/container-init \
+        --units /etc/container-init/units \
+        --drop-in /etc/container-init.d \
+        --strict-units --validate
+
+# NOTE: stay USER 0. Unlike the upstream bash-supervisor app images (which
+# end `USER 1000`), this fork runs container-init as PID 1, and it must
+# start as root so kasm-setup.service can `su` to the OS user and set the
+# VNC password. Ending as 1000 breaks startup with "su: Authentication
+# failure". Matches dockerfile-nix-ubuntu / dockerfile-kasm-core.
