@@ -15,9 +15,14 @@ echo "Install KasmVNC server"
 cd /tmp
 BUILD_ARCH=$(uname -m)
 UBUNTU_CODENAME=""
-COMMIT_ID="17265facc40ab50db5740cdf0d12c61173edafc9"
-BRANCH="release" # just use 'release' for a release branch
-KASMVNC_VER="1.5.0"
+# TEST PIN — touch-device-support feature build (for KasmVNC touch gestures /
+# responsive UI testing). Revert to release before committing:
+#   COMMIT_ID="17265facc40ab50db5740cdf0d12c61173edafc9"
+#   BRANCH="release"
+#   KASMVNC_VER="1.5.0"
+COMMIT_ID="a4b74a836b7745209e6d5506fa2723603ed8b930"
+BRANCH="feature_touch-device-support"
+KASMVNC_VER="1.4.1"
 COMMIT_ID_SHORT=$(echo "${COMMIT_ID}" | cut -c1-6)
 
 # Naming scheme is now different between an official release and feature branch
