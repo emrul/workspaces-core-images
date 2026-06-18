@@ -31,6 +31,22 @@ pkgs = [
     "nixpkgs#nss",
 ]
 
+# GPU support profile. Built into /nix/var/nix/profiles/_gpu and folded into
+# the base layer (like [base]); NOT an activatable app, so it's excluded from
+# _meta.json. /usr/local/bin/nix-gpu-run references its vglrun + libvulkan to
+# give Nix Chromium/QtWebEngine apps true GPU acceleration when the Kasm
+# platform allocates a GPU. nix-gpu-run degrades to software rendering if this
+# profile is absent, so omitting [gpu] simply disables GPU for the store image.
+#   - virtualgl:     glibc-matched VirtualGL faker (system /opt/VirtualGL can't
+#                    preload into a Nix binary).
+#   - vulkan-loader: carries VK_KHR_surface/xcb WSI that chrome's bundled loader
+#                    lacks, so ANGLE-Vulkan reaches the GPU instead of SwiftShader.
+[gpu]
+pkgs = [
+    "nixpkgs#virtualgl",
+    "nixpkgs#vulkan-loader",
+]
+
 # Build script warns when a non-base store path appears in >= N% of
 # profiles. Operator decides whether to promote it to [base].
 [promote]
@@ -117,3 +133,162 @@ pkgs = [
     "nixpkgs#uv",
     "nixpkgs#pipx",
 ]
+
+# ─────────────────────────────────────────────────────────────────────
+# Application catalog (Phase 1)
+#
+# Migration of the workspaces-images single-app / desktop catalog onto
+# Nix. See design/nix-app-catalog.md for the full classification table,
+# topology decision (shared store vs baked single-app), and phasing.
+#
+# All entries below are existing nixpkgs attributes — no Nix code. The
+# build script already exports NIXPKGS_ALLOW_UNFREE=1 /
+# NIXPKGS_ALLOW_INSECURE=1, so unfree apps (Chrome, Slack, Zoom, …) build
+# without extra config.
+#
+# Attribute names marked "verify" in the design doc should be confirmed
+# with `nix search nixpkgs <name>` against the pinned ref before relying
+# on a production build. A few apps are NOT here on purpose:
+#   - custom derivation needed (nix/pkgs/<app>): nessus, maltego, hunchly,
+#     cyberbro — tracked in the design doc, added once written.
+#   - dropped / keep-apt: atom (EOL), vmware-horizon, keeper, zoho_email,
+#     redroid (needs host kernel modules).
+# This is a *menu*: a store need not build every profile. Use
+# `build-nix-store-volume --profile <name>` to build subsets.
+# ─────────────────────────────────────────────────────────────────────
+
+# ── Browsers (fast cadence → nixos-unstable, like chromium above) ──────
+[profiles.firefox]
+pkgs = ["nixpkgs#firefox"]
+ref  = "github:NixOS/nixpkgs/nixos-unstable"
+
+[profiles.chrome]
+pkgs = ["nixpkgs#google-chrome"]
+ref  = "github:NixOS/nixpkgs/nixos-unstable"
+
+[profiles.brave]
+pkgs = ["nixpkgs#brave"]
+ref  = "github:NixOS/nixpkgs/nixos-unstable"
+
+[profiles.vivaldi]
+pkgs = ["nixpkgs#vivaldi"]
+ref  = "github:NixOS/nixpkgs/nixos-unstable"
+
+[profiles.edge]
+pkgs = ["nixpkgs#microsoft-edge"]
+ref  = "github:NixOS/nixpkgs/nixos-unstable"
+
+[profiles.torbrowser]
+pkgs = ["nixpkgs#tor-browser"]
+
+# ── Communication / collaboration ─────────────────────────────────────
+[profiles.slack]
+pkgs = ["nixpkgs#slack"]
+
+[profiles.discord]
+pkgs = ["nixpkgs#discord"]
+
+[profiles.signal]
+pkgs = ["nixpkgs#signal-desktop"]
+
+[profiles.telegram]
+pkgs = ["nixpkgs#telegram-desktop"]
+
+[profiles.teams]
+# Microsoft discontinued the native Linux Teams client; teams-for-linux
+# is the maintained community wrapper that nixpkgs ships.
+pkgs = ["nixpkgs#teams-for-linux"]
+
+[profiles.zoom]
+pkgs      = ["nixpkgs#zoom-us"]
+# nixpkgs ships an x86_64-linux build only.
+platforms = ["amd64"]
+
+[profiles.thunderbird]
+pkgs = ["nixpkgs#thunderbird"]
+
+# ── Office / productivity ─────────────────────────────────────────────
+[profiles.libreoffice]
+pkgs = ["nixpkgs#libreoffice"]
+
+[profiles.nextcloud]
+pkgs = ["nixpkgs#nextcloud-client"]
+
+# ── Creative / media ──────────────────────────────────────────────────
+[profiles.gimp]
+pkgs = ["nixpkgs#gimp"]
+
+[profiles.inkscape]
+pkgs = ["nixpkgs#inkscape"]
+
+[profiles.pinta]
+pkgs = ["nixpkgs#pinta"]
+
+[profiles.vlc]
+pkgs = ["nixpkgs#vlc"]
+
+[profiles.audacity]
+pkgs = ["nixpkgs#audacity"]
+
+[profiles.obs]
+# OBS uses the GPU when one is allocated; otherwise software encode.
+# Launch via the angelfish-launch-style VirtualGL gate for acceleration.
+pkgs = ["nixpkgs#obs-studio"]
+
+[profiles.blender]
+# GPU app — needs the VirtualGL launcher gate for acceleration; renders
+# in software otherwise.
+pkgs = ["nixpkgs#blender"]
+
+# ── Dev tools ─────────────────────────────────────────────────────────
+[profiles.insomnia]
+pkgs = ["nixpkgs#insomnia"]
+
+[profiles.postman]
+pkgs = ["nixpkgs#postman"]
+
+[profiles.sublime-text]
+pkgs = ["nixpkgs#sublime4"]
+
+[profiles.android-studio]
+pkgs = ["nixpkgs#android-studio"]
+
+[profiles.terraform]
+# Unfree since BSL relicense; `opentofu` is the free fork if licensing
+# matters for a given deployment.
+pkgs = ["nixpkgs#terraform"]
+
+[profiles.ansible]
+pkgs = ["nixpkgs#ansible"]
+
+# ── Remote access / networking / file transfer ────────────────────────
+[profiles.remmina]
+pkgs = ["nixpkgs#remmina"]
+
+[profiles.filezilla]
+pkgs = ["nixpkgs#filezilla"]
+
+[profiles.deluge]
+pkgs = ["nixpkgs#deluge"]
+
+[profiles.qbittorrent]
+pkgs = ["nixpkgs#qbittorrent"]
+
+# ── Games / emulators (GPU; some need i386 multilib) ──────────────────
+[profiles.retroarch]
+# GPU app — VirtualGL launcher gate for acceleration.
+pkgs = ["nixpkgs#retroarch"]
+
+[profiles.minetest]
+# Renamed upstream: minetest → luanti. GPU app.
+pkgs = ["nixpkgs#luanti"]
+
+[profiles.super-tux-kart]
+# GPU app.
+pkgs = ["nixpkgs#superTuxKart"]
+
+[profiles.steam]
+# nixpkgs ships steam as an FHS-wrapped derivation (its own chroot env).
+# x86_64 only; needs GPU + i386 userspace, both handled by the wrapper.
+pkgs      = ["nixpkgs#steam"]
+platforms = ["amd64"]

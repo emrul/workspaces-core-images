@@ -1,0 +1,107 @@
+#!/bin/sh
+# nix-gpu-run — run a Nix-built GUI app with true GPU acceleration under
+# KasmVNC, when the Kasm platform has allocated a GPU to the session.
+#
+# This is the piece that makes Nix-built Chromium/QtWebEngine apps reach the
+# real GPU (e.g. "ANGLE (NVIDIA, Vulkan ... RTX 3090)") instead of falling back
+# to SwiftShader/llvmpipe. It mirrors how Kasm's own apt-based browser images
+# get GPU (vglrun + --use-angle=vulkan), but works around three Nix-specific
+# blockers that a system VirtualGL setup doesn't hit:
+#
+#   1. Vulkan WSI loader. Chrome/QtWebEngine bundle a Vulkan loader without the
+#      VK_KHR_surface / VK_KHR_xcb_surface instance extensions, so ANGLE-Vulkan
+#      can't initialise and drops to SwiftShader. We put the Nix `vulkan-loader`
+#      (which HAS WSI) on LD_LIBRARY_PATH so ANGLE-Vulkan initialises.
+#
+#   2. glibc-matched VirtualGL. The core image's system /opt/VirtualGL faker is
+#      built against the system glibc and CANNOT be LD_PRELOADed into a Nix
+#      binary (different glibc). We use a Nix `virtualgl` built from the same
+#      nixpkgs as the apps, exposed at /nix/var/nix/profiles/_gpu/bin/vglrun.
+#      It is invoked as `-d egl` (generic EGL device pick) — `-d $KASM_EGL_CARD`
+#      fails with "Invalid EGL device" because Nix glvnd can't match the DRM
+#      node the way the system EGL stack does.
+#
+#   3. Narrow NVIDIA lib dir (the nixglhost principle). The nvidia container
+#      runtime injects the vendor libs into /lib/x86_64-linux-gnu, right next to
+#      the system glibc/libstdc++ — adding that whole dir to a Nix app's
+#      LD_LIBRARY_PATH would shadow Nix's glibc and crash it. So we symlink ONLY
+#      the nvidia vendor libs (libGLX_nvidia, libEGL_nvidia, libnvidia-*, libcuda)
+#      into a clean per-session dir and add just that.
+#
+# Usage:
+#   nix-gpu-run --available        exit 0 if a usable GPU is allocated, else 1
+#   nix-gpu-run <app> [args...]    set up the GPU env and exec the app under vglrun
+#
+# When no GPU is allocated, `nix-gpu-run <app>` just execs the app unchanged so
+# callers can use it unconditionally.
+#
+# See design/nix/docs/handover.md (GPU section) and the proven recipe notes.
+set -u
+
+VGL_PROFILE=/nix/var/nix/profiles/_gpu
+VGLRUN="${VGL_PROFILE}/bin/vglrun"
+VK_LIBDIR="${VGL_PROFILE}/lib"
+
+# A GPU is usable only when VirtualGL is baked in AND the Kasm platform handed us
+# EGL + render device nodes that we actually OWN (same `-O` gate as the core
+# image's kasm-window-manager and the apt browser launchers; a bare
+# `docker run --gpus` leaves the nodes root-owned and takes the software path).
+gpu_available() {
+    [ -x "${VGLRUN}" ] \
+        && [ -n "${KASM_EGL_CARD:-}" ] && [ -n "${KASM_RENDERD:-}" ] \
+        && [ -O "${KASM_RENDERD}" ] && [ -O "${KASM_EGL_CARD}" ]
+}
+
+if [ "${1:-}" = "--available" ]; then
+    gpu_available && exit 0 || exit 1
+fi
+
+[ "$#" -gt 0 ] || { echo "nix-gpu-run: no command given" >&2; exit 2; }
+
+# No GPU → run the app as-is (caller has already set any software-render env).
+if ! gpu_available; then
+    exec "$@"
+fi
+
+# ── Build the narrow NVIDIA lib dir (nvgl) for this session ──────────────────
+# The nvidia libs only appear once a GPU is allocated, so this is done at launch,
+# not build time. Find the dir holding the FULL vendor set: key off
+# libnvidia-glcore (the real driver core). Do NOT trust ldconfig's first hit —
+# nix-activate seeds a partial compat dir (/opt/nix-libs) with a libGLX_nvidia
+# symlink that sorts first but lacks the rest of the driver.
+nvsrc=""
+for d in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/local/nvidia/lib64; do
+    if ls "${d}"/libnvidia-glcore.so* >/dev/null 2>&1; then nvsrc="${d}"; break; fi
+done
+# Fallback: dirname of an ldconfig hit that isn't the /opt/nix-libs compat dir.
+if [ -z "${nvsrc}" ]; then
+    nvsrc=$(ldconfig -p 2>/dev/null | awk '/libnvidia-glcore\.so/{print $NF; exit}')
+    nvsrc=$(dirname "${nvsrc:-/usr/lib/x86_64-linux-gnu/x}")
+fi
+
+NVGL="${XDG_RUNTIME_DIR:-/tmp}/nix-nvgl-$(id -u)"
+mkdir -p "${NVGL}" 2>/dev/null
+for f in "${nvsrc}"/libGLX_nvidia.so* "${nvsrc}"/libEGL_nvidia.so* \
+         "${nvsrc}"/libGLESv2_nvidia.so* "${nvsrc}"/libGLX_indirect.so* \
+         "${nvsrc}"/libnvidia-*.so* "${nvsrc}"/libcuda.so* ; do
+    [ -e "${f}" ] && ln -sf "${f}" "${NVGL}/$(basename "${f}")" 2>/dev/null
+done
+
+# ── GPU env ──────────────────────────────────────────────────────────────────
+# Clean LD_LIBRARY_PATH: nvgl (nvidia vendor libs, no glibc) + the Nix Vulkan
+# loader (WSI). Deliberately NOT the system path — inheriting it mixes system
+# glibc into the Nix process ("__vdso_gettimeofday: invalid mode for dlopen").
+export LD_LIBRARY_PATH="${NVGL}:${VK_LIBDIR}"
+
+# Point Nix glvnd at the system EGL vendor JSONs so it loads libEGL_nvidia.
+export __EGL_VENDOR_LIBRARY_DIRS="${__EGL_VENDOR_LIBRARY_DIRS:-/usr/share/glvnd/egl_vendor.d}"
+
+# Force the NVIDIA Vulkan ICD (skip SwiftShader / mesa lavapipe).
+icd=$(ls /etc/vulkan/icd.d/*nvidia*.json /usr/share/vulkan/icd.d/*nvidia*.json 2>/dev/null | head -1)
+if [ -n "${icd}" ]; then
+    export VK_ICD_FILENAMES="${icd}"
+    export VK_DRIVER_FILES="${icd}"
+fi
+
+echo "nix-gpu-run: GPU path — vglrun -d egl (nvgl=${NVGL}, vk-icd=${icd:-none})" >&2
+exec "${VGLRUN}" -d egl "$@"

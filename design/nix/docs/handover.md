@@ -93,6 +93,34 @@ Helpers/units/shims/images are `nix-*`.
 
 # GPU / hardware WebGL — full investigation
 
+> ## ✅ UPDATE 2026-06-18 — SOLVED for standalone Chromium/Chrome
+>
+> Verified on the RTX 3090 host **inside a real Kasm GPU session**: Nix
+> google-chrome reaches the GPU —
+> `WEBGL_RENDERER=ANGLE (NVIDIA, Vulkan 1.4.312 (NVIDIA GeForce RTX 3090), NVIDIA)`,
+> matching Kasm's own apt chrome. Three fixes closed the gap the rows below hit:
+> 1. **Nix `vulkan-loader`** on `LD_LIBRARY_PATH` — chrome's bundled loader lacks
+>    `VK_KHR_surface`/`VK_KHR_xcb_surface` WSI, so ANGLE-Vulkan died → SwiftShader.
+>    The Nix loader has WSI. (This is what rows 8/11 were missing.)
+> 2. **Nix `virtualgl`** invoked as **`vglrun -d egl`** (generic EGL pick), NOT
+>    `-d /dev/dri/card1` (Nix glvnd → "Invalid EGL device").
+> 3. **Narrow `/opt/nvgl`** of nvidia vendor libs only (excl. glibc).
+> Plus `VK_ICD_FILENAMES=<nvidia_icd.json>` to skip SwiftShader, and
+> `--use-angle=vulkan` (ANGLE-GL still gives "Invalid visual ID", row 7).
+>
+> Decoded the real Kasm recipe too: it runs `vglrun -d $KASM_EGL_CARD chrome
+> --use-angle=vulkan` (libvglfaker IS mapped; the wrapper's argv hides it).
+>
+> Shipped as `/usr/local/bin/nix-gpu-run` + GPU-aware `nix-launch` + a `_gpu`
+> profile (virtualgl + vulkan-loader) in nix-ubuntu / nix/flake.nix /
+> nix-profiles.toml. Full recipe in the team memory `nix-gpu-webgl-recipe`.
+>
+> **Still NOT solved: QtWebEngine (Angelfish).** QtWebEngine binds chromium's GL
+> to Qt's integration (`SurfaceFactoryQt`), ignores `--use-angle=vulkan`, forces
+> ANGLE-EGL, and `qFatal`-aborts on "Invalid visual ID" under VGL. Angelfish
+> therefore renders in **software**; the GPU path is restricted to standalone
+> chromium-family binaries. Open follow-up.
+
 ## How Kasm does GPU (decoded from the server run-config + `kasm-window-manager`)
 
 The Kasm server selects a method per host and sets env;
@@ -212,5 +240,8 @@ Rebuild the base after editing activation scripts, then the run images:
 docker build -f dockerfile-nix-ubuntu --build-arg BASE_IMAGE=localhost/kasm-core-ubuntu-noble:dev -t localhost/nix-ubuntu:dev .
 docker tag localhost/nix-ubuntu:dev localhost:5000/nix-ubuntu:dev && docker push localhost:5000/nix-ubuntu:dev
 nix shell nixpkgs#skopeo --command skopeo inspect --raw --tls-verify=false docker://localhost:5000/nix-ubuntu:dev > nix/base-manifest.json
-cd nix && nix build .#chrome-run .#fat-run && for i in chrome-run fat-run; do nix run .#$i.copyToDockerDaemon; done
+# base-manifest.json is gitignored; the flake reads its path from the env var
+# under --impure (no `git add -f` needed). See design/nix/LIMITATIONS.md.
+export NIX_UBUNTU_BASE_MANIFEST="$PWD/nix/base-manifest.json"
+cd nix && nix build --impure .#chrome-run .#fat-run && for i in chrome-run fat-run; do nix run --impure .#$i.copyToDockerDaemon; done
 ```

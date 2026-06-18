@@ -324,6 +324,20 @@ collect_attrs '.base.pkgs[]' "${DEFAULT_REF}" \
       profile install --impure --profile "${KASM_PROFILE_DIR}/_base"
 ln -sfn "${KASM_PROFILE_DIR}/_base" "${KASM_GCROOT_DIR}/_base"
 
+# ── 4b. _gpu support profile (optional) ────────────────────────────────
+# VirtualGL + vulkan-loader for /usr/local/bin/nix-gpu-run. Folded into the
+# base set below so it ships in the base layer and is excluded from per-profile
+# deltas. It is NOT a toml `.profiles` entry, so it stays out of _meta.json
+# (not activatable). Skipped cleanly when [gpu] is absent.
+HAS_GPU=0
+if jq -e '.gpu.pkgs | length > 0' "${STAGE_IN}/profiles.json" >/dev/null 2>&1; then
+  HAS_GPU=1
+  collect_attrs '.gpu.pkgs[]' "${DEFAULT_REF}" \
+    | xargs nix --extra-experimental-features 'nix-command flakes' \
+        profile install --impure --profile "${KASM_PROFILE_DIR}/_gpu"
+  ln -sfn "${KASM_PROFILE_DIR}/_gpu" "${KASM_GCROOT_DIR}/_gpu"
+fi
+
 # ── 5. named profiles ──────────────────────────────────────────────────
 while IFS= read -r p; do
   [ -z "$p" ] && continue
@@ -343,8 +357,14 @@ nix-store -qR "${KASM_PROFILE_DIR}/bootstrap" | sort -u \
     > "${STAGE_IN}/closures/bootstrap.txt"
 nix-store -qR "${KASM_PROFILE_DIR}/_base"     | sort -u \
     > "${STAGE_IN}/closures/_base.txt"
+: > "${STAGE_IN}/closures/_gpu.txt"
+if [ "${HAS_GPU}" = 1 ]; then
+  nix-store -qR "${KASM_PROFILE_DIR}/_gpu" | sort -u \
+      > "${STAGE_IN}/closures/_gpu.txt"
+fi
 sort -u -m "${STAGE_IN}/closures/_base.txt" \
             "${STAGE_IN}/closures/bootstrap.txt" \
+            "${STAGE_IN}/closures/_gpu.txt" \
     > "${STAGE_IN}/closures/base_set.txt"
 
 while IFS= read -r p; do
@@ -438,6 +458,7 @@ copy_meta_profile() {
 
 copy_meta_profile bootstrap
 copy_meta_profile _base
+[ "${HAS_GPU}" = 1 ] && copy_meta_profile _gpu
 while IFS= read -r p; do
   [ -z "$p" ] && continue
   copy_meta_profile "$p"

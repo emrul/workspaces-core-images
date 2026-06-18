@@ -6,7 +6,9 @@ Lightweight design bundle for the Kasm Nix-packaging effort. Source of truth is
 | Doc | What it covers |
 |---|---|
 | [`REQUIREMENTS.md`](REQUIREMENTS.md) | Scope, models, constraints, open questions — start here |
-| [`docs/build-pipeline.md`](docs/build-pipeline.md) | One store → fat + per-app images; nix2container; CI cache; nightly |
+| [`BUILDING.md`](BUILDING.md) | **How images are built today** (manual/local PoC commands) + the CI/CD mapping |
+| [`LIMITATIONS.md`](LIMITATIONS.md) | Known limitations (QtWebEngine/Angelfish WebGL; GPU runtime contract) |
+| [`docs/build-pipeline.md`](docs/build-pipeline.md) | CI/CD target: one store → fat + per-app images; nix2container; CI cache; nightly |
 | [`docs/packaging-apps.md`](docs/packaging-apps.md) | Team guide: add an app; when a custom Nix package is needed; runtimes; persistence |
 | [`docs/base-image-assessment.md`](docs/base-image-assessment.md) | Should the core image thin out / KasmVNC-as-Nix? (assessment) |
 | [`docs/investigation-findings.md`](docs/investigation-findings.md) | Tooling decision (nix2container vs streamLayeredImage), runtime support, spikes |

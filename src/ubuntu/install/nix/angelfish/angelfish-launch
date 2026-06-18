@@ -1,11 +1,10 @@
 #!/bin/sh
 # angelfish-launch — GPU-aware launcher for the Nix-built KDE Angelfish browser.
 #
-# Mirrors the kasmweb/chrome image's /usr/bin/google-chrome wrapper: use
-# VirtualGL (vglrun -d $KASM_EGL_CARD) when the Kasm platform has allocated a
-# GPU to this session and the EGL/render device nodes are owned by us;
-# otherwise fall back to the shared software-rendering path in
-# /usr/local/bin/nix-launch.
+# Does the Angelfish-specific desktop tweaks (mobile UI, start maximised) and
+# then hands off to /usr/local/bin/nix-launch, which auto-detects an allocated
+# GPU and runs Angelfish either GPU-accelerated (Nix VirtualGL + Nix
+# vulkan-loader + ANGLE-Vulkan, via nix-gpu-run) or software-rendered.
 #
 # Angelfish embeds QtWebEngine (Chromium), so it needs the same
 # sandbox/zygote handling as Chrome inside a rootless KasmVNC container.
@@ -48,39 +47,13 @@ if [ "${ANGELFISH_MAXIMIZE:-1}" != 0 ] && command -v wmctrl >/dev/null 2>&1; the
     ) &
 fi
 
-# GPU is usable only when VirtualGL is present and the Kasm platform handed
-# us EGL + render nodes that we actually own (same gate as Chrome and
-# kasm-window-manager).
-gpu_available() {
-    [ -x /opt/VirtualGL/bin/vglrun ] \
-        && [ -n "${KASM_EGL_CARD:-}" ] && [ -n "${KASM_RENDERD:-}" ] \
-        && [ -O "${KASM_RENDERD}" ] && [ -O "${KASM_EGL_CARD}" ]
-}
-
-if gpu_available; then
-    # Same env corrections nix-launch applies (dbus address, XDG_RUNTIME_DIR,
-    # drop Kasm's baked LD_LIBRARY_PATH) but WITHOUT the software-render flags,
-    # so QtWebEngine renders through the GPU via VirtualGL.
-    if [ -f /tmp/kasm-dbus.env ]; then
-        . /tmp/kasm-dbus.env 2>/dev/null
-        [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && export DBUS_SESSION_BUS_ADDRESS
-        [ -n "${DBUS_SESSION_BUS_PID:-}" ]     && export DBUS_SESSION_BUS_PID
-    fi
-    if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
-        XDG_RUNTIME_DIR="/run/user/$(id -u)"
-        [ -d "${XDG_RUNTIME_DIR}" ] || mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null
-        export XDG_RUNTIME_DIR
-    fi
-    unset LD_LIBRARY_PATH
-    export QTWEBENGINE_DISABLE_SANDBOX=1
-    # No --disable-gpu / --disable-software-rasterizer here — we want the GPU.
-    export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-seccomp-sandbox --no-zygote --single-process --disable-dev-shm-usage --ignore-gpu-blocklist"
-    echo "angelfish-launch: GPU acceleration via VirtualGL on ${KASM_EGL_CARD}" >&2
-    exec /opt/VirtualGL/bin/vglrun -d "${KASM_EGL_CARD}" "${BIN}" "$@"
-fi
-
-# No GPU: hand off to nix-launch, which sets the software-render Qt env and
-# the QtWebEngine sandbox/dev-shm flags. Angelfish doesn't match nix-launch's
-# chrome/chromium name cases, so it runs unwrapped under that software env.
-echo "angelfish-launch: no GPU allocated; software rendering via nix-launch" >&2
+# Hand off to nix-launch, which sets the dbus / XDG_RUNTIME_DIR env and the
+# rendering path. Angelfish renders in SOFTWARE: it is QtWebEngine, which binds
+# chromium's GL to Qt's own integration (SurfaceFactoryQt), ignores
+# --use-angle=vulkan, and qFatal-aborts on "Invalid visual ID" under VirtualGL —
+# so unlike standalone Chrome it cannot use the session GPU here. nix-launch's
+# GPU path is restricted to standalone chromium-family binaries; Angelfish (not
+# a chromium-named binary) correctly takes nix-launch's software path even when a
+# GPU is allocated. See nix-gpu-run and the GPU notes in design/nix.
+echo "angelfish-launch: handing off to nix-launch (software render; QtWebEngine GPU unsupported under VGL)" >&2
 exec /usr/local/bin/nix-launch "${BIN}" "$@"

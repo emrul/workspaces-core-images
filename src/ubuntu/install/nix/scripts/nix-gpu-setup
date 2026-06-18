@@ -1,0 +1,31 @@
+#!/bin/sh
+# nix-gpu-setup — give the session user ownership of the allocated GPU device
+# nodes, at boot, as root.
+#
+# Why this is needed (and why kasmweb/chrome doesn't need it): this fork's images
+# run container-init as PID 1, so the container's run-user is ROOT (USER 0 — see
+# the dockerfile NOTE). When the Kasm agent provisions a GPU it chowns
+# /dev/dri/{card,renderD*} to the container's run-user — root — not the
+# unprivileged session user (kasm-user / $KASM_OS_USER, uid 1000) that actually
+# runs the app. nix-gpu-run's `-O` ownership gate (the same gate kasmweb/chrome
+# and kasm-window-manager use) then fails for the app user, and Chrome falls back
+# to SwiftShader. Re-chowning the EGL/render nodes to the session user fixes that.
+#
+# Idempotent + safe: a no-op when no GPU is allocated (KASM_EGL_CARD/RENDERD unset
+# or the nodes don't exist). Changes only the owner (keeps the video/render group).
+# Runs After=kasm-setup (the OS user exists) and Before=window-manager (before the
+# desktop / custom_startup auto-launches the browser).
+set -u
+
+user="${KASM_OS_USER:-kasm-user}"
+
+for dev in "${KASM_EGL_CARD:-}" "${KASM_RENDERD:-}"; do
+    [ -n "${dev}" ] && [ -e "${dev}" ] || continue
+    if chown "${user}" "${dev}" 2>/dev/null; then
+        echo "nix-gpu-setup: chown ${dev} -> ${user}" >&2
+    else
+        echo "nix-gpu-setup: could not chown ${dev} (continuing)" >&2
+    fi
+done
+
+exit 0

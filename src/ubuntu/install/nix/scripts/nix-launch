@@ -49,42 +49,63 @@ fi
 
 # Drop the Kasm-baked LD_LIBRARY_PATH (designed for system apps; breaks
 # Nix apps with library version clashes). Nix's RUNPATH already finds
-# its own libs; system fallbacks come via /etc/ld.so.cache.
+# its own libs; system fallbacks come via /etc/ld.so.cache. (The GPU path
+# below sets its own clean LD_LIBRARY_PATH via nix-gpu-run.)
 unset LD_LIBRARY_PATH
 
-# Software rendering — Xvnc doesn't expose GPU/EGL, and these vars
-# keep Qt apps off the GL probe path that would otherwise abort.
+prog="${1:-}"
+case "$(basename "${prog}" 2>/dev/null)" in
+  *chrome*|*chromium*|*brave*|electron|electron[0-9]*|code) is_chromium=1 ;;
+  *) is_chromium=0 ;;
+esac
+
+# ── GPU path: standalone Chromium/Chrome/Electron, GPU allocated ──────────────
+# vglrun + ANGLE-Vulkan reach the real GPU ("ANGLE (NVIDIA, Vulkan ...)") — see
+# nix-gpu-run for the recipe. Restricted to STANDALONE chromium-family binaries:
+#   - --use-angle=vulkan is the only ANGLE backend that works under VGL here
+#     (ANGLE-GL hits "Invalid visual ID" on VGL's surfaceless EGL).
+#   - QtWebEngine apps (e.g. Angelfish) are deliberately EXCLUDED: QtWebEngine
+#     binds chromium's GL to Qt's own integration (SurfaceFactoryQt), ignores
+#     --use-angle, forces the ANGLE-EGL GL path, and qFatal-ABORTS on the same
+#     "Invalid visual ID". They must take the software path below. (Pure-GL apps
+#     like blender can opt in by calling nix-gpu-run directly in their launcher.)
+#   - --no-sandbox so the GPU process can open the dri device nodes (mirrors
+#     kasmweb/chrome).
+if [ "${is_chromium}" = 1 ] && nix-gpu-run --available; then
+    shift
+    exec nix-gpu-run "${prog}" \
+        --password-store=basic \
+        --no-sandbox \
+        --ignore-gpu-blocklist \
+        --use-angle=vulkan \
+        --ozone-platform=x11 \
+        --disable-dev-shm-usage \
+        --no-first-run \
+        --disable-search-engine-choice-screen \
+        "$@"
+fi
+
+# ── Software path: no GPU allocated, OR a QtWebEngine / non-chromium app ──────
+# (QtWebEngine can't use the GPU under VGL here — see above.) Xvnc exposes no
+# GPU/EGL; keep Qt/Chromium off the GL probe path.
 export LIBGL_ALWAYS_SOFTWARE=1
 export QT_QUICK_BACKEND=software
 export QSG_RHI_BACKEND=software
 export QT_XCB_GL_INTEGRATION=none
 
 # QtWebEngine in rootless container: bypass sandbox/zygote/dev-shm.
-# Other apps ignore these env vars.
 export QTWEBENGINE_DISABLE_SANDBOX=1
 export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-seccomp-sandbox --disable-gpu --disable-software-rasterizer --no-zygote --single-process --disable-dev-shm-usage"
 
-# Standalone Chromium/Chrome/Electron apps need the sandbox/GPU flags on the
-# command line — the QTWEBENGINE_* env above only reaches Qt-EMBEDDED chromium.
-# chrome-sandbox lives in the read-only Nix store and can't be setuid-root, so
-# --no-sandbox is mandatory here. Other apps don't match and run unchanged.
-# Flag set mirrors the proven kasmweb/chrome image (src/ubuntu/install/chrome):
+# Standalone Chromium/Chrome/Electron need their flags on argv — the
+# QTWEBENGINE_* env above only reaches Qt-EMBEDDED chromium.
 #   --password-store=basic  — without it Chrome blocks on the gnome-keyring /
-#                             dbus secret service (absent here) and page loads
-#                             hang. This is the key one for "opens but sites
-#                             never load".
-#   --disable-gpu + software GL — Xvnc exposes no GPU/EGL (until a GPU/VirtualGL
-#                             path is wired; see design/nix for the GPU follow-up).
-#
-# NOTE: NO --no-sandbox. The container is expected to run with the tuned seccomp
-# profile (src/common/seccomp/chrome.json) — see docs/seccomp-how-to.md — which
-# permits unprivileged user namespaces, so Chrome uses its own namespace sandbox.
-# That keeps the sandbox (more secure) instead of disabling it. If the container
-# is run without that profile (and without seccomp=unconfined), Chrome will fail
-# to sandbox; run it with the profile.
-prog="${1:-}"
-case "$(basename "${prog}" 2>/dev/null)" in
-  *chrome*|*chromium*|*brave*|electron|electron[0-9]*|code)
+#                             dbus secret service (absent here) and pages hang.
+#   --disable-gpu + software GL — Xvnc exposes no GPU/EGL in this (no-GPU) path.
+# Sandbox: relies on the container's tuned seccomp profile
+# (src/common/seccomp/chrome.json) permitting unprivileged userns, so Chrome
+# keeps its namespace sandbox (no --no-sandbox). Run with that profile.
+if [ "${is_chromium}" = 1 ]; then
     shift
     exec "${prog}" \
         --password-store=basic \
@@ -93,7 +114,6 @@ case "$(basename "${prog}" 2>/dev/null)" in
         --no-first-run \
         --disable-search-engine-choice-screen \
         "$@"
-    ;;
-esac
+fi
 
 exec "$@"

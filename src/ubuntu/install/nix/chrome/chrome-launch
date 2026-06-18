@@ -1,0 +1,22 @@
+#!/bin/sh
+# chrome-launch — launcher for the Nix-built Google Chrome single-app image.
+#
+# Mirrors angelfish-launch: do the app-specific bits (start maximised) and hand
+# off to /usr/local/bin/nix-launch, which sets the dbus / XDG_RUNTIME_DIR env and
+# picks the rendering path. Unlike Angelfish (QtWebEngine), Chrome is a standalone
+# Chromium binary, so nix-launch's GPU path applies to it: when the Kasm platform
+# has allocated a GPU (KASM_EGL_CARD owned), Chrome runs under nix-gpu-run
+# (Nix VirtualGL `vglrun -d egl` + Nix vulkan-loader + ANGLE-Vulkan) and reaches
+# the real GPU ("ANGLE (NVIDIA, Vulkan ...)"); otherwise it falls back to
+# software (SwiftShader). The sandbox/--password-store/GPU flags are added by
+# nix-launch's chromium-family argv path — see nix-launch and nix-gpu-run.
+#
+# Binary resolved by absolute profile path (container-init services don't source
+# /etc/profile.d). --start-maximized is native to Chrome (no wmctrl dance).
+set -u
+
+PROFILE=/nix/var/nix/profiles/chrome
+BIN="${PROFILE}/bin/google-chrome-stable"
+
+echo "chrome-launch: handing off to nix-launch (GPU auto-detected)" >&2
+exec /usr/local/bin/nix-launch "${BIN}" --start-maximized "$@"

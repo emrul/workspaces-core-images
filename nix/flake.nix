@@ -60,6 +60,21 @@
           (name: { pkg, ... }: n2c.buildLayer { deps = [ pkg ]; layers = [ baseLayer ]; })
           apps;
 
+        # ── GPU support (shared across runnable images) ──────────────────────
+        # Nix VirtualGL (glibc-matched faker — the system /opt/VirtualGL faker
+        # can't preload into a Nix binary) + Nix vulkan-loader (carries the
+        # VK_KHR_surface/xcb WSI that chrome's bundled loader lacks, so
+        # ANGLE-Vulkan reaches the real GPU instead of SwiftShader). Exposed at
+        # /nix/var/nix/profiles/_gpu; /usr/local/bin/nix-gpu-run (from the base
+        # nix-ubuntu image) references vglrun + libvulkan from there.
+        gpuPkgs = with pkgs; [ virtualgl vulkan-loader ];
+        gpuLayer = n2c.buildLayer { deps = gpuPkgs; layers = [ baseLayer ]; };
+        gpuProfile = pkgs.buildEnv {
+          name = "nix-profile-_gpu";
+          paths = gpuPkgs;
+          pathsToLink = [ "/bin" "/lib" ];
+        };
+
         # ── dedup-proof images (no base image) ───────────────────────────────
         mkApp = name: { pkg, exe, ... }:
           n2c.buildImage {
@@ -100,17 +115,31 @@
         nixVar = subset: pkgs.runCommand "nix-var" { } (''
           mkdir -p $out/nix/var/nix/profiles
           cp ${metaFor subset} $out/nix/var/nix/profiles/_meta.json
+          ln -s ${gpuProfile} $out/nix/var/nix/profiles/_gpu
         '' + lib.concatStrings (lib.mapAttrsToList (n: _: ''
           ln -s ${profiles.${n}} $out/nix/var/nix/profiles/${n}
         '') subset));
 
-        # Base = the nix-ubuntu image, pulled from the local registry via
-        # its manifest (no global FOD hash needed). Gated so the dedup-proof
-        # outputs still evaluate before the manifest is captured.
-        hasBase = builtins.pathExists ./base-manifest.json;
+        # Base = the nix-ubuntu image, pulled from the local registry via its
+        # manifest (no global FOD hash needed). The manifest is a generated,
+        # environment-specific artifact (gitignored — it pins YOUR locally-built
+        # base), so it is NOT read from the flake source tree: a pure flake eval
+        # only sees git-tracked/staged files, which forced a `git add -f` dance.
+        # Instead take its absolute path from $NIX_UBUNTU_BASE_MANIFEST (exported
+        # by the build wrapper) under `--impure`, falling back to a
+        # staged/committed ./base-manifest.json. In pure eval getEnv returns ""
+        # so the dedup-proof (no-base) outputs still evaluate.
+        # Long-term: replace with n2c.pullImage + a committed digest once the
+        # base lives in a real registry — see design/nix/LIMITATIONS.md.
+        baseManifestEnv = builtins.getEnv "NIX_UBUNTU_BASE_MANIFEST";
+        baseManifest =
+          if baseManifestEnv != "" then (/. + baseManifestEnv)
+          else if builtins.pathExists ./base-manifest.json then ./base-manifest.json
+          else null;
+        hasBase = baseManifest != null;
         baseImage = n2c.pullImageFromManifest {
           imageName = "nix-ubuntu";
-          imageManifest = ./base-manifest.json;
+          imageManifest = baseManifest;
           imageTag = "dev";
           tlsVerify = false;
           registryUrl = "localhost:5000";
@@ -167,8 +196,18 @@
           name = "nix-${name}-run";
           tag = "spike";
           fromImage = baseImage;
-          config = runConfig;
-          layers = [ baseLayer ]
+          # Bake NIX_APP_PROFILES so nix-activate wires the app(s) into the XFCE
+          # menu + Desktop at boot. nix-activate has NO _meta.json fallback —
+          # without this the image boots a bare desktop with nothing activated.
+          # A runtime `-e NIX_APP_PROFILES=...` still overrides (the fat image is
+          # meant to be selected that way). NOTE: this puts the app on the menu /
+          # Desktop; it does NOT auto-launch it — a full single-app auto-launch
+          # image (kiosk style) is the dockerfile-nix-angelfish pattern.
+          config = runConfig // {
+            Env = runConfig.Env
+                  ++ [ "NIX_APP_PROFILES=${lib.concatStringsSep "," (builtins.attrNames subset)}" ];
+          };
+          layers = [ baseLayer gpuLayer ]
                    ++ builtins.attrValues (lib.getAttrs (builtins.attrNames subset) appLayers);
           copyToRoot = [ (nixVar subset) ];
         };

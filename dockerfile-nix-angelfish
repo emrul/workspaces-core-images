@@ -10,8 +10,10 @@
 #   LAUNCH_URL / KASM_URL  — page opened on startup
 #   APP_ARGS               — extra args to the launcher
 #   DISABLE_CUSTOM_STARTUP — skip the auto-launch loop
-# GPU acceleration is automatic when the Kasm platform allocates a GPU
-# (KASM_EGL_CARD / KASM_RENDERD); otherwise it renders in software.
+# Angelfish renders in SOFTWARE: QtWebEngine can't use the session GPU under
+# KasmVNC's VirtualGL/Xvnc (it ignores --use-angle=vulkan and aborts on
+# "Invalid visual ID"). Standalone chromium apps DO get GPU — that path lives in
+# nix-ubuntu + nix/flake.nix (see nix-gpu-run).
 # See docs/nix-how-to.md and src/ubuntu/install/nix/angelfish/.
 
 # ── Stage 1: build the angelfish profile into a Nix store ──────────────
@@ -29,6 +31,11 @@ ARG NIXPKGS_REV
 RUN nix-env --profile /nix/var/nix/profiles/angelfish \
         -i -A kdePackages.angelfish \
         -f "https://github.com/NixOS/nixpkgs/archive/${NIXPKGS_REV}.tar.gz"
+# NOTE: no _gpu profile here. Angelfish is QtWebEngine, which cannot use the
+# session GPU under VirtualGL/Xvnc (it binds chromium's GL to Qt's integration,
+# ignores --use-angle=vulkan, and aborts on "Invalid visual ID") — so it renders
+# in software and the GPU support profile would be dead weight. Standalone
+# chromium apps DO get GPU; that path lives in nix-ubuntu + nix/flake.nix.
 # _meta.json is the activation gate (ConditionPathExists) and the requires
 # graph. Angelfish has no profile deps.
 RUN printf '%s' '{"profiles":{"angelfish":{"ref":null,"requires":[]}}}' \
@@ -53,7 +60,9 @@ ENV NIX_APP_PROFILES=angelfish
 # nix-ubuntu images are rebuilt from the updated src/common/kasm-go.
 COPY src/common/kasm-go/scripts/kasm-setup /usr/local/bin/kasm-setup
 
-# GPU-aware launcher + single-app startup loop.
+# Launcher + single-app startup loop. angelfish-launch delegates to nix-launch
+# (inherited from the nix-ubuntu base), which routes Angelfish to its software
+# path (QtWebEngine can't use the GPU under VGL — see angelfish-launch).
 COPY src/ubuntu/install/nix/angelfish/angelfish-launch /usr/local/bin/angelfish-launch
 COPY src/ubuntu/install/nix/angelfish/custom_startup.sh /dockerstartup/custom_startup.sh
 RUN chmod 0755 /usr/local/bin/kasm-setup /usr/local/bin/angelfish-launch /dockerstartup/custom_startup.sh

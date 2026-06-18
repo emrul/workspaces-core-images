@@ -1,0 +1,19 @@
+[Unit]
+Description=Give the session user ownership of allocated GPU device nodes
+# This fork runs container-init as PID 1 (root), so the Kasm agent chowns the
+# provisioned /dev/dri nodes to root, not the unprivileged session user that runs
+# the app. Re-chown them so nix-gpu-run's `-O` gate passes and Chrome reaches the
+# GPU. After kasm-setup (OS user exists); Before window-manager (and thus before
+# custom-startup auto-launches the browser). No-op when no GPU is allocated.
+After=kasm-setup.service
+Before=window-manager.service
+Requires=kasm-setup.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/nix-gpu-setup
+TimeoutStartSec=15s
+
+[Install]
+WantedBy=multi-user.target

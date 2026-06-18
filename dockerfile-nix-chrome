@@ -1,0 +1,119 @@
+# nix-chrome: single-application Google Chrome browser image.
+#
+# The Nix counterpart of the kasmweb/chrome single-app image: Chrome is a
+# Nix-built package (nixpkgs#google-chrome) baked into the image's /nix store
+# rather than apt-installed. Self-contained — does NOT require the
+# build-nix-store-volume OCI store mounted at run time (unlike plain nix-ubuntu).
+#
+# Behaviour mirrors the browser images' Kasm contract:
+#   LAUNCH_URL / KASM_URL  — page opened on startup (auto-launched, maximised)
+#   APP_ARGS               — extra args to the launcher
+#   DISABLE_CUSTOM_STARTUP — skip the auto-launch loop
+#
+# GPU: unlike Angelfish (QtWebEngine, software-only), Chrome is standalone
+# Chromium and DOES get hardware WebGL when the Kasm platform allocates a GPU —
+# nix-launch routes it through nix-gpu-run (Nix VirtualGL `vglrun -d egl` + Nix
+# vulkan-loader + ANGLE-Vulkan → "ANGLE (NVIDIA, Vulkan ...)"); otherwise it
+# renders in software (SwiftShader). GPU engages only when the dri device nodes
+# are owned by the session user (the Kasm agent chowns them; for a manual
+# `docker run` chown them yourself — see runs/nix-chrome-gpu.sh).
+# See design/nix/BUILDING.md, design/nix/LIMITATIONS.md, and src/ubuntu/install/nix/chrome/.
+
+# ── Stage 1: build the chrome + _gpu profiles into a Nix store ─────────────
+# Pinned to the same nixpkgs the rest of the Nix work uses (nixos-25.05).
+# Fetched as a codeload tarball (not the GitHub flake API) to avoid rate limits.
+# Global build args — declared before the first FROM so they're usable in both
+# stages' FROM lines.
+ARG NIX_IMAGE="docker.io/nixos/nix:2.28.4"
+ARG NIXPKGS_REV="ac62194c3917d5f474c1a844b6fd6da2db95077d"
+ARG BASE_IMAGE="localhost/nix-ubuntu:dev"
+
+FROM $NIX_IMAGE AS nixbuild
+ARG NIXPKGS_REV
+# google-chrome is unfree; allow it for the nix-env build (mirrors
+# bin/build-nix-store-volume). nix-env builds a gcroot profile.
+ENV NIXPKGS_ALLOW_UNFREE=1
+RUN nix-env --profile /nix/var/nix/profiles/chrome \
+        -i -A google-chrome \
+        -f "https://github.com/NixOS/nixpkgs/archive/${NIXPKGS_REV}.tar.gz"
+# GPU support profile: Nix VirtualGL (glibc-matched faker) + Nix vulkan-loader
+# (carries the VK_KHR_surface/xcb WSI Chrome's bundled loader lacks). nix-gpu-run
+# references vglrun + libvulkan from here. NOT in _meta.json — support profile,
+# not an activatable app.
+RUN nix-env --profile /nix/var/nix/profiles/_gpu \
+        -i -A virtualgl -A vulkan-loader \
+        -f "https://github.com/NixOS/nixpkgs/archive/${NIXPKGS_REV}.tar.gz"
+# _meta.json is the activation gate (ConditionPathExists) and the requires
+# graph. Chrome has no profile deps.
+RUN printf '%s' '{"profiles":{"chrome":{"ref":null,"requires":[]}}}' \
+        > /nix/var/nix/profiles/_meta.json
+
+# ── Stage 2: nix-ubuntu + baked store + single-app wiring ──────────────────
+FROM $BASE_IMAGE
+ARG DISTRO=ubuntu
+USER 0
+
+# Bake the chrome + _gpu closures + profile tree into the image's /nix store.
+# (nix-ubuntu ships no /nix; activation is a no-op until this exists.)
+COPY --from=nixbuild /nix /nix
+
+# Activate chrome at boot: nix-activate reads this CSV and wires the profile
+# into PATH / XDG_DATA_DIRS / ld.so + desktop trust.
+ENV NIX_APP_PROFILES=chrome
+
+# Carry the shared kasm-setup fix (register the "kasm_user" VNC web login, not
+# just the OS account) ahead of a full core-image rebuild, so Kasm-orchestrated
+# sessions authenticate. Remove once the base core / nix-ubuntu images are
+# rebuilt from the updated src/common/kasm-go.
+COPY src/common/kasm-go/scripts/kasm-setup /usr/local/bin/kasm-setup
+
+# Launcher + single-app startup loop. chrome-launch delegates to nix-launch,
+# which (chromium-family) takes the GPU path via nix-gpu-run when a GPU is owned.
+# nix-gpu-run + the GPU-aware nix-launch are copied here too so the image is
+# self-contained on an older nix-ubuntu base.
+COPY src/ubuntu/install/nix/chrome/chrome-launch /usr/local/bin/chrome-launch
+COPY src/ubuntu/install/nix/scripts/nix-gpu-run /usr/local/bin/nix-gpu-run
+COPY src/ubuntu/install/nix/scripts/nix-launch /usr/local/bin/nix-launch
+# Boot-time GPU device-ownership fixup: container-init runs as PID 1 (root), so
+# the Kasm agent chowns the provisioned /dev/dri nodes to root, not the session
+# user. nix-gpu-setup re-chowns them to the session user before the browser
+# launches, so the GPU path engages in real Kasm sessions (not just manual runs).
+COPY src/ubuntu/install/nix/scripts/nix-gpu-setup /usr/local/bin/nix-gpu-setup
+COPY src/ubuntu/install/nix/units/nix-gpu-setup.service /etc/container-init.d/nix-gpu-setup.service
+COPY src/ubuntu/install/nix/chrome/custom_startup.sh /dockerstartup/custom_startup.sh
+RUN chmod 0755 /usr/local/bin/kasm-setup /usr/local/bin/chrome-launch \
+        /usr/local/bin/nix-gpu-run /usr/local/bin/nix-launch /usr/local/bin/nix-gpu-setup \
+        /dockerstartup/custom_startup.sh
+
+# Suppress Chrome's "You are using an unsupported command-line flag:
+# --no-sandbox" infobar via a managed enterprise policy (the standard Kasm
+# approach). We launch with --no-sandbox (the GPU process must open the dri
+# device nodes; mirrors kasmweb/chrome), and this hides the security-warning
+# banner without further weakening the sandbox. nixpkgs google-chrome is the
+# upstream binary, so it reads the stock /etc/opt/chrome/policies/managed path.
+RUN mkdir -p /etc/opt/chrome/policies/managed && \
+    printf '%s\n' '{ "CommandLineFlagSecurityWarningsEnabled": false }' \
+        > /etc/opt/chrome/policies/managed/kasm-flags.json
+
+# Optimize the desktop for a single application: swap in the single-application
+# XFCE profile and drop the panel (matches the kasmweb/chrome image). The default
+# profile is seeded into the session HOME by kasm-setup.service at run time.
+RUN XFCONF=/home/kasm-default-profile/.config/xfce4/xfconf && \
+    cp "$XFCONF/single-application-xfce-perchannel-xml/"* \
+       "$XFCONF/xfce-perchannel-xml/" && \
+    chown -R 1000:0 "$XFCONF/xfce-perchannel-xml" && \
+    apt-get remove -y xfce4-panel && \
+    apt-get autoclean && rm -rf /var/lib/apt/lists/*
+
+# Same validation gate as dockerfile-nix-ubuntu: fail the build on any unit
+# parse warning.
+RUN /usr/local/bin/container-init \
+        --units /etc/container-init/units \
+        --drop-in /etc/container-init.d \
+        --strict-units --validate
+
+# NOTE: stay USER 0. Unlike the upstream bash-supervisor app images (which end
+# `USER 1000`), this fork runs container-init as PID 1, and it must start as root
+# so kasm-setup.service can `su` to the OS user and set the VNC password. Ending
+# as 1000 breaks startup with "su: Authentication failure". Matches
+# dockerfile-nix-ubuntu / dockerfile-nix-angelfish.

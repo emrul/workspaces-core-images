@@ -5,6 +5,10 @@ cache-efficiently and rebuilt nightly. Tooling rationale (why nix2container,
 how it differs from `dockerTools`, and how airgapped export works) is in
 [`investigation-findings.md`](investigation-findings.md#1-image-build-tooling-decision).
 
+> This is the **CI/CD target state**. For how images are built **today**
+> (manual / local-dev, the realised PoC commands), see
+> [`../BUILDING.md`](../BUILDING.md).
+
 ## Goals
 
 1. **One store, many images.** Build every image from a single per-arch Nix
@@ -180,13 +184,41 @@ the airgap. Add an optional CI job that exports the offline artifacts for the
 profiles/apps an airgapped customer needs. Mechanics + caveats in
 [`investigation-findings.md`](investigation-findings.md#1a-airgapped--offline-export).
 
-## What changes in code (no edits this pass)
+## Base-image pinning (decided)
 
-- `bin/build-nix-store-volume`: replace the `FROM scratch` + `COPY` + `buildah`
-  emit (lines ~462–507) with a nix2container expression, **or** add a sibling
+The per-app/runnable images need the `nix-ubuntu` base as `fromImage`. The PoC
+flake uses `nix2container.pullImageFromManifest` against a **gitignored, per-host
+`nix/base-manifest.json`** (path passed via `$NIX_UBUNTU_BASE_MANIFEST` + `--impure`
+— see [`../BUILDING.md`](../BUILDING.md)). That's the **local-dev** convenience.
+
+For **CI/production**, switch to `nix2container.pullImage` with a **committed
+image digest**:
+
+```nix
+baseImage = n2c.pullImage {
+  imageName   = "registry.../nix-ubuntu";
+  imageDigest = "sha256:…";   # committed; bumped when the base is rebuilt
+  sha256      = "…";          # FOD hash
+};
+```
+
+CI flow: build `nix-ubuntu` → push → capture digest → record in-repo → app
+builds reference it. Reproducible, source-controlled, no `--impure`/loose file.
+The FOD-hash churn this adds per base bump is the cost the manifest-file approach
+was avoiding during fast iteration; in CI it's a non-issue.
+
+## What changes in code
+
+- **Done (PoC realised):** `nix/flake.nix` exists (per-app `.#<app>-run` + `.#fat-run`
+  + dedup-proof `.#<app>`/`.#fat`); `dockerfile-nix-angelfish` is the self-contained
+  single-app pattern; runnable images + the OCI store carry a `_gpu` profile
+  (virtualgl + vulkan-loader) consumed by `nix-gpu-run` for GPU WebGL on
+  standalone chromium (see [`../LIMITATIONS.md`](../LIMITATIONS.md)).
+- `bin/build-nix-store-volume`: still emits via `FROM scratch` + `buildah`;
+  replace with a nix2container expression **or** add a sibling
   `bin/build-nix-images` that does both fat + per-app. Keep the TOML parsing and
   the staging/cache machinery.
-- New: a Nix flake (`pkgs/` or `nix/`) generated from `nix-profiles.toml`,
-  calling `buildImage` per image. See
-  [`build_plan.md`](build_plan.md).
-- CI: new `nixImages` matrix rows + a scheduled pipeline entry.
+- Base image: move from `pullImageFromManifest` (local file) to `pullImage`
+  (committed digest) per "Base-image pinning" above.
+- CI: new `nixImages` matrix rows in `template-vars.yaml` + a scheduled pipeline
+  entry; private binary cache.

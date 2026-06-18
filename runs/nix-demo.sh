@@ -25,13 +25,25 @@ cd "$here/../nix"
 APPS="chrome chromium vscode firefox audacity"
 TAG=spike
 
+# The runnable (*-run) images use the nix-ubuntu base via its manifest. That
+# file is gitignored (environment-specific), so the flake reads its absolute
+# path from $NIX_UBUNTU_BASE_MANIFEST under `--impure` (avoids a `git add -f`
+# dance). See nix/flake.nix and design/nix/LIMITATIONS.md.
+export NIX_UBUNTU_BASE_MANIFEST="$here/../nix/base-manifest.json"
+[ -f "$NIX_UBUNTU_BASE_MANIFEST" ] || {
+  echo "ERROR: base manifest not found at $NIX_UBUNTU_BASE_MANIFEST" >&2
+  echo "  capture it after building/pushing nix-ubuntu:dev, e.g.:" >&2
+  echo "  skopeo inspect --raw --tls-verify=false docker://localhost:5000/nix-ubuntu:dev > nix/base-manifest.json" >&2
+  exit 1
+}
+
 echo "== 1. Build all images =="
-nix build .#fat .#fat-run $(for a in $APPS; do printf '.#%s .#%s-run ' "$a" "$a"; done) -L
+nix build --impure .#fat .#fat-run $(for a in $APPS; do printf '.#%s .#%s-run ' "$a" "$a"; done) -L
 
 echo "== 2. Load into Docker =="
 for a in $APPS fat; do
-  nix run ".#${a}.copyToDockerDaemon"     >/dev/null 2>&1
-  nix run ".#${a}-run.copyToDockerDaemon" >/dev/null 2>&1
+  nix run --impure ".#${a}.copyToDockerDaemon"     >/dev/null 2>&1
+  nix run --impure ".#${a}-run.copyToDockerDaemon" >/dev/null 2>&1
 done
 
 echo "== 3. Cross-image layer sharing =="
@@ -66,8 +78,9 @@ cat <<'NOTE'
 == CVE-cadence simulation (manual) ==
   Edit nix/flake.nix: give chrome a faster ref, e.g.
       chrome = { pkg = (import nixpkgsUnstable {...}).google-chrome; ... };
-  then:
-      nix build .#chrome-run && nix run .#chrome-run.copyToDockerDaemon
+  then (NIX_UBUNTU_BASE_MANIFEST + --impure, as above):
+      export NIX_UBUNTU_BASE_MANIFEST="$PWD/nix/base-manifest.json"
+      nix build --impure .#chrome-run && nix run --impure .#chrome-run.copyToDockerDaemon
       IMGS="chrome chromium fat" nix shell nixpkgs#skopeo --command bash runs/nix-dedup.sh
   Observe: only chrome's app layer digest changes; the shared base layer and
   every other app's layer are untouched -> a Chrome security rebuild repushes

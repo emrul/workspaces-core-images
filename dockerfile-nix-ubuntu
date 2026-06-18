@@ -23,13 +23,16 @@ USER 0
 # for additive units; ours is gated by ConditionPathIsDirectory so the
 # image is still functional without the /nix volume mounted.
 COPY src/ubuntu/install/nix/units/nix-activate.service \
+     src/ubuntu/install/nix/units/nix-gpu-setup.service \
      /etc/container-init.d/
 COPY src/ubuntu/install/nix/scripts/nix-activate \
      src/ubuntu/install/nix/scripts/nix-app \
      src/ubuntu/install/nix/scripts/nix-launch \
+     src/ubuntu/install/nix/scripts/nix-gpu-run \
+     src/ubuntu/install/nix/scripts/nix-gpu-setup \
      /usr/local/bin/
 
-RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app /usr/local/bin/nix-launch && \
+RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app /usr/local/bin/nix-launch /usr/local/bin/nix-gpu-run /usr/local/bin/nix-gpu-setup && \
     /usr/local/bin/container-init \
         --units /etc/container-init/units \
         --drop-in /etc/container-init.d \
