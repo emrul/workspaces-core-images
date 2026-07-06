@@ -1,97 +1,81 @@
-############
-# Settings #
-############
-image: docker:29.4.3
-services:
-  - docker:29.4.3-dind
+# ==========================================================================
+# Kasm Nix app-image catalog — build & publish pipeline
+# ==========================================================================
+# Builds the deduped Nix store + one image per GUI app
+# (build-nix-store-volume --emit-app-images) and publishes each under Kasm's
+# naming convention as <REGISTRY_NS>/<kasm_name>:nix.
+#
+# Registry migration is one variable:
+#   REGISTRY_NS = $CI_REGISTRY_IMAGE  → GitLab Container Registry (default, now)
+#   REGISTRY_NS = docker.io/kasmweb   → Docker Hub kasmweb/<name>:nix (later)
+#
+# RUNNER: needs a self-hosted runner tagged `nix-builder` on a PERSISTENT host
+# with `docker` (or podman) on PATH. Persistence is the whole caching strategy:
+#   - the Nix store staging volume (nix-build-stage-<arch>) stays warm between
+#     runs (Nix dedup → most reruns fetch nothing), and
+#   - the local Docker layer cache keeps the core/nix-ubuntu base builds instant.
+# A single builder is assumed (images built in `base` are reused locally by
+# `apps`/`publish`). See docs/nix-ci.md for runner registration + config.
+#
+# The previous core-distro pipeline is preserved at ci-scripts/gitlab-ci-core.yml.
+# ==========================================================================
 
-include:
-  - template: Code-Quality.gitlab-ci.yml
+variables:
+  KASM_TAG: "nix"
+  # Publish namespace. Defaults to this project's GitLab Container Registry.
+  REGISTRY_NS: "$CI_REGISTRY_IMAGE"
+  CORE_MINIMAL_IMG: "localhost/kasm-core-ubuntu-noble-minimal:dev"
+  NIX_UBUNTU_IMG: "localhost/nix-ubuntu:dev"
+  DOCKER_BUILDKIT: "1"
+  GIT_SUBMODULE_STRATEGY: normal
+  # Optional: restrict the app build to a subset, e.g. "onlyoffice vscode".
+  # Empty = the whole catalog in nix-profiles.toml.
+  NIX_PROFILES: ""
 
 default:
-  retry: 2
+  tags: [nix-builder]
+  interruptible: true
+  retry: 1
 
 stages:
-  - template
-  - run
-  - test
-variables:
-  DOCKER_AUTH_CONFIG: ${_DOCKER_AUTH_CONFIG}
-  GIT_SUBMODULE_STRATEGY: normal
-  KASM_RELEASE: "1.18.0"
-  TEST_INSTALLER: "https://kasm-static-content.s3.amazonaws.com/kasm_release_1.18.0.09f70a.tar.gz"
-  SCAN_CONTAINERS: "true"
-  MIRROR_ORG_NAME: "kasmtech"
-before_script:
-  - export SANITIZED_BRANCH="$(echo ${CI_COMMIT_REF_NAME:0:64} | sed -r 's#^release/##' | sed 's/\//_/g')"
+  - base
+  - apps
+  - publish
 
-#######################
-# Build from template #
-#######################
-template:
-  stage: template
-  rules:
-    - when: always
+# ── base: core-minimal + nix-ubuntu (local Docker layer cache keeps this fast)
+build-base:
+  stage: base
   script:
-    - apk add py3-jinja2 py3-yaml
-    - cd ci-scripts
-    - python3 template-gitlab.py
-  tags:
-    - oci-amd-scheduled
-  artifacts:
-    paths:
-      - gitlab-ci.yml
+    - |
+      docker build \
+        --build-arg BASE_IMAGE=ubuntu:24.04 \
+        --build-arg DISTRO=ubuntu \
+        --build-arg BG_IMG=bg_noble.png \
+        -f dockerfile-kasm-core-minimal -t "$CORE_MINIMAL_IMG" .
+    - |
+      docker build \
+        --build-arg BASE_IMAGE="$CORE_MINIMAL_IMG" \
+        -f dockerfile-nix-ubuntu -t "$NIX_UBUNTU_IMG" .
 
-pipeline:
-  stage: run
+# ── apps: deduped Nix store + one runnable image per GUI profile ────────────
+# The warm nix-build-stage-<arch> volume on the runner host is the cache; a
+# no-change rerun re-fetches almost nothing.
+build-apps:
+  stage: apps
+  timeout: 3h
+  script:
+    - EXTRA=""; for p in $NIX_PROFILES; do EXTRA="$EXTRA --profile $p"; done
+    - bin/build-nix-store-volume --emit-app-images --app-base-image "$NIX_UBUNTU_IMG" $EXTRA
+
+# ── publish: tag kasm names + push ─────────────────────────────────────────
+publish:
+  stage: publish
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - bash ci-scripts/nix-publish.sh
   rules:
-    - if: '$README_USERNAME_RUN || $README_PASSWORD_RUN || $QUAY_API_KEY_RUN || $DOCKERHUB_REVERT_RUN || $REVERT_IS_ROLLING_RUN'
-      when: never
-    - when: on_success
-  variables:
-    PARENT_PIPELINE_SOURCE: "$CI_PIPELINE_SOURCE"
-    RUN_SET: "$RUN_SET"    
-  trigger:
-    include:
-      - artifact: gitlab-ci.yml
-        job: template
-
-pipeline_readme:
-  stage: run
-  only:
-    variables:
-      - $README_USERNAME_RUN
-      - $README_PASSWORD_RUN
-  variables:
-      README_USERNAME: $README_USERNAME_RUN
-      README_PASSWORD: $README_PASSWORD_RUN
-  trigger:
-    include:
-      - artifact: gitlab-ci.yml
-        job: template
-
-pipeline_readme_quay:
-  stage: run
-  only:
-    variables:
-      - $QUAY_API_KEY_RUN
-  variables:
-      QUAY_API_KEY: $QUAY_API_KEY_RUN
-  trigger:
-    include:
-      - artifact: gitlab-ci.yml
-        job: template
-
-pipeline_revert:
-  stage: run
-  only:
-    variables:
-      - $DOCKERHUB_REVERT_RUN
-      - $REVERT_IS_ROLLING_RUN
-  variables:
-      DOCKERHUB_REVERT: $DOCKERHUB_REVERT_RUN
-      REVERT_IS_ROLLING: $REVERT_IS_ROLLING_RUN
-  trigger:
-    include:
-      - artifact: gitlab-ci.yml
-        job: template
+    # Publish from the default branch, or any pipeline started manually / via the
+    # API (so you can cut a publish from a feature branch on demand).
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'

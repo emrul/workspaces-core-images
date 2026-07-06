@@ -86,6 +86,7 @@ ref  = "github:NixOS/nixpkgs/nixos-unstable"
 
 [profiles.onlyoffice]
 pkgs      = ["nixpkgs#onlyoffice-desktopeditors"]
+kasm_name = "only-office"
 # Track unstable: 25.05 ships 9.0.0.172, whose CEF null-derefs at startup on
 # headless KasmVNC (stat(NULL) after an empty /changes/ doc path). Testing a
 # newer upstream rev to see if the crash is fixed. Revert to default if not.
@@ -96,6 +97,10 @@ platforms = ["amd64"]
 
 [profiles.vscode]
 pkgs = ["nixpkgs#vscode"]
+# kasm_name: published image name when it differs from the profile name
+# (matches Kasm's Docker Hub naming, e.g. kasmweb/vs-code). Defaults to the
+# profile name when omitted. Used only for the published tag, not internally.
+kasm_name = "vs-code"
 
 [profiles.obsidian]
 pkgs = ["nixpkgs#obsidian"]
@@ -209,6 +214,7 @@ ref  = "github:NixOS/nixpkgs/nixos-unstable"
 
 [profiles.torbrowser]
 pkgs = ["nixpkgs#tor-browser"]
+kasm_name = "tor-browser"
 
 # ── Communication / collaboration ─────────────────────────────────────
 [profiles.slack]
@@ -239,6 +245,7 @@ pkgs = ["nixpkgs#thunderbird"]
 # ── Office / productivity ─────────────────────────────────────────────
 [profiles.libreoffice]
 pkgs = ["nixpkgs#libreoffice"]
+kasm_name = "libre-office"
 
 [profiles.nextcloud]
 pkgs = ["nixpkgs#nextcloud-client"]
