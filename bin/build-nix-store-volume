@@ -884,41 +884,76 @@ if [[ "${EMIT_APP_IMAGES}" == 1 ]]; then
   [[ -f "${STAGING}/apps.txt" ]] || fail "inner build staged no ${STAGING}/apps.txt"
 
   mapfile -t apps < <(grep -v '^$' "${STAGING}/apps.txt")
-  log "[apps] building ${#apps[@]} per-app image(s): store-image (staging) + finish (wiring)"
-  # Resilient: a per-app build failure (e.g. no wiring under
-  # src/ubuntu/install/nix/<p>/) records the app and continues.
-  emitted_finals=()
-  failed_finals=()
+  # Per-app builds are independent and share the same cached base/shared layers,
+  # so they parallelise well. BUILD_PARALLEL (env, default 1 = serial) caps the
+  # concurrency. To avoid N builds racing to create the identical base/shared
+  # COPY layers (a cache stampede + store-lock contention), the FIRST app is
+  # built serially to warm those layers, then the rest fan out.
+  PAR="${BUILD_PARALLEL:-1}"
+  [[ "${PAR}" =~ ^[0-9]+$ ]] && [[ "${PAR}" -ge 1 ]] || PAR=1
+  log "[apps] building ${#apps[@]} per-app image(s) (parallel=${PAR}): store-image + finish (wiring)"
+
+  RESULTS_DIR="${STAGING}/.app-results"; rm -rf "${RESULTS_DIR}"; mkdir -p "${RESULTS_DIR}"
+
+  # Build (and optionally push) one app. Never aborts the batch: writes an
+  # OK / FAIL-<phase> sentinel + a per-app log the aggregator reads back.
+  build_one_app() {
+    local p="$1"
+    local store_image="${APP_REPO}-store/${p}:${APP_TAG}"
+    local final_image="${APP_REPO}-${p}:${APP_TAG}"
+    local logf="${RESULTS_DIR}/${p}.log"
+    {
+      echo "[apps] ${p}: store-image ${store_image}"
+      if ! "${CONTAINER_CLI}" build --platform "${PLATFORM}" \
+          -t "${store_image}" -f "${STAGING}/Dockerfile.${p}" "${STAGING}"; then
+        printf 'store\n' > "${RESULTS_DIR}/${p}.fail"; return 0
+      fi
+      echo "[apps] ${p}: finish ${final_image}"
+      if ! "${CONTAINER_CLI}" build --platform "${PLATFORM}" \
+          -f "${FINISH_DOCKERFILE}" \
+          --build-arg "STORE_IMAGE=${store_image}" \
+          --build-arg "PROFILE_NAME=${p}" \
+          -t "${final_image}" "${REPO_ROOT}"; then
+        printf 'finish\n' > "${RESULTS_DIR}/${p}.fail"; return 0
+      fi
+      if [[ -n "${PUSH_REGISTRY}" ]]; then
+        local remote_final="${PUSH_REGISTRY}/${final_image#localhost/}"
+        if ! { "${CONTAINER_CLI}" tag "${final_image}" "${remote_final}" \
+               && "${CONTAINER_CLI}" push "${remote_final}"; }; then
+          printf 'push\n' > "${RESULTS_DIR}/${p}.fail"; return 0
+        fi
+      fi
+      printf 'ok\n' > "${RESULTS_DIR}/${p}.ok"
+    } > "${logf}" 2>&1
+  }
+
+  if [[ "${PAR}" -gt 1 && "${#apps[@]}" -gt 1 ]]; then
+    log "[apps] warming shared layers with '${apps[0]}' (serial), then fanning out ${PAR}-wide"
+    build_one_app "${apps[0]}"
+    rest=( "${apps[@]:1}" )
+  else
+    rest=( "${apps[@]}" )
+  fi
+
+  inflight=0
+  for p in "${rest[@]}"; do
+    build_one_app "${p}" &
+    inflight=$((inflight+1))
+    if [[ "${inflight}" -ge "${PAR}" ]]; then wait -n 2>/dev/null || wait; inflight=$((inflight-1)); fi
+  done
+  wait
+
+  # Aggregate results; surface failing apps' logs (successes stay quiet).
+  emitted_finals=(); failed_finals=()
   for p in "${apps[@]}"; do
-    store_image="${APP_REPO}-store/${p}:${APP_TAG}"
-    final_image="${APP_REPO}-${p}:${APP_TAG}"
-
-    log "[apps] ${p}: build store-image ${store_image}"
-    if ! "${CONTAINER_CLI}" build --platform "${PLATFORM}" \
-        -t "${store_image}" -f "${STAGING}/Dockerfile.${p}" "${STAGING}"; then
-      log "[apps] ${p}: WARN store-image build FAILED — skipping"; failed_finals+=( "${p}(store)" ); continue
-    fi
-
-    log "[apps] ${p}: finish build → ${final_image}"
-    if ! "${CONTAINER_CLI}" build \
-        --platform "${PLATFORM}" \
-        -f "${FINISH_DOCKERFILE}" \
-        --build-arg "STORE_IMAGE=${store_image}" \
-        --build-arg "PROFILE_NAME=${p}" \
-        -t "${final_image}" \
-        "${REPO_ROOT}"; then
-      log "[apps] ${p}: WARN finish build FAILED — store-image kept, no runnable image"
-      failed_finals+=( "${p}" ); continue
-    fi
-
-    emitted_finals+=( "${final_image}" )
-
-    if [[ -n "${PUSH_REGISTRY}" ]]; then
-      remote_final="${PUSH_REGISTRY}/${final_image#localhost/}"
-      "${CONTAINER_CLI}" tag "${final_image}" "${remote_final}" \
-        && "${CONTAINER_CLI}" push "${remote_final}" \
-        && log "[apps] ${p}: pushed ${remote_final}" \
-        || { log "[apps] ${p}: WARN push FAILED"; failed_finals+=( "${p}(push)" ); }
+    if [[ -f "${RESULTS_DIR}/${p}.ok" ]]; then
+      emitted_finals+=( "${APP_REPO}-${p}:${APP_TAG}" )
+      log "[apps] ${p}: OK"
+    else
+      phase="$(cat "${RESULTS_DIR}/${p}.fail" 2>/dev/null || echo '?')"
+      failed_finals+=( "${p}(${phase})" )
+      log "[apps] ${p}: FAILED (${phase}) — last lines:"
+      tail -25 "${RESULTS_DIR}/${p}.log" 2>/dev/null | sed "s/^/    [${p}] /" >&2 || true
     fi
   done
 fi

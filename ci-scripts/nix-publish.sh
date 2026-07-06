@@ -20,6 +20,8 @@
 #   CONFIG        path to nix-profiles.toml (default: ../bin/nix-profiles.toml)
 #   DOCKER        container CLI (default: docker)
 #   DRY_RUN       1 = print tags/pushes without executing
+#   NIX_PROFILES  space list to publish only those profiles (change-gating);
+#                 empty = publish every built image; "__none__" = publish nothing.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,6 +33,16 @@ DOCKER="${DOCKER:-docker}"
 DRY_RUN="${DRY_RUN:-0}"
 
 [[ -f "${CONFIG}" ]] || { echo "[nix-publish] config not found: ${CONFIG}" >&2; exit 1; }
+
+# Change-gating: restrict to specific profiles, everything, or nothing.
+FILTER="${NIX_PROFILES:-}"
+if [[ "${FILTER}" == "__none__" ]]; then
+  echo "[nix-publish] NIX_PROFILES=__none__ — nothing to publish"; exit 0
+fi
+in_filter() {  # $1=profile → 0 if it should be published
+  [[ -z "${FILTER}" ]] && return 0
+  local x; for x in ${FILTER}; do [[ "${x}" == "$1" ]] && return 0; done; return 1
+}
 
 # profile -> kasm_name (kasm_name overrides; default = profile name).
 kasm_name_for() {
@@ -60,6 +72,7 @@ echo "[nix-publish] ${#imgs[@]} image(s) → ${REGISTRY_NS}/<kasm_name>:${KASM_T
 pushed=0; failed=()
 for img in "${imgs[@]}"; do
   profile="${img#"${NIX_APP_REPO}"-}"; profile="${profile%:dev}"
+  in_filter "${profile}" || { echo "[nix-publish] ${profile}: skip (not in NIX_PROFILES)"; continue; }
   kn="$(kasm_name_for "${profile}")"
   dest="${REGISTRY_NS}/${kn}:${KASM_TAG}"
   echo "[nix-publish] ${profile} → ${dest}"

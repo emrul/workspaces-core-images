@@ -2,79 +2,107 @@
 # Kasm Nix app-image catalog — build & publish pipeline (forge DinD model)
 # ==========================================================================
 # Runs on the self-hosted `nix-builder` runner (forge box, containerd+nerdctl,
-# no host docker/podman engine) and drives the proven nix-portal
-# podman-in-podman harness. All heavy work happens inside quay.io/podman/stable
-# against the PERSISTENT podman store at $DIND_ROOT/containers — that warm store
-# (Nix dedup + podman layer cache) is the whole caching strategy, so reruns
-# fetch almost nothing.
+# no host docker/podman engine) and drives the nix-portal podman-in-podman
+# harness. All heavy work happens inside quay.io/podman/stable against the
+# PERSISTENT podman store at $DIND_ROOT/containers — that warm store (Nix dedup
+# + podman layer cache) is the caching strategy, so reruns fetch almost nothing.
 #
+#   prepare — change-gating: compute NIX_PROFILES from the commit diff
 #   base    — (manual) build core-minimal + nix-ubuntu into the store
-#   build   — build-nix-store-volume --emit-app-images (all GUI apps)
-#   publish — tag each to its kasm name + push to $REGISTRY_NS
+#   build   — build-nix-store-volume --emit-app-images (fat store + per-app,
+#             per-app builds parallelised by BUILD_PARALLEL)
+#   publish — tag each to its kasm name + push to $REGISTRY_NS (scoped)
+#
+# Change-gating (prepare → dotenv NIX_PROFILES):
+#   ""         whole catalog (shared/base changed, schedule, or unknown diff)
+#   "a b c"    only these apps (their src/ubuntu/install/nix/<app>/ changed)
+#   "__none__" nothing image-relevant changed → build+publish skip
+# A manual/trigger NIX_PROFILES variable overrides the computed value.
 #
 # Registry migration is one variable:
 #   REGISTRY_NS = $CI_REGISTRY_IMAGE  → GitLab Container Registry (default, now)
 #   REGISTRY_NS = docker.io/kasmweb   → Docker Hub kasmweb/<name>:nix (later)
 #
-# Runner requirements (see docs/nix-ci.md): tag `nix-builder`, shell executor,
-# passwordless sudo for nerdctl, and the persistent /srv/nix-build store.
-# The previous core-distro pipeline is preserved at ci-scripts/gitlab-ci-core.yml.
+# Runner: tag `nix-builder`, shell executor, passwordless sudo for nerdctl,
+# persistent /srv/nix-build. See docs/nix-ci.md. Old core-distro pipeline is at
+# ci-scripts/gitlab-ci-core.yml.
 # ==========================================================================
 
 variables:
   KASM_TAG: "nix"
   REGISTRY_NS: "$CI_REGISTRY_IMAGE"
-  # Optional space list to restrict the build, e.g. "onlyoffice vscode".
-  NIX_PROFILES: ""
+  NIX_PROFILES: ""          # manual override; else `prepare` computes it
+  BUILD_PARALLEL: "4"       # per-app build concurrency in build-nix-store-volume
   DIND_ROOT: "/srv/nix-build"
   DIND_IMG: "quay.io/podman/stable"
+  GIT_SUBMODULE_STRATEGY: normal
 
 default:
   tags: [nix-builder]
   interruptible: true
+  after_script:
+    # Orphan-on-cancel guard: `sudo nerdctl run` is root-owned and survives the
+    # runner killing the job's (gitlab-runner) process group on cancel/timeout.
+    # after_script runs on cancel/timeout/failure and force-removes the named
+    # container so it can't keep building and holding the podman store lock.
+    - sudo nerdctl rm -f "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" >/dev/null 2>&1 || true
 
 stages:
+  - prepare
   - base
   - build
   - publish
 
-# ── base: core-minimal + nix-ubuntu into the persistent store (on demand) ───
-# Manual + allow_failure so it never blocks build/publish; play it (or trigger
-# via the API) when the base dockerfiles / core install tree change. Normal
-# runs reuse the warm nix-ubuntu:dev already in the store.
+# ── prepare: change-gating → NIX_PROFILES dotenv ────────────────────────────
+prepare:
+  stage: prepare
+  needs: []
+  script:
+    - bash ci-scripts/nix-changed-profiles.sh | tee build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+
+# ── base: core-minimal + nix-ubuntu into the store (on demand) ──────────────
 base:
   stage: base
+  needs: []
   when: manual
   allow_failure: true
   script:
     - |
-      sudo nerdctl run --rm --privileged \
+      sudo nerdctl run --rm --privileged --name "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         "$DIND_IMG" bash /work/runs/nix-portal/dind-base.sh
 
-# ── build: deduped Nix store + one runnable image per GUI profile ───────────
+# ── build: fat store + per-app images (parallel) ────────────────────────────
 build:
   stage: build
+  needs: [prepare]
   timeout: 4h
   script:
     - |
-      sudo nerdctl run --rm --privileged \
+      if [ "${NIX_PROFILES:-}" = "__none__" ]; then echo "no image-relevant changes — skipping build"; exit 0; fi
+      echo "building profiles: ${NIX_PROFILES:-<all>}  (per-app parallel=${BUILD_PARALLEL})"
+      sudo nerdctl run --rm --privileged --name "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/root/.cache/nix-build-output" \
         -v "$CI_PROJECT_DIR:/work:ro" \
-        -e PROFILES="$NIX_PROFILES" \
+        -e PROFILES="$NIX_PROFILES" -e BUILD_PARALLEL="$BUILD_PARALLEL" \
         "$DIND_IMG" /work/runs/nix-portal/dind-build.sh
 
-# ── publish: tag kasm names + push (inside the store where the images live) ─
+# ── publish: tag kasm names + push (scoped to NIX_PROFILES) ──────────────────
 publish:
   stage: publish
+  needs: [prepare, build]
   script:
     - |
-      sudo nerdctl run --rm --privileged \
+      if [ "${NIX_PROFILES:-}" = "__none__" ]; then echo "no image-relevant changes — skipping publish"; exit 0; fi
+      sudo nerdctl run --rm --privileged --name "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
-        -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" \
+        -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" -e NIX_PROFILES="$NIX_PROFILES" \
         -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
         "$DIND_IMG" bash -c '
           set -euo pipefail
