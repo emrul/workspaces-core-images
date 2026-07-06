@@ -1,8 +1,9 @@
 # GitLab CI: building & publishing the Kasm Nix app catalog
 
-`.gitlab-ci.yml` builds the deduped Nix store and one image per GUI app, then
-publishes each under Kasm's naming convention. This doc covers the pipeline,
-the runner it needs, the caching model, and the registry/naming scheme.
+`.gitlab-ci.yml` builds the deduped Nix store + one image per GUI app and
+publishes each under Kasm's naming convention. It runs on a self-hosted runner
+and drives the proven **nix-portal podman-in-podman** harness, so all heavy work
+happens inside `quay.io/podman/stable` against a persistent podman store.
 
 > The previous core-distro pipeline is preserved at
 > `ci-scripts/gitlab-ci-core.yml` (not run by this project).
@@ -11,88 +12,81 @@ the runner it needs, the caching model, and the registry/naming scheme.
 
 | Stage | Job | Does |
 |---|---|---|
-| `base` | `build-base` | `docker build` core-minimal (`dockerfile-kasm-core-minimal`) then `nix-ubuntu` (`dockerfile-nix-ubuntu`). |
-| `apps` | `build-apps` | `bin/build-nix-store-volume --emit-app-images` → one `localhost/nix-<profile>:dev` per GUI app (shared base/store layers deduped). |
-| `publish` | `publish` | `ci-scripts/nix-publish.sh` tags each to its kasm name and pushes to `$REGISTRY_NS`. |
+| `base` | `base` | **manual / `allow_failure`** — `runs/nix-portal/dind-base.sh` builds core-minimal + nix-ubuntu into the store. Play it when the base dockerfiles / core tree change; normal runs reuse the warm base. |
+| `build` | `build` | `runs/nix-portal/dind-build.sh` → `build-nix-store-volume --emit-app-images` → one `localhost/nix-<profile>:dev` per GUI app (shared layers deduped). |
+| `publish` | `publish` | inside the store: `podman login` the registry, then `ci-scripts/nix-publish.sh` tags each to its kasm name and pushes to `$REGISTRY_NS`. |
 
-CLI/library profiles (`node`, `python`, `terraform`, `claude-code`, …) have no
+CLI/library profiles (`node`, `python`, `terraform`, …) have no
 `custom_startup.sh`, so `--emit-app-images` never produces an image for them —
 they're automatically excluded from publish.
 
 ## Runner (this is the caching strategy)
 
-The heavy Nix build is only fast because state persists between runs, so use a
-**dedicated self-hosted runner on a persistent host**, not ephemeral shared
-runners.
+A dedicated **self-hosted runner on the forge box** (`ssh ubuntu@51.195.190.65`),
+already registered as **"Nix builder"** (tag `nix-builder`, shell executor).
+Forge is containerd + nerdctl with **no host docker/podman engine**, so the
+pipeline launches the build inside a privileged `quay.io/podman/stable`
+container (same as `runs/nix-portal/`). Caching = the **persistent podman store**
+bind-mounted from `/srv/nix-build/containers` (~200 GB warm): Nix dedup +
+`cache.nixos.org` + podman layer cache mean a no-change rerun fetches almost
+nothing. Build logs/STATUS land in `/srv/nix-build/output`.
 
-Requirements:
-- Tag **`nix-builder`** (matches `default.tags` in `.gitlab-ci.yml`).
-- `docker` (or `podman`) on `PATH`; a **shell executor** is simplest (the Nix
-  build already runs its heavy work inside a `nixos/nix` container).
-- A **persistent host** so two things stay warm across runs:
-  - the Nix store staging volume `nix-build-stage-<arch>` (Nix dedup → most
-    reruns fetch nothing from `cache.nixos.org`), and
-  - the local Docker layer cache (core/nix-ubuntu base builds become instant).
-- **One** builder is assumed — `base` images and the store volume are reused
-  locally by `apps`/`publish`. With multiple builders you'd need to push the
-  base + store-images to the registry and pull them per job.
-
-Register it against the project (Settings → CI/CD → Runners → New project runner
-→ copy the token):
+Runner setup (already done; recorded for reproducibility):
 
 ```sh
-gitlab-runner register \
-  --non-interactive \
-  --url https://gitlab.com/ \
-  --token <PROJECT_RUNNER_TOKEN> \
-  --executor shell \
-  --description "nix-builder (persistent, docker on PATH)"
-# then add the `nix-builder` tag to it in the runner settings.
+# on the forge host
+sudo curl -fsSL -o /usr/local/bin/gitlab-runner \
+  https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-linux-amd64
+sudo chmod +x /usr/local/bin/gitlab-runner
+sudo gitlab-runner install --user=gitlab-runner --working-directory=/home/gitlab-runner
+sudo gitlab-runner start
+# passwordless sudo for the DinD launcher:
+echo 'gitlab-runner ALL=(root) NOPASSWD: /usr/local/bin/nerdctl, /usr/bin/nerdctl' \
+  | sudo tee /etc/sudoers.d/gitlab-runner-nerdctl && sudo chmod 0440 /etc/sudoers.d/gitlab-runner-nerdctl
+# register (token from Project → Settings → CI/CD → Runners; tag it nix-builder):
+sudo gitlab-runner register --non-interactive --url https://gitlab.com \
+  --token <PROJECT_RUNNER_TOKEN> --executor shell --description "forge nix-builder (DinD)"
 ```
 
-The forge build host (`ssh ubuntu@51.195.190.65`, `/srv/nix-build`) already has
-exactly this shape and is the natural candidate.
+Single builder assumed — `build` and `publish` share the local store, so the
+built images are available to publish without a registry round-trip.
 
 ### GitLab caching primitives (complementary)
 
-- **`cache:`** — keyed/path-based, backed by S3/MinIO for cross-runner sharing.
-  Not used here (the persistent volume covers the big cache), but available for
-  smaller artifacts.
-- **BuildKit registry cache** — add `--cache-to/--cache-from type=registry,ref=…`
-  to the base builds if you ever move to ephemeral runners.
-- **`cache.nixos.org`** — upstream Nix binary cache, automatic. Stand up your
-  own (attic/S3) if you want your custom derivations cached across fresh hosts.
+`cache:` (S3/MinIO-backed) and BuildKit `--cache-to/--cache-from type=registry`
+are available if you ever add ephemeral runners, but aren't needed here — the
+persistent store covers it. `cache.nixos.org` is automatic; stand up your own
+(attic/S3) to cache custom derivations across fresh hosts.
 
 ## Registry & naming
 
 Published image = `<REGISTRY_NS>/<kasm_name>:<KASM_TAG>`.
 
 - `REGISTRY_NS` — defaults to `$CI_REGISTRY_IMAGE` (this project's GitLab
-  Container Registry, e.g. `registry.gitlab.com/kasm-technologies/labs-sandbox/kasm-nix`).
-  Migrate to Docker Hub later by setting **`REGISTRY_NS=docker.io/kasmweb`** (a
-  CI/CD variable) — no code change — plus a `docker login` for that registry.
+  Container Registry, `registry.gitlab.com/kasm-technologies/labs-sandbox/kasm-nix`).
+  Migrate to Docker Hub later by setting the CI/CD variable
+  **`REGISTRY_NS=docker.io/kasmweb`** (+ a registry login) — no code change.
 - `KASM_TAG` — `nix`.
-- `kasm_name` — the profile's `kasm_name` field in `bin/nix-profiles.toml` when
-  it differs from the profile name, else the profile name. Current overrides
-  (to match Kasm's Docker Hub): `vscode→vs-code`, `onlyoffice→only-office`,
-  `libreoffice→libre-office`, `torbrowser→tor-browser`.
+- `kasm_name` — the profile's `kasm_name` in `bin/nix-profiles.toml` when it
+  differs, else the profile name. Overrides to match Kasm's Docker Hub:
+  `vscode→vs-code`, `onlyoffice→only-office`, `libreoffice→libre-office`,
+  `torbrowser→tor-browser`.
 
 ## Running it
 
-- **Automatic**: push to the default branch → full build + publish.
-- **Subset**: set CI/CD variable `NIX_PROFILES="onlyoffice vscode"` (space list)
-  to build/publish only those.
-- **Manual**: run a pipeline from the UI/API (`web` source) on any branch — it
-  publishes too (handy for feature-branch cuts).
-- **Local dry-run** of just the publish mapping:
+- **Automatic**: push to the default branch (`kasm-nix`) → `build` then `publish`.
+- **Subset**: set CI/CD variable `NIX_PROFILES="onlyoffice vscode"` (space list).
+- **Manual base refresh**: play the `base` job (or run a `web` pipeline) after
+  changing the base dockerfiles / core install tree.
+- **Local publish dry-run** of the mapping:
   ```sh
-  REGISTRY_NS=registry.example/kasm-nix DRY_RUN=1 bash ci-scripts/nix-publish.sh
+  REGISTRY_NS=registry.example/kasm-nix DRY_RUN=1 DOCKER=podman bash ci-scripts/nix-publish.sh
   ```
 
 ## Notes
 
 - FHS/bubblewrap apps (OnlyOffice, Steam) need the `bwrap.json` seccomp profile
   at **run** time, not build — see `docs/seccomp-how-to.md`.
-- To add an app: add a `[profiles.<name>]` block (+ `kasm_name` if it differs)
-  and `src/ubuntu/install/nix/<name>/{launch,custom_startup.sh}`; the pipeline
-  picks it up automatically.
+- Add an app: `[profiles.<name>]` (+ `kasm_name` if it differs) and
+  `src/ubuntu/install/nix/<name>/{launch,custom_startup.sh}`; the pipeline picks
+  it up automatically.

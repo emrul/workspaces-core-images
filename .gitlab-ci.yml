@@ -1,81 +1,87 @@
 # ==========================================================================
-# Kasm Nix app-image catalog — build & publish pipeline
+# Kasm Nix app-image catalog — build & publish pipeline (forge DinD model)
 # ==========================================================================
-# Builds the deduped Nix store + one image per GUI app
-# (build-nix-store-volume --emit-app-images) and publishes each under Kasm's
-# naming convention as <REGISTRY_NS>/<kasm_name>:nix.
+# Runs on the self-hosted `nix-builder` runner (forge box, containerd+nerdctl,
+# no host docker/podman engine) and drives the proven nix-portal
+# podman-in-podman harness. All heavy work happens inside quay.io/podman/stable
+# against the PERSISTENT podman store at $DIND_ROOT/containers — that warm store
+# (Nix dedup + podman layer cache) is the whole caching strategy, so reruns
+# fetch almost nothing.
+#
+#   base    — (manual) build core-minimal + nix-ubuntu into the store
+#   build   — build-nix-store-volume --emit-app-images (all GUI apps)
+#   publish — tag each to its kasm name + push to $REGISTRY_NS
 #
 # Registry migration is one variable:
 #   REGISTRY_NS = $CI_REGISTRY_IMAGE  → GitLab Container Registry (default, now)
 #   REGISTRY_NS = docker.io/kasmweb   → Docker Hub kasmweb/<name>:nix (later)
 #
-# RUNNER: needs a self-hosted runner tagged `nix-builder` on a PERSISTENT host
-# with `docker` (or podman) on PATH. Persistence is the whole caching strategy:
-#   - the Nix store staging volume (nix-build-stage-<arch>) stays warm between
-#     runs (Nix dedup → most reruns fetch nothing), and
-#   - the local Docker layer cache keeps the core/nix-ubuntu base builds instant.
-# A single builder is assumed (images built in `base` are reused locally by
-# `apps`/`publish`). See docs/nix-ci.md for runner registration + config.
-#
+# Runner requirements (see docs/nix-ci.md): tag `nix-builder`, shell executor,
+# passwordless sudo for nerdctl, and the persistent /srv/nix-build store.
 # The previous core-distro pipeline is preserved at ci-scripts/gitlab-ci-core.yml.
 # ==========================================================================
 
 variables:
   KASM_TAG: "nix"
-  # Publish namespace. Defaults to this project's GitLab Container Registry.
   REGISTRY_NS: "$CI_REGISTRY_IMAGE"
-  CORE_MINIMAL_IMG: "localhost/kasm-core-ubuntu-noble-minimal:dev"
-  NIX_UBUNTU_IMG: "localhost/nix-ubuntu:dev"
-  DOCKER_BUILDKIT: "1"
-  GIT_SUBMODULE_STRATEGY: normal
-  # Optional: restrict the app build to a subset, e.g. "onlyoffice vscode".
-  # Empty = the whole catalog in nix-profiles.toml.
+  # Optional space list to restrict the build, e.g. "onlyoffice vscode".
   NIX_PROFILES: ""
+  DIND_ROOT: "/srv/nix-build"
+  DIND_IMG: "quay.io/podman/stable"
 
 default:
   tags: [nix-builder]
   interruptible: true
-  retry: 1
 
 stages:
   - base
-  - apps
+  - build
   - publish
 
-# ── base: core-minimal + nix-ubuntu (local Docker layer cache keeps this fast)
-build-base:
+# ── base: core-minimal + nix-ubuntu into the persistent store (on demand) ───
+# Manual + allow_failure so it never blocks build/publish; play it (or trigger
+# via the API) when the base dockerfiles / core install tree change. Normal
+# runs reuse the warm nix-ubuntu:dev already in the store.
+base:
   stage: base
+  when: manual
+  allow_failure: true
   script:
     - |
-      docker build \
-        --build-arg BASE_IMAGE=ubuntu:24.04 \
-        --build-arg DISTRO=ubuntu \
-        --build-arg BG_IMG=bg_noble.png \
-        -f dockerfile-kasm-core-minimal -t "$CORE_MINIMAL_IMG" .
-    - |
-      docker build \
-        --build-arg BASE_IMAGE="$CORE_MINIMAL_IMG" \
-        -f dockerfile-nix-ubuntu -t "$NIX_UBUNTU_IMG" .
+      sudo nerdctl run --rm --privileged \
+        -v "$DIND_ROOT/containers:/var/lib/containers" \
+        -v "$CI_PROJECT_DIR:/work:ro" \
+        "$DIND_IMG" bash /work/runs/nix-portal/dind-base.sh
 
-# ── apps: deduped Nix store + one runnable image per GUI profile ────────────
-# The warm nix-build-stage-<arch> volume on the runner host is the cache; a
-# no-change rerun re-fetches almost nothing.
-build-apps:
-  stage: apps
-  timeout: 3h
+# ── build: deduped Nix store + one runnable image per GUI profile ───────────
+build:
+  stage: build
+  timeout: 4h
   script:
-    - EXTRA=""; for p in $NIX_PROFILES; do EXTRA="$EXTRA --profile $p"; done
-    - bin/build-nix-store-volume --emit-app-images --app-base-image "$NIX_UBUNTU_IMG" $EXTRA
+    - |
+      sudo nerdctl run --rm --privileged \
+        -v "$DIND_ROOT/containers:/var/lib/containers" \
+        -v "$DIND_ROOT/output:/root/.cache/nix-build-output" \
+        -v "$CI_PROJECT_DIR:/work:ro" \
+        -e PROFILES="$NIX_PROFILES" \
+        "$DIND_IMG" /work/runs/nix-portal/dind-build.sh
 
-# ── publish: tag kasm names + push ─────────────────────────────────────────
+# ── publish: tag kasm names + push (inside the store where the images live) ─
 publish:
   stage: publish
   script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-    - bash ci-scripts/nix-publish.sh
+    - |
+      sudo nerdctl run --rm --privileged \
+        -v "$DIND_ROOT/containers:/var/lib/containers" \
+        -v "$CI_PROJECT_DIR:/work:ro" \
+        -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" \
+        -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
+        "$DIND_IMG" bash -c '
+          set -euo pipefail
+          echo "$REG_PASS" | podman login "$REG" -u "$REG_USER" --password-stdin
+          DOCKER=podman bash /work/ci-scripts/nix-publish.sh
+        '
   rules:
-    # Publish from the default branch, or any pipeline started manually / via the
-    # API (so you can cut a publish from a feature branch on demand).
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
