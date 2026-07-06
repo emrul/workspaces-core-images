@@ -52,6 +52,31 @@ pkgs = [
 [promote]
 threshold_percent = 80
 
+# Named intermediate layers, inserted between [base] and per-profile deltas
+# in the OCI image. Each layer's closure is subtracted from any profile whose
+# own closure is a superset, so shared runtimes don't repeat per app.
+#
+# Caveat on electron: most Electron apps in nixpkgs (Slack, VSCode, Discord,
+# Obsidian) vendor their own bundled Electron binary and do NOT depend on
+# nixpkgs#electron at runtime. The electron layer only deduplicates apps that
+# genuinely reference pkgs.electron as a store dependency. Check with:
+#   nix-store -qR /nix/var/nix/profiles/<app> | grep electron
+# before assuming dedup will occur.
+#
+# Qt6 is a better candidate for the current catalog: telegram-desktop, vlc,
+# qbittorrent all share pkgs.qt6.* closures (built from source in nixpkgs),
+# so those paths do appear verbatim in every Qt6 app's closure.
+[layers.electron]
+pkgs = ["nixpkgs#electron"]
+
+[layers.qt6]
+pkgs = [
+    "nixpkgs#qt6.qtbase",
+    "nixpkgs#qt6.qtdeclarative",
+    "nixpkgs#qt6.qtsvg",
+    "nixpkgs#qt6.qtwayland",
+]
+
 # One section per profile. Profile names become directory names under
 # /nix/var/nix/profiles/ in the final volume.
 
@@ -61,6 +86,10 @@ ref  = "github:NixOS/nixpkgs/nixos-unstable"
 
 [profiles.onlyoffice]
 pkgs      = ["nixpkgs#onlyoffice-desktopeditors"]
+# Track unstable: 25.05 ships 9.0.0.172, whose CEF null-derefs at startup on
+# headless KasmVNC (stat(NULL) after an empty /changes/ doc path). Testing a
+# newer upstream rev to see if the crash is fixed. Revert to default if not.
+ref       = "github:NixOS/nixpkgs/nixos-unstable"
 # nixpkgs ships an x86_64-linux binary only — skip on arm64 builds.
 # Drop or extend the list once an upstream arm64 build exists.
 platforms = ["amd64"]

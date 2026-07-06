@@ -1,0 +1,68 @@
+#!/bin/sh
+# onlyoffice-launch — launcher for the Nix-built OnlyOffice DesktopEditors
+# single-app image.
+#
+# OnlyOffice DesktopEditors embeds CEF (Chromium Embedded Framework) inside a Qt
+# shell. On KasmVNC's headless Xvnc it must render in software; the app ships its
+# own SwiftShader (libvk_swiftshader.so) for exactly this. The winning recipe is
+# to keep CEF's GPU *process* running but point ANGLE at SwiftShader:
+#     --use-gl=angle --use-angle=swiftshader
+# NOT --disable-gpu — that kills the renderer/GPU child process, so no document
+# content is ever painted (window stays 10x10). The Qt shell also needs to stay
+# off the desktop-GLX probe (QT_XCB_GL_INTEGRATION=none + software Qt), or it
+# segfaults on "No XVisualInfo for QSurfaceFormat".
+#
+# GPU acceleration is deliberately NOT used here (unlike chrome-launch): OnlyOffice
+# bundles its OWN Vulkan loader (no WSI) inside its bwrap FHS sandbox, which
+# shadows the Nix vulkan-loader that nix-gpu-run puts on LD_LIBRARY_PATH, so
+# ANGLE-Vulkan fails with "requested extension is not supported". Software
+# SwiftShader is the reliable path and is fine for a document editor. Re-enabling
+# the GPU path needs a way to force the WSI-capable loader into the sandbox.
+#
+# nixpkgs wraps OnlyOffice in a bubblewrap FHS sandbox: bwrap needs unprivileged
+# user namespaces AND mount/MS_SLAVE/pivot_root, so the workspace must run with
+# seccomp=unconfined (chrome.json is NOT enough — it permits userns clone but not
+# bwrap's mounts → "bwrap: Failed to make / slave").
+#
+# custom_startup.sh runs this foreground in its respawn loop (with
+# maximize_window.sh matching MAXIMIZE_NAME=DesktopEditors) — do NOT background
+# the exec: bwrap runs --die-with-parent and CEF crashes without a real stdout /
+# controlling context.
+set -u
+
+PROFILE=/nix/var/nix/profiles/onlyoffice
+BIN="${PROFILE}/bin/onlyoffice-desktopeditors"
+
+# ── dbus + XDG_RUNTIME_DIR (mirror nix-launch) ─────────────────────────
+# CEF needs a session bus and a runtime dir; container-init-spawned services
+# don't get them. /tmp/kasm-dbus.env is written by kasm-setup.service.
+[ -f /tmp/kasm-dbus.env ] && {
+    . /tmp/kasm-dbus.env 2>/dev/null
+    [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && export DBUS_SESSION_BUS_ADDRESS
+    [ -n "${DBUS_SESSION_BUS_PID:-}" ]     && export DBUS_SESSION_BUS_PID
+}
+if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+    uid=$(id -u)
+    XDG_RUNTIME_DIR="/run/user/${uid}"
+    [ -d "${XDG_RUNTIME_DIR}" ] || \
+        install -d -m 0700 "${XDG_RUNTIME_DIR}" 2>/dev/null || \
+        mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null
+    export XDG_RUNTIME_DIR
+fi
+
+# Drop Kasm's baked LD_LIBRARY_PATH: it points at the system glibc dir, which
+# mixes into the Nix binary's loader → "__vdso_gettimeofday: invalid mode for
+# dlopen()". Same rationale as nix-launch.
+unset LD_LIBRARY_PATH
+
+# Software render env for the Qt shell (keep it off the desktop-GLX probe).
+export QT_XCB_GL_INTEGRATION=none
+export QT_OPENGL=software
+export QT_QUICK_BACKEND=software
+export QSG_RHI_BACKEND=software
+export LIBGL_ALWAYS_SOFTWARE=1
+
+echo "onlyoffice-launch: software render (CEF GPU process on SwiftShader)" >&2
+exec "${BIN}" --system-title-bar \
+    --use-gl=angle --use-angle=swiftshader \
+    "$@"

@@ -31,6 +31,40 @@ Everything else — `mount`, `umount`, `bpf`, `perf_event_open`,
 the Docker default. Default action is still `SCMP_ACT_ERRNO`, so any
 syscall not explicitly allowed returns `EPERM`.
 
+## FHS / bubblewrap apps: `bwrap.json`
+
+`chrome.json` is enough for tools whose sandbox only needs a user
+namespace (Chrome, Electron). It is **not** enough for apps wrapped in a
+**bubblewrap FHS environment** (`buildFHSEnv` in nixpkgs — e.g.
+`onlyoffice-desktopeditors`, `steam`). Bubblewrap also has to *build* its
+FHS mount namespace, which needs the mount family that `chrome.json`
+leaves gated on `CAP_SYS_ADMIN`. Under `chrome.json` such apps die at
+startup with:
+
+```
+bwrap: Failed to make / slave: Operation not permitted
+```
+
+(and under the stock Docker profile, even earlier: `bwrap: No
+permissions to creating new namespace`).
+
+`src/common/seccomp/bwrap.json` is `chrome.json` **plus** an
+unconditional allow for the mount family bubblewrap uses:
+`mount`, `umount`, `umount2`, `pivot_root`, `move_mount`, `open_tree`,
+`fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr`. (Note
+`pivot_root` is absent from the Docker default / `chrome.json`
+altogether; `clone`/`clone3`/`unshare`/`setns` are already unconditional
+in the base.) Everything else — host prerequisite, AppArmor note, and the
+"Using the profile" recipes below — is identical; just swap the filename.
+
+- Use **`bwrap.json`** for FHS/bubblewrap workspaces (OnlyOffice, Steam).
+- Keep **`chrome.json`** for standalone Chromium browsers — it does not
+  allow `mount`/`pivot_root`, so it stays tighter (least privilege).
+
+`bwrap.json` is a strict superset of `chrome.json`, so it also works for
+Chrome; the split exists only to avoid handing the mount family to
+workspaces that don't need it.
+
 ## Host prerequisite: unprivileged user namespaces
 
 The host kernel must permit unprivileged user-namespace creation.

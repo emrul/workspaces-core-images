@@ -6,16 +6,34 @@ pinning, multi-layer OCI image, etc.) see
 For the per-image Dockerhub-style description, see
 [`docs/core-nix-ubuntu/README.md`](core-nix-ubuntu/README.md).
 
-The PoC has two images:
+Three images make up the system. You always need the first two; the third
+is for the single-app public catalog (optional, depending on topology):
 
 | Image | Purpose | Built by |
 |---|---|---|
-| `nix-ubuntu` | Runtime container — ubuntu core + activation hooks | `dockerfile-nix-ubuntu` |
-| `nix-store-<arch>` | Read-only Nix store volume (the apps) | `bin/build-nix-store-volume` |
+| `nix-ubuntu` | Runtime base — ubuntu core + activation hooks | `dockerfile-nix-ubuntu` |
+| `nix-store-<arch>` | Shared read-only Nix store (all profiles) | `bin/build-nix-store-volume` |
+| `nix-<app>` (e.g. `nix-chrome`) | Self-contained single-app image | `bin/build-nix-store-volume --emit-app-images` |
 
-The runtime image stays tiny (~50 MiB over `core-ubuntu-noble`). All
-the heavyweight apps live in the store image, mounted read-only at
-`/nix` at run time.
+**One pipeline, two topologies.** `bin/build-nix-store-volume` builds a single
+partitioned Nix store and emits both shapes below from it — the base and shared
+layers dedupe across the fat store and every per-app image. You run one build,
+not two.
+
+- **Shared store + thin images** (`nix-ubuntu` + mounted `nix-store-<arch>`):
+  one store image mounted read-only at `/nix` across many thin `nix-ubuntu`
+  containers. `NIX_APP_PROFILES` selects which apps activate at runtime.
+  Best for multi-app desktop bundles. (Default output of the script.)
+
+- **Baked per-app images** (`nix-<app>`): the app's store is baked in — no
+  runtime mount. `FROM nix-ubuntu`, so the activation machinery is inherited.
+  Best for the single-app public catalog; matches Kasm's one-image-per-workspace
+  UX. (Emitted by `--emit-app-images`; see §1.4.)
+
+> The standalone `dockerfile-nix-app` was the chrome/angelfish proof of
+> concept. It still builds a single app, but bakes the whole closure as one
+> un-shareable layer with no dedup — superseded by `--emit-app-images`. Use it
+> only for a quick one-off outside the store pipeline.
 
 ---
 
@@ -119,7 +137,97 @@ To wipe the cache without running a build:
 podman volume rm nix-build-stage-arm64   # or -amd64
 ```
 
-### 1.4 Push to a registry (required for k8s, optional for local podman/docker)
+### 1.4 Build per-app baked images (`--emit-app-images`)
+
+Per-app images are emitted from the store pipeline. They are self-contained (no
+runtime `/nix` mount) and drop into the Kasm workspace catalog exactly like the
+apt-based `kasmweb/chrome` image — but their base and shared layers dedupe with
+the fat store and every other app, and they come from the *same* Nix store
+(one fetch, not one per app).
+
+Profiles come from `bin/nix-profiles.toml`. The base image (`nix-ubuntu`) must
+already exist in your container store. The script builds each image directly
+into the container engine's overlay store (copy-on-write, shared layer cache —
+the base/shared layers are built once and reused), so no per-app tar is written.
+
+> On a **containerd/nerdctl host** (no podman/docker engine — e.g. the Portal
+> dev box), run the whole thing inside a privileged podman-in-podman container.
+> The ready-made harness + runbook is in [`runs/nix-portal/`](../runs/nix-portal/README.md)
+> (`dind-launch.sh` / `dind-check.sh` / `dind-push.sh`).
+
+```bash
+# Emit one image per selected profile (and the fat store as a side effect).
+bin/build-nix-store-volume --emit-app-images --profile chrome --profile vlc
+#  → localhost/nix-store/chrome:dev, localhost/nix-store/vlc:dev   (store-images)
+#  → localhost/nix-chrome:dev,        localhost/nix-vlc:dev          (runnable)
+
+# All profiles in the toml:
+bin/build-nix-store-volume --emit-app-images
+```
+
+Useful flags: `--app-base-image REF` (default `localhost/nix-ubuntu:dev`),
+`--app-repo REPO` (default `localhost/nix`), `--push REGISTRY`, `--arch`.
+
+> **`requires` must be in the build set.** A profile with `requires = ["node"]`
+> (e.g. the AI CLIs) needs `node` built too. `--profile claude-code --profile node`,
+> or a full build (all profiles selected). Otherwise the app image is emitted
+> *without* its required profile and the script warns.
+
+**Per-app wiring** lives under `src/ubuntu/install/nix/<PROFILE_NAME>/`:
+
+```
+launch            — launcher: sets PROFILE path, execs nix-launch (maximise here)
+custom_startup.sh — Kasm startup loop (LAUNCH_URL, APP_ARGS, DISABLE_CUSTOM_STARTUP,
+                    and the docker-exec open contract -g/-a/-u)
+post-build.sh     — optional: app-specific build step (managed policies, etc.)
+```
+
+The host finish build (`dockerfile-nix-app-finish`) copies these onto the
+store-image. `chrome` and `angelfish` ship bespoke versions (browser URL
+contract, QtWebEngine GPU quirks, maximise strategy); other apps fall back to a
+generic template. Note the extension-point contract:
+
+> **CEF / Electron apps** (OnlyOffice, Slack, VS Code, Discord, …) render in
+> **software** on headless Xvnc via their bundled SwiftShader. Their launcher
+> must keep the GPU *process* alive but point ANGLE at SwiftShader —
+> `--use-gl=angle --use-angle=swiftshader` (NOT `--disable-gpu`, which kills the
+> renderer so nothing paints), plus `QT_XCB_GL_INTEGRATION=none QT_OPENGL=software`
+> for any Qt shell. See `src/ubuntu/install/nix/onlyoffice/launch` for the
+> reference. Apps wrapped in a **bubblewrap FHS env** (`buildFHSEnv`: OnlyOffice,
+> Steam) additionally require the **`bwrap.json`** seccomp profile, not
+> `chrome.json` — see `docs/seccomp-how-to.md` § "FHS / bubblewrap apps".
+
+- The **base** `nix-ubuntu` ships **no** `custom_startup.sh` — it stays the
+  user's documented extension point (container-init runs it iff present).
+- A **leaf** single-app image's `custom_startup.sh` *is* its launcher, and the
+  Kasm agent invokes that path for `docker exec` opens — so single-app images
+  occupy it (overriding it downstream = taking over the app, same as upstream).
+- To add a background service without touching the launcher, drop a
+  container-init unit at `/etc/container-init.d/<name>.service` (the advanced
+  extension point).
+
+**Adding to CI** — list the profile under the store-volume job's
+`--emit-app-images` selection (no per-app dockerfile entry needed); add the
+app's `changeFiles` for `src/ubuntu/install/nix/<name>/**` and the shared
+launcher scripts.
+
+#### Escape hatch: `dockerfile-nix-app` (one-off, no dedup)
+
+For a quick standalone build of a single app *outside* the store pipeline — the
+original chrome/angelfish PoC path. Bakes the whole closure as one un-shareable
+layer; **not** for the catalog.
+
+```bash
+docker build -f dockerfile-nix-app \
+    --build-arg NIX_ATTR=google-chrome \
+    --build-arg PROFILE_NAME=chrome \
+    --build-arg NIXPKGS_REV=ac62194c3917d5f474c1a844b6fd6da2db95077d \
+    --build-arg GPU_SUPPORT=1 \
+    --build-arg BASE_IMAGE=localhost/nix-ubuntu:dev \
+    -t localhost/nix-chrome:dev .
+```
+
+### 1.5 Push to a registry (required for k8s, optional for local podman/docker)
 
 ```bash
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
@@ -136,7 +244,7 @@ The store image is hefty (~3 GiB total); the first push takes a while.
 Subsequent pushes only emit changed layers — bump Chromium alone and
 only its ~600 MiB layer crosses the wire.
 
-### 1.5 Build a k8s deployment manifest
+### 1.6 Build a k8s deployment manifest
 
 K8s 1.33+ supports OCI `image` volumes natively (GA in 1.36). For
 older clusters, see [§5 troubleshooting](#5-troubleshooting) for the
@@ -194,6 +302,9 @@ podman run --rm -d --name nix-app \
     # If using chrome/chromium be sure to copy seccomp profile from [chrome.json](../src/common/seccomp/chrome.json)
     # to a location on host (e.g. `/etc/containers/seccomp/chrome.json`)
     # --security-opt seccomp=/etc/containers/seccomp/chrome.json \
+    # For bubblewrap-FHS apps (OnlyOffice, Steam) use bwrap.json instead of
+    # chrome.json (it also allows the mount family bubblewrap needs):
+    # --security-opt seccomp=/etc/containers/seccomp/bwrap.json --security-opt apparmor=unconfined \
     -e NIX_APP_PROFILES=claude-code,vscode,angelfish,node,python,obsidian,chromium \
     -e VNC_PW=password \
     -p 6901:6901 \
@@ -450,6 +561,9 @@ Two internal profiles also ship in the volume but aren't user-selectable:
 | Auto-promote warnings on every build | Same store paths appear across many profiles | Edit `[base]` in your config to include them. Trade-off: bigger base layer for thinner profile deltas. See design doc § "Update cadence" caveat for the unstable-vs-base ref interaction. |
 | `nix-app deactivate node` doesn't actually remove node | Another active profile `requires` it | Deactivate the parent first (e.g., `nix-app deactivate claude-code`). The CLI prints this when it happens. |
 | Chromium update pulled the whole image | Bumped `[nixpkgs].ref` instead of `[profiles.chromium].ref` | Use the per-profile ref override; base ref only at nixpkgs stable releases. |
+| `bwrap: Failed to make / slave: Operation not permitted` | FHS/bubblewrap app under `chrome.json` (mount family gated on `CAP_SYS_ADMIN`) | Run with `bwrap.json` seccomp instead — see `docs/seccomp-how-to.md` § "FHS / bubblewrap apps". |
+| CEF/Electron app window stays 10×10 / blank, no content | Launcher passes `--disable-gpu`, killing the renderer process | Use `--use-gl=angle --use-angle=swiftshader` (keep the GPU process, software backend); see `src/ubuntu/install/nix/onlyoffice/launch`. |
+| CEF app crash-loops at `gtk_init` (SIGSEGV / `int3 in libcef`) | Upstream app bug at the pinned version (e.g. OnlyOffice 9.0.0.172 null-derefs on an empty doc path) | Bump the per-profile `ref` to `nixos-unstable` for a newer build (OnlyOffice 9.1.0 fixed it); re-run the build once if it hits a nix profile file-collision (stale profile is pruned on the failed run). |
 
 ---
 

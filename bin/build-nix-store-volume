@@ -24,13 +24,19 @@ set -euo pipefail
 # ───── Defaults ────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/nix-profiles.toml"
-NIX_IMAGE_DEFAULT="nixos/nix:2.28.4"
+# Fully-qualified: podman with short-name-mode=enforcing (e.g. the podman/stable
+# DinD image) cannot resolve a bare "nixos/nix" without a TTY prompt.
+NIX_IMAGE_DEFAULT="docker.io/nixos/nix:2.28.4"
 ONLY_PROFILES=()
 TAG=""
 PUSH_REGISTRY=""
 ARCH=""
 PRUNE_STAGE=0
 KEEP_OUTPUT=0
+EMIT_APP_IMAGES=0
+APP_BASE_IMAGE="localhost/nix-ubuntu:dev"
+APP_REPO="localhost/nix"
+APP_TAG=""
 
 # ───── Helpers ─────────────────────────────────────────────────────────
 log()  { printf '%s %s\n' "[build-nix-store-volume]" "$*" >&2; }
@@ -56,6 +62,25 @@ build-nix-store-volume — build a Nix-store OCI image
   --keep-output        Keep \$HOME/.cache/nix-build-output around
                        after the build for forensics. By default the
                        context tar is removed once consumed.
+  --emit-app-images    In addition to the fat store-mount image, emit
+                       one runnable store-image per selected profile,
+                       FROM the --app-base-image. Each image carries the
+                       base layer, the shared layers it actually uses,
+                       its required-profile deltas, and its own delta as
+                       *separate* OCI layers — so the base + shared
+                       layers dedupe across every app at the registry.
+                       App wiring (launch / custom_startup / single-app
+                       XFCE) is layered on afterwards by a host finish
+                       build (dockerfile-nix-app-finish); this step only
+                       produces the ${APP_REPO}-store/<profile> images.
+  --app-base-image REF nix-ubuntu base for the per-app store-images
+                       (default: ${APP_BASE_IMAGE}). Must exist in the
+                       host container store; it is fed to the inner
+                       build as a docker-archive so no store path ever
+                       lands on the host filesystem.
+  --app-repo REPO      Repo prefix for emitted images
+                       (default: ${APP_REPO}; store-images go to
+                       <REPO>-store/<profile>:<tag>).
   -h, --help           This text
 
 Host requirements: podman (preferred) OR docker. That's it.
@@ -76,6 +101,9 @@ while [[ $# -gt 0 ]]; do
     --nix-image)    NIX_IMAGE_DEFAULT="$2"; shift 2 ;;
     --prune-stage)  PRUNE_STAGE=1; shift ;;
     --keep-output)  KEEP_OUTPUT=1; shift ;;
+    --emit-app-images) EMIT_APP_IMAGES=1; shift ;;
+    --app-base-image)  APP_BASE_IMAGE="$2"; shift 2 ;;
+    --app-repo)        APP_REPO="$2"; shift 2 ;;
     -h|--help)      usage; exit 0 ;;
     *)              usage >&2; fail "unknown arg: $1" ;;
   esac
@@ -101,6 +129,9 @@ fi
 [[ -z "${TAG}" ]] && TAG="localhost/nix-store-${ARCH}:dev"
 PLATFORM="linux/${ARCH}"
 STAGE_VOLUME="nix-build-stage-${ARCH}"
+# Per-app store-images reuse the fat-store tag's :suffix (e.g. :dev).
+APP_TAG="${TAG##*:}"
+[[ "${APP_TAG}" == "${TAG}" ]] && APP_TAG="dev"
 
 # ───── Config ──────────────────────────────────────────────────────────
 [[ -f "${CONFIG_FILE}" ]] || fail "config not found: ${CONFIG_FILE}"
@@ -114,7 +145,8 @@ cleanup() {
   if [[ "${KEEP_OUTPUT}" == 1 ]]; then
     log "output kept at ${OUTPUT_DIR}"
   else
-    rm -f "${OUTPUT_DIR}/image.tar" "${INNER_SCRIPT}"
+    rm -f "${OUTPUT_DIR}/image.tar" "${INNER_SCRIPT}" \
+          "${OUTPUT_DIR}/base-image.tar" "${OUTPUT_DIR}"/app-*.tar
   fi
 }
 trap cleanup EXIT
@@ -127,6 +159,10 @@ log "platform:    ${PLATFORM}"
 log "container:   ${CONTAINER_CLI}"
 log "nix image:   ${NIX_IMAGE_DEFAULT}"
 log "stage vol:   ${STAGE_VOLUME} (persistent; --prune-stage to reset)"
+if [[ "${EMIT_APP_IMAGES}" == 1 ]]; then
+  log "emit apps:   yes (store-images → ${APP_REPO}-store/<profile>:${APP_TAG})"
+  log "app base:    ${APP_BASE_IMAGE}"
+fi
 
 # ───── Ensure named volume exists + seeded with /nix from image ───────
 # The volume is mounted at /nix in the inner build, so the image's
@@ -183,6 +219,12 @@ KASM_GCROOT_DIR=/nix/var/nix/gcroots
 rm -rf "${STAGE_IN}"
 mkdir -p "${STAGE_IN}/closures" "${STAGE_IN}/layers"
 
+# Keep temp on the ext4-backed named volume (same fs as the staging tree)
+# rather than the container's small/overlay /tmp — avoids filling the inner
+# container's writable layer during partitioning.
+export TMPDIR="${STAGE_IN}/tmp"
+mkdir -p "${TMPDIR}"
+
 # Profiles + gcroots live directly under /nix/var/nix/{profiles,gcroots}/
 # (no namespace subdir). The seeded nixos/nix volume already ships
 # /nix/var/nix/profiles/{default,per-user/...} and the matching gcroots;
@@ -221,14 +263,10 @@ command -v jq      >/dev/null 2>&1 || needs="${needs} nixpkgs#jq"
 # `set --` instead, but keep gawk available as a helper in case any
 # future addition reaches for it.
 command -v awk     >/dev/null 2>&1 || needs="${needs} nixpkgs#gawk"
-# buildah: assembles the final multi-layer OCI image from the staging
-# tree (Dockerfile + layer dirs) and exports it as a docker-archive
-# tarball. We use buildah instead of `podman build - < context.tar`
-# because podman 4.8 bufio.Scanner trips with "token too long" parsing
-# a multi-GB stdin tar (it tries to read the binary tar as a line of
-# Dockerfile text). buildah ingests the staging dir as a real
-# directory context and avoids that path entirely.
-command -v buildah >/dev/null 2>&1 || needs="${needs} nixpkgs#buildah"
+# NOTE: image assembly no longer happens here. The inner build only stages
+# the layer tree + Dockerfiles into the named volume; the OUTER podman builds
+# them directly into its overlay store (copy-on-write, layer cache, no tar
+# round-trip). So buildah is no longer installed in this container.
 
 if [ -n "${needs}" ]; then
   echo "[inner] installing helper tools:${needs}" >&2
@@ -338,18 +376,62 @@ if jq -e '.gpu.pkgs | length > 0' "${STAGE_IN}/profiles.json" >/dev/null 2>&1; t
   ln -sfn "${KASM_PROFILE_DIR}/_gpu" "${KASM_GCROOT_DIR}/_gpu"
 fi
 
+# ── 4c. named intermediate layers (optional) ───────────────────────────
+# Build each [layers.<name>] as an internal profile (_layer-<name>).
+# Their closures are subtracted from every profile that contains them,
+# so shared runtimes (Electron, Qt6, …) land in one dedicated OCI layer
+# rather than being repeated in each app's delta.
+# Skipped cleanly when no [layers] section is present.
+LAYER_NAMES=""
+if jq -e '(.layers // {}) | length > 0' "${STAGE_IN}/profiles.json" >/dev/null 2>&1; then
+  echo "[inner] building intermediate layers" >&2
+  while IFS= read -r lname; do
+    [ -z "$lname" ] && continue
+    l_ref="$(jq -r --arg l "$lname" '.layers[$l].ref // empty' \
+                "${STAGE_IN}/profiles.json")"
+    [ -z "$l_ref" ] && l_ref="${DEFAULT_REF}"
+    echo "  (layer ${lname} uses ref ${l_ref})" >&2
+    collect_attrs ".layers.\"$lname\".pkgs[]" "$l_ref" \
+      | xargs nix --extra-experimental-features 'nix-command flakes' \
+          profile install --impure \
+          --profile "${KASM_PROFILE_DIR}/_layer-${lname}"
+    ln -sfn "${KASM_PROFILE_DIR}/_layer-${lname}" \
+            "${KASM_GCROOT_DIR}/_layer-${lname}"
+    LAYER_NAMES="${LAYER_NAMES} ${lname}"
+  done <<EOF
+$(jq -r '(.layers // {}) | keys[]' "${STAGE_IN}/profiles.json")
+EOF
+fi
+
 # ── 5. named profiles ──────────────────────────────────────────────────
+# Resilient: a profile whose `nix profile install` fails (broken/renamed attr,
+# build failure, unfree gate, …) is recorded and SKIPPED rather than aborting
+# the whole catalog. selected.txt is rewritten to the profiles that actually
+# built, so every downstream step (closures, partition, emit) operates only on
+# successes. Failures are summarised at the end and written to failed.txt.
+: > "${STAGE_IN}/built.txt"
+: > "${STAGE_IN}/failed.txt"
 while IFS= read -r p; do
   [ -z "$p" ] && continue
   p_ref="$(jq -r --arg p "$p" '.profiles[$p].ref // empty' \
               "${STAGE_IN}/profiles.json")"
   [ -z "$p_ref" ] && p_ref="${DEFAULT_REF}"
   echo "  ($p uses ref $p_ref)" >&2
-  collect_attrs ".profiles.\"$p\".pkgs[]" "$p_ref" \
-    | xargs nix --extra-experimental-features 'nix-command flakes' \
-        profile install --impure --profile "${KASM_PROFILE_DIR}/$p"
-  ln -sfn "${KASM_PROFILE_DIR}/$p" "${KASM_GCROOT_DIR}/$p"
+  if collect_attrs ".profiles.\"$p\".pkgs[]" "$p_ref" \
+       | xargs nix --extra-experimental-features 'nix-command flakes' \
+           profile install --impure --profile "${KASM_PROFILE_DIR}/$p"; then
+    ln -sfn "${KASM_PROFILE_DIR}/$p" "${KASM_GCROOT_DIR}/$p"
+    echo "$p" >> "${STAGE_IN}/built.txt"
+  else
+    echo "[inner] WARN profile install FAILED: $p — skipping (catalog continues)" >&2
+    echo "$p" >> "${STAGE_IN}/failed.txt"
+  fi
 done < "${STAGE_IN}/selected.txt"
+# Downstream steps operate on the profiles that actually built.
+cp "${STAGE_IN}/built.txt" "${STAGE_IN}/selected.txt"
+if [ -s "${STAGE_IN}/failed.txt" ]; then
+  echo "[inner] profiles that FAILED to install (skipped): $(tr '\n' ' ' < "${STAGE_IN}/failed.txt")" >&2
+fi
 
 # ── 6. capture closures ────────────────────────────────────────────────
 echo "[inner] capturing closures" >&2
@@ -366,6 +448,21 @@ sort -u -m "${STAGE_IN}/closures/_base.txt" \
             "${STAGE_IN}/closures/bootstrap.txt" \
             "${STAGE_IN}/closures/_gpu.txt" \
     > "${STAGE_IN}/closures/base_set.txt"
+
+# Capture intermediate layer closures, then build combined_subtract.txt =
+# base_set + every layer closure.  Profile deltas subtract this combined set,
+# so a profile that contains an intermediate layer's paths doesn't re-copy them.
+cp "${STAGE_IN}/closures/base_set.txt" "${STAGE_IN}/closures/combined_subtract.txt"
+for lname in ${LAYER_NAMES:-}; do
+  nix-store -qR "${KASM_PROFILE_DIR}/_layer-${lname}" | sort -u \
+      > "${STAGE_IN}/closures/_layer-${lname}.txt"
+  echo "[inner] layer '${lname}': $(wc -l < "${STAGE_IN}/closures/_layer-${lname}.txt") paths" >&2
+  sort -u -m "${STAGE_IN}/closures/combined_subtract.txt" \
+             "${STAGE_IN}/closures/_layer-${lname}.txt" \
+      > "${STAGE_IN}/closures/combined_subtract.txt.tmp"
+  mv "${STAGE_IN}/closures/combined_subtract.txt.tmp" \
+     "${STAGE_IN}/closures/combined_subtract.txt"
+done
 
 while IFS= read -r p; do
   [ -z "$p" ] && continue
@@ -393,7 +490,7 @@ total="$(wc -l < "${STAGE_IN}/selected.txt")"
   [ -z "$path" ] && continue
   pct=$(( count * 100 / total ))
   if [ "$pct" -ge "$THRESHOLD" ] && \
-     ! grep -qxF "$path" "${STAGE_IN}/closures/base_set.txt"; then
+     ! grep -qxF "$path" "${STAGE_IN}/closures/combined_subtract.txt"; then
     echo "  PROMOTE-CANDIDATE ${pct}% ($count/$total profiles): $path" >&2
   fi
 done
@@ -422,11 +519,29 @@ while IFS= read -r path; do
   link_path "$path" "${STAGE_IN}/layers/base/store"
 done < "${STAGE_IN}/closures/base_set.txt"
 
+# Intermediate layer staging: each layer's delta = layer closure - base_set.
+# Layers are siblings (not stacked), so each subtracts only the base, not
+# each other.  combined_subtract.txt (base + all layers) handles cross-layer
+# dedup at the profile-delta stage below.
+for lname in ${LAYER_NAMES:-}; do
+  mkdir -p "${STAGE_IN}/layers/layer-${lname}/store"
+  comm -23 "${STAGE_IN}/closures/_layer-${lname}.txt" \
+           "${STAGE_IN}/closures/base_set.txt" \
+           > "${STAGE_IN}/closures/_layer-${lname}-delta.txt"
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    link_path "$path" "${STAGE_IN}/layers/layer-${lname}/store"
+  done < "${STAGE_IN}/closures/_layer-${lname}-delta.txt"
+  echo "[inner] layer '${lname}' delta: $(wc -l < "${STAGE_IN}/closures/_layer-${lname}-delta.txt") paths" >&2
+done
+
 while IFS= read -r p; do
   [ -z "$p" ] && continue
   mkdir -p "${STAGE_IN}/layers/profile-${p}/store"
+  # Subtract the full combined set (base + all intermediate layers) so profiles
+  # that share a layer runtime don't re-copy those paths.
   comm -23 "${STAGE_IN}/closures/${p}.txt" \
-           "${STAGE_IN}/closures/base_set.txt" \
+           "${STAGE_IN}/closures/combined_subtract.txt" \
            > "${STAGE_IN}/closures/${p}-delta.txt"
   while IFS= read -r path; do
     [ -z "$path" ] && continue
@@ -459,6 +574,9 @@ copy_meta_profile() {
 copy_meta_profile bootstrap
 copy_meta_profile _base
 [ "${HAS_GPU}" = 1 ] && copy_meta_profile _gpu
+for lname in ${LAYER_NAMES:-}; do
+  copy_meta_profile "_layer-${lname}"
+done
 while IFS= read -r p; do
   [ -z "$p" ] && continue
   copy_meta_profile "$p"
@@ -493,6 +611,9 @@ jq '
 {
   echo "FROM scratch"
   echo "COPY base/store /store"
+  for lname in ${LAYER_NAMES:-}; do
+    echo "COPY layer-${lname}/store /store"
+  done
   while IFS= read -r p; do
     [ -z "$p" ] && continue
     echo "COPY profile-${p}/store /store"
@@ -500,43 +621,142 @@ jq '
   echo "COPY meta/var /var"
 } > "${STAGE_IN}/layers/Dockerfile"
 
-# ── 11. buildah: assemble the multi-layer OCI image ───────────────────
-# Build directly from the staging directory (Dockerfile + layer dirs).
-# --isolation=chroot avoids needing the host kernel's user/mount
-# namespaces; --storage-driver=vfs avoids fuse-overlayfs which would
-# need /dev/fuse passed through to the container.
+# ── 11. (no in-container image build) ─────────────────────────────────
+# The fat-store Dockerfile is staged at ${STAGE_IN}/layers/Dockerfile. The
+# OUTER podman builds it directly into its overlay store from this staging
+# dir (the named volume's mountpoint) — copy-on-write, layer cache, no tar.
+echo "[inner] fat-store Dockerfile staged; outer podman will build ${TARGET_TAG}" >&2
 
-# buildah / skopeo / podman tooling needs a `policy.json` to decide
-# whether to verify image signatures on pull/push/commit. The minimal
-# nixos/nix image ships none. Drop a permissive default; we're only
-# producing a local docker-archive (no signatures involved).
-if [ ! -f /etc/containers/policy.json ]; then
-  mkdir -p /etc/containers
-  cat > /etc/containers/policy.json <<'JSON'
-{ "default": [ { "type": "insecureAcceptAnything" } ] }
-JSON
+# ── 11b. per-app Dockerfiles + thin meta (optional) ────────────────────
+# Stage one Dockerfile per selected profile, FROM the nix-ubuntu base. Each
+# image's store content is split across *discrete* COPY instructions — base
+# layer, the shared layers the app actually uses, each required profile's
+# delta, then the app's own delta. With overlay + the outer's layer cache,
+# the identical base/shared COPY layers are built once and reused across every
+# app (no per-app recopy), and dedupe registry-wide on push. Wiring is added
+# afterwards by the finish build; here we only stage the store COPYs + a thin
+# meta layer (profile symlinks + subset _meta.json, no sqlite db — see
+# nix-activate's optional-db handling).
+if [ "${EMIT_APP_IMAGES:-0}" = "1" ]; then
+  echo "[inner] staging per-app Dockerfiles" >&2
+  cd "${STAGE_IN}/layers"
+
+  # Transitive `requires` closure for a profile (POSIX fixed-point).
+  expand_requires() {
+    current="$*"; prev=""
+    while [ "$prev" != "$current" ]; do
+      prev="$current"
+      for rp in $current; do
+        deps="$(jq -r --arg p "$rp" '.profiles[$p].requires[]? // empty' \
+                   "${STAGE_IN}/profiles.json" 2>/dev/null)"
+        for d in $deps; do
+          case " $current " in *" $d "*) ;; *) current="$current $d" ;; esac
+        done
+      done
+    done
+    printf '%s' "$current"
+  }
+
+  # cp a profile symlink + its generation -links into a thin meta dir.
+  copy_app_profile() {
+    name="$1"; destprof="$2"
+    src="${KASM_PROFILE_DIR}/${name}"
+    if [ -e "${src}" ] || [ -L "${src}" ]; then
+      cp -a "${src}" "${destprof}/${name}"
+    fi
+    for link in "${KASM_PROFILE_DIR}/${name}-"*-link; do
+      if [ -e "${link}" ] || [ -L "${link}" ]; then
+        cp -a "${link}" "${destprof}/$(basename "${link}")"
+      fi
+    done
+  }
+
+  while IFS= read -r P; do
+    [ -z "$P" ] && continue
+    echo "[inner] === app image: ${P} ===" >&2
+
+    # 1. transitive requires, restricted to profiles we actually built.
+    reqs_all="$(expand_requires "$P")"
+    reqs=""              # requires only (excludes P), built ones only
+    for r in $reqs_all; do
+      [ "$r" = "$P" ] && continue
+      if [ -d "${STAGE_IN}/layers/profile-${r}/store" ] && \
+         [ -f "${STAGE_IN}/closures/${r}.txt" ]; then
+        reqs="${reqs} ${r}"
+      else
+        echo "[inner] WARN ${P}: required profile '${r}' not in build set — its store will be MISSING from the image (add it to the build, or --profile ${r})" >&2
+      fi
+    done
+
+    # 2. combined closure (app + built requires) → drives layer selection.
+    img_closure="${STAGE_IN}/closures/${P}.image.txt"
+    {
+      cat "${STAGE_IN}/closures/${P}.txt"
+      for r in $reqs; do cat "${STAGE_IN}/closures/${r}.txt"; done
+    } | sort -u > "${img_closure}"
+
+    # 3. shared layers this image actually uses (delta intersects closure).
+    used_layers=""
+    for lname in ${LAYER_NAMES:-}; do
+      ldelta="${STAGE_IN}/closures/_layer-${lname}-delta.txt"
+      [ -s "${ldelta}" ] || continue
+      if comm -12 "${ldelta}" "${img_closure}" | grep -q .; then
+        used_layers="${used_layers} ${lname}"
+      fi
+    done
+    echo "[inner] ${P}: requires=[${reqs# }] layers=[${used_layers# }]" >&2
+
+    # 4. thin per-app meta dir (profile symlinks + subset _meta.json).
+    appmeta="appmeta-${P}"
+    rm -rf "${appmeta}"
+    mkdir -p "${appmeta}/var/nix/profiles"
+    copy_app_profile bootstrap "${appmeta}/var/nix/profiles"
+    # _gpu profile symlink: its store paths already ship in the base layer (folded
+    # into base_set), but nix-gpu-run resolves vglrun via the /nix/var/nix/profiles/_gpu
+    # symlink — without it every per-app image silently falls back to software even
+    # when a GPU is allocated. Deliberately NOT added to _meta.json (not activatable).
+    [ "${HAS_GPU:-0}" = 1 ] && copy_app_profile _gpu "${appmeta}/var/nix/profiles"
+    copy_app_profile "$P"      "${appmeta}/var/nix/profiles"
+    for r in $reqs; do copy_app_profile "$r" "${appmeta}/var/nix/profiles"; done
+
+    keep_names="$P${reqs}"
+    sel_json="$(printf '%s\n' $keep_names | jq -R . | jq -s .)"
+    jq --argjson sel "$sel_json" '
+      .profiles
+      | to_entries
+      | map(select(.key as $k | $sel | index($k)))
+      | map({key: .key,
+             value: {ref: (.value.ref // null), requires: (.value.requires // [])}})
+      | from_entries
+      | {profiles: .}
+    ' "${STAGE_IN}/profiles.json" \
+      > "${appmeta}/var/nix/profiles/_meta.json"
+
+    # 5. per-app Dockerfile — discrete COPYs preserve cross-app dedup.
+    appdf="Dockerfile.${P}"
+    {
+      echo "FROM ${APP_BASE_REF}"
+      echo "USER 0"
+      echo "COPY base/store /nix/store"
+      for lname in $used_layers; do
+        echo "COPY layer-${lname}/store /nix/store"
+      done
+      for r in $reqs; do
+        echo "COPY profile-${r}/store /nix/store"
+      done
+      echo "COPY profile-${P}/store /nix/store"
+      # Baked image (not mounted at /nix), so meta lands at /nix/var — NOT
+      # /var like the fat store, whose whole root is mounted at /nix. This
+      # puts profiles at /nix/var/nix/profiles where nix-activate reads them.
+      echo "COPY ${appmeta}/var /nix/var"
+      echo "ENV NIX_APP_PROFILES=${P}"
+    } > "${appdf}"
+    echo "[inner] ${P}: staged ${appdf}" >&2
+  done < "${STAGE_IN}/selected.txt"
+
+  # App list for the outer build loop (profiles that have a staged Dockerfile).
+  cp "${STAGE_IN}/selected.txt" "${STAGE_IN}/layers/apps.txt"
 fi
-
-echo "[inner] running buildah build → ${TARGET_TAG}" >&2
-cd "${STAGE_IN}/layers"
-buildah \
-    --isolation=chroot \
-    --storage-driver=vfs \
-    build \
-    -t "${TARGET_TAG}" \
-    -f Dockerfile \
-    .
-
-# Export as a docker-archive tarball. The host then `podman load`s
-# this — moves the image into the host's container engine storage.
-echo "[inner] exporting image → ${OUTPUT_IN}/image.tar" >&2
-buildah --storage-driver=vfs push \
-    "${TARGET_TAG}" \
-    "docker-archive:${OUTPUT_IN}/image.tar:${TARGET_TAG}"
-
-# buildah's intermediate storage at /var/lib/containers/storage lives
-# in the container's writable overlay, not the named volume — it
-# vanishes on container exit. Nothing to clean up here.
 
 # ── 12. prune stale gcroots + GC unreachable store paths ──────────────
 # Profiles removed from the config still have gcroots pinning their
@@ -559,6 +779,17 @@ for gr in "${KASM_GCROOT_DIR}"/*; do
   name="$(basename "$gr")"
   case "$name" in
     bootstrap|_base|.helpers|default) continue ;;
+  esac
+  case "$name" in
+    _layer-*)
+      lname="${name#_layer-}"
+      if jq -e --arg l "$lname" '(.layers // {})[$l] != null' \
+          "${STAGE_IN}/profiles.json" >/dev/null 2>&1; then
+        continue
+      fi
+      echo "  prune gcroot: $name (layer removed from config)" >&2
+      rm -f "$gr" "${KASM_PROFILE_DIR}/${name}" "${KASM_PROFILE_DIR}/${name}-"*-link
+      continue ;;
   esac
   if ! grep -qxF "$name" "${STAGE_IN}/selected.txt"; then
     echo "  prune gcroot: $name (not in current config)" >&2
@@ -589,43 +820,107 @@ if [[ ${#ONLY_PROFILES[@]} -gt 0 ]]; then
   ONLY_CSV="$(IFS=, ; echo "${ONLY_PROFILES[*]}")"
 fi
 
+# ───── Per-app: the base image is built FROM directly by the outer podman ──
+# No docker-archive hand-off anymore — the outer builds per-app images in its
+# own overlay store, so the base just needs to be present here.
+if [[ "${EMIT_APP_IMAGES}" == 1 ]]; then
+  if ! "${CONTAINER_CLI}" image exists "${APP_BASE_IMAGE}" 2>/dev/null \
+     && ! "${CONTAINER_CLI}" image inspect "${APP_BASE_IMAGE}" >/dev/null 2>&1; then
+    fail "--emit-app-images: base image not found in ${CONTAINER_CLI} store: ${APP_BASE_IMAGE} (load/build nix-ubuntu first)"
+  fi
+fi
+
 log "[1/3] running nix build inside ${NIX_IMAGE_DEFAULT}"
 log "  (named volume ${STAGE_VOLUME} caches between runs — first run is slow)"
 # Same `:z` here as on the seed step — keeps the SELinux label
 # consistent across runs so the inner container can read what the seed
 # wrote (and any prior inner build wrote).
-"${CONTAINER_CLI}" run --rm \
-    --platform "${PLATFORM}" \
-    --volume "${STAGE_VOLUME}:/nix:rw,z" \
-    --volume "${CONFIG_FILE}:/config/profiles.toml:ro" \
-    --volume "${OUTPUT_DIR}:/output:rw" \
-    --volume "${INNER_SCRIPT}:/inner-build.sh:ro" \
-    -e "ONLY_PROFILES=${ONLY_CSV}" \
-    -e "TARGET_ARCH=${ARCH}" \
-    -e "TARGET_TAG=${TAG}" \
-    --entrypoint /bin/sh \
-    "${NIX_IMAGE_DEFAULT}" \
-    /inner-build.sh
+inner_run_args=(
+    run --rm
+    --platform "${PLATFORM}"
+    --volume "${STAGE_VOLUME}:/nix:rw,z"
+    --volume "${CONFIG_FILE}:/config/profiles.toml:ro"
+    --volume "${OUTPUT_DIR}:/output:rw"
+    --volume "${INNER_SCRIPT}:/inner-build.sh:ro"
+    -e "ONLY_PROFILES=${ONLY_CSV}"
+    -e "TARGET_ARCH=${ARCH}"
+    -e "TARGET_TAG=${TAG}"
+    -e "EMIT_APP_IMAGES=${EMIT_APP_IMAGES}"
+    -e "APP_REPO=${APP_REPO}"
+    -e "APP_TAG=${APP_TAG}"
+    -e "APP_BASE_REF=${APP_BASE_IMAGE}"
+)
+inner_run_args+=( --entrypoint /bin/sh "${NIX_IMAGE_DEFAULT}" /inner-build.sh )
 
-IMAGE_TAR="${OUTPUT_DIR}/image.tar"
-[[ -f "${IMAGE_TAR}" ]] || fail "inner build produced no ${IMAGE_TAR}"
-tar_size_mb=$(( $(stat -f%z "${IMAGE_TAR}" 2>/dev/null || stat -c%s "${IMAGE_TAR}") / 1024 / 1024 ))
-log "  image tar: ${tar_size_mb} MiB"
+"${CONTAINER_CLI}" "${inner_run_args[@]}"
 
-# ───── Load the image into the host's container engine ─────────────────
-# buildah inside the inner container wrote a docker-archive tarball.
-# podman load reads it and registers the image in local storage, where
-# it's then accessible to `podman run --mount type=image,…`.
-log "[2/3] loading image into ${CONTAINER_CLI} local store: ${TAG}"
-"${CONTAINER_CLI}" load -i "${IMAGE_TAR}"
+# ───── Build images directly into the outer overlay store from staging ──
+# The inner build staged the layer tree + Dockerfiles under .build/layers in
+# the named volume. We build with the OUTER podman so everything lands in its
+# overlay store: copy-on-write + a layer cache SHARED across every per-app
+# build, so the identical base/shared `COPY` layers are materialised once and
+# reused — no per-app recopy, no docker-archive tar round-trip.
+STAGING="$("${CONTAINER_CLI}" volume inspect "${STAGE_VOLUME}" --format '{{ .Mountpoint }}')/.build/layers"
+[[ -f "${STAGING}/Dockerfile" ]] || fail "inner build staged no ${STAGING}/Dockerfile"
 
-# ───── Optional push ───────────────────────────────────────────────────
+log "[2/3] building fat store ${TAG} from staging (overlay store, no tar)"
+"${CONTAINER_CLI}" build --platform "${PLATFORM}" -t "${TAG}" -f "${STAGING}/Dockerfile" "${STAGING}"
+
 if [[ -n "${PUSH_REGISTRY}" ]]; then
-  log "[3/3] pushing to ${PUSH_REGISTRY}"
+  log "[3/3] pushing ${TAG} → ${PUSH_REGISTRY}"
   remote_tag="${PUSH_REGISTRY}/${TAG#localhost/}"
-  "${CONTAINER_CLI}" tag "${TAG}" "${remote_tag}"
-  "${CONTAINER_CLI}" push "${remote_tag}"
-  log "pushed: ${remote_tag}"
+  "${CONTAINER_CLI}" tag "${TAG}" "${remote_tag}" \
+    && "${CONTAINER_CLI}" push "${remote_tag}" && log "pushed: ${remote_tag}"
+fi
+
+# ───── Per-app: build store-image (staging context) + finish (repo) ────
+# Both builds run in the outer overlay store. The store-image build reuses the
+# cached base/shared layers; the finish build layers app wiring on top without
+# touching them, so the shared layers dedupe at the registry on push.
+if [[ "${EMIT_APP_IMAGES}" == 1 ]]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+  FINISH_DOCKERFILE="${REPO_ROOT}/dockerfile-nix-app-finish"
+  [[ -f "${FINISH_DOCKERFILE}" ]] || fail "missing ${FINISH_DOCKERFILE}"
+  [[ -f "${STAGING}/apps.txt" ]] || fail "inner build staged no ${STAGING}/apps.txt"
+
+  mapfile -t apps < <(grep -v '^$' "${STAGING}/apps.txt")
+  log "[apps] building ${#apps[@]} per-app image(s): store-image (staging) + finish (wiring)"
+  # Resilient: a per-app build failure (e.g. no wiring under
+  # src/ubuntu/install/nix/<p>/) records the app and continues.
+  emitted_finals=()
+  failed_finals=()
+  for p in "${apps[@]}"; do
+    store_image="${APP_REPO}-store/${p}:${APP_TAG}"
+    final_image="${APP_REPO}-${p}:${APP_TAG}"
+
+    log "[apps] ${p}: build store-image ${store_image}"
+    if ! "${CONTAINER_CLI}" build --platform "${PLATFORM}" \
+        -t "${store_image}" -f "${STAGING}/Dockerfile.${p}" "${STAGING}"; then
+      log "[apps] ${p}: WARN store-image build FAILED — skipping"; failed_finals+=( "${p}(store)" ); continue
+    fi
+
+    log "[apps] ${p}: finish build → ${final_image}"
+    if ! "${CONTAINER_CLI}" build \
+        --platform "${PLATFORM}" \
+        -f "${FINISH_DOCKERFILE}" \
+        --build-arg "STORE_IMAGE=${store_image}" \
+        --build-arg "PROFILE_NAME=${p}" \
+        -t "${final_image}" \
+        "${REPO_ROOT}"; then
+      log "[apps] ${p}: WARN finish build FAILED — store-image kept, no runnable image"
+      failed_finals+=( "${p}" ); continue
+    fi
+
+    emitted_finals+=( "${final_image}" )
+
+    if [[ -n "${PUSH_REGISTRY}" ]]; then
+      remote_final="${PUSH_REGISTRY}/${final_image#localhost/}"
+      "${CONTAINER_CLI}" tag "${final_image}" "${remote_final}" \
+        && "${CONTAINER_CLI}" push "${remote_final}" \
+        && log "[apps] ${p}: pushed ${remote_final}" \
+        || { log "[apps] ${p}: WARN push FAILED"; failed_finals+=( "${p}(push)" ); }
+    fi
+  done
 fi
 
 # ───── Optional volume prune ───────────────────────────────────────────
@@ -637,3 +932,11 @@ fi
 log "done: ${TAG}"
 log "to inspect layers:"
 log "  ${CONTAINER_CLI} image inspect ${TAG} | grep RootFS -A 20"
+if [[ "${EMIT_APP_IMAGES}" == 1 ]]; then
+  log "per-app runnable images (${#emitted_finals[@]}):"
+  for fi in "${emitted_finals[@]}"; do log "  ${fi}"; done
+  if [[ ${#failed_finals[@]} -gt 0 ]]; then
+    log "per-app finish FAILED / skipped (${#failed_finals[@]}): ${failed_finals[*]}"
+    log "  (their store-images still exist as ${APP_REPO}-store/<name>:${APP_TAG})"
+  fi
+fi
