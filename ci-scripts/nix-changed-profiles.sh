@@ -51,5 +51,9 @@ ${changed}
 EOF
 
 [ "${all}" = 1 ] && { emit ""; exit 0; }
-apps="$(printf '%s\n' ${apps} | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ *$//')"
-[ -z "${apps}" ] && emit "__none__" || emit "${apps}"
+# Dedup + normalise without grep (grep -v on empty input exits 1, which would
+# trip set -e/pipefail on the no-app-changes case).
+uniq_apps=""
+for a in $(printf '%s\n' ${apps} | sort -u); do uniq_apps="${uniq_apps}${a} "; done
+uniq_apps="${uniq_apps% }"
+[ -z "${uniq_apps}" ] && emit "__none__" || emit "${uniq_apps}"
