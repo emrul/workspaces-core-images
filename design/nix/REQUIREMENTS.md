@@ -240,10 +240,15 @@ expression authoring beyond what packaging custom apps requires.
 
 ## Decisions
 
-- **Both delivery models ship.** A **fat** image (runtime-mounted store +
-  `NIX_APP_PROFILES`, for ad-hoc combination) **and** **N per-app** images
-  (baked, self-contained, for verified-publisher `docker run`). No per-app
-  *mounted* variant — per-app = baked, ad-hoc = fat/mounted. (Was Open Q1.)
+- **Both delivery models ship, from one pipeline.** A **fat** image
+  (runtime-mounted store + `NIX_APP_PROFILES`, for ad-hoc combination) **and**
+  **N per-app** images (baked, self-contained, for verified-publisher
+  `docker run`) are emitted from a *single* partitioned store by
+  `bin/build-nix-store-volume` (per-app via `--emit-app-images`); base + shared
+  layers dedupe across all of them. No per-app *mounted* variant — per-app =
+  baked, ad-hoc = fat/mounted. The standalone `dockerfile-nix-app` (monolithic
+  `COPY /nix`, no dedup) was the chrome/angelfish PoC and is superseded by the
+  emit pipeline. (Was Open Q1.)
 - **Registry footprint is not a gating concern.** We expect the Nix approach to
   be *more* space-efficient than today's apt-per-image catalog (cross-image
   layer dedup). No budget ceiling to define now. (Was Open Q5.)

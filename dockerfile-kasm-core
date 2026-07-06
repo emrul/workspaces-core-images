@@ -20,7 +20,7 @@ RUN chmod 0755 /out/container-init /out/systemd1-shim
 # kasmvnc.service). --platform=$BUILDPLATFORM keeps the builder native
 # (fast); ARG TARGETARCH drives the Go cross-compile so multi-arch
 # buildx works.
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS kasmgo_builder
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS kasmgo_builder
 ARG TARGETARCH
 WORKDIR /src
 COPY src/common/kasm-go /src
@@ -287,7 +287,7 @@ ENV AUDIO_PORT=4901 \
     LANG=$LANG \
     LANGUAGE=$LANGUAGE \
     LC_ALL=$LC_ALL \
-    LD_LIBRARY_PATH=/opt/libjpeg-turbo/lib64/:/usr/local/lib/:/usr/lib/x86_64-linux-gnu:/usr/lib/i386-linux-gnu${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
+    LD_LIBRARY_PATH=/opt/libjpeg-turbo/lib64/:/usr/local/lib/:/usr/lib/x86_64-linux-gnu:/usr/lib/i386-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
     MAX_FRAME_RATE=24 \
     NO_VNC_PORT=6901 \
     OMP_WAIT_POLICY=PASSIVE \

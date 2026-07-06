@@ -160,8 +160,10 @@ fi
 #            fonts and ibus CJK dictionaries. Saves ~250 MiB on
 #            ubuntu/debian; less on Alpine/RHEL where shipped data is
 #            smaller.
-#   en     — English only. Same shape as `latin` but stricter on
-#            locale-langpack / locale-archive. Saves ~600 MiB on
+#   en     — Strips all gettext .mo translation catalogs (locale-langpack
+#            and locale) and rebuilds the glibc archive to en_* only.
+#            Fonts are kept in full — including CJK — so browsers and
+#            other apps can still render any language. Saves ~500 MiB on
 #            ubuntu/debian.
 #
 # All steps are best-effort and silently no-op when the relevant
@@ -171,16 +173,10 @@ case "${KASM_LANG_PROFILE:-full}" in
     full)
         : # no trim
         ;;
-    latin|en)
-        if [ "$KASM_LANG_PROFILE" = "en" ]; then
-            # English-only: en, en_US, en_GB, en_CA, en_AU, etc.
-            keep_dir_re='^(en|en_.*|C|C\.UTF-8|POSIX)$'
-            keep_arch_re='^(en_|C|POSIX)'
-        else
-            # Latin-script European + Cyrillic/Greek neighbours.
-            keep_dir_re='^(en|en_.*|es|es_.*|fr|fr_.*|de|de_.*|it|it_.*|pt|pt_.*|nl|nl_.*|pl|pl_.*|sv|sv_.*|da|da_.*|no|no_.*|nb|nn|fi|fi_.*|cs|cs_.*|hu|hu_.*|tr|tr_.*|ro|ro_.*|ru|ru_.*|uk|uk_.*|el|el_.*|bg|bg_.*|sr|sr_.*|hr|hr_.*|sk|sk_.*|sl|sl_.*|lt|lt_.*|lv|lv_.*|et|et_.*|ca|ca_.*|gl|gl_.*|eu|eu_.*|is|is_.*|mt|mt_.*|ga|ga_.*|cy|cy_.*|C|C\.UTF-8|POSIX)$'
-            keep_arch_re='^(en_|es_|fr_|de_|it_|pt_|nl_|pl_|sv_|da_|no_|nb_|nn_|fi_|cs_|hu_|tr_|ro_|ru_|uk_|el_|bg_|sr_|hr_|sk_|sl_|lt_|lv_|et_|ca_|gl_|eu_|is_|mt_|ga_|cy_|C|POSIX)'
-        fi
+    latin)
+        # Latin-script European + Cyrillic/Greek neighbours.
+        keep_dir_re='^(en|en_.*|es|es_.*|fr|fr_.*|de|de_.*|it|it_.*|pt|pt_.*|nl|nl_.*|pl|pl_.*|sv|sv_.*|da|da_.*|no|no_.*|nb|nn|fi|fi_.*|cs|cs_.*|hu|hu_.*|tr|tr_.*|ro|ro_.*|ru|ru_.*|uk|uk_.*|el|el_.*|bg|bg_.*|sr|sr_.*|hr|hr_.*|sk|sk_.*|sl|sl_.*|lt|lt_.*|lv|lv_.*|et|et_.*|ca|ca_.*|gl|gl_.*|eu|eu_.*|is|is_.*|mt|mt_.*|ga|ga_.*|cy|cy_.*|C|C\.UTF-8|POSIX)$'
+        keep_arch_re='^(en_|es_|fr_|de_|it_|pt_|nl_|pl_|sv_|da_|no_|nb_|nn_|fi_|cs_|hu_|tr_|ro_|ru_|uk_|el_|bg_|sr_|hr_|sk_|sl_|lt_|lv_|et_|ca_|gl_|eu_|is_|mt_|ga_|cy_|C|POSIX)'
 
         # /usr/share/locale-langpack (Ubuntu/Debian translations).
         if [ -d /usr/share/locale-langpack ]; then
@@ -198,36 +194,23 @@ case "${KASM_LANG_PROFILE:-full}" in
                 echo "$name" | grep -qE "$keep_dir_re" || rm -rf "$d"
             done
         fi
-        # Rebuild glibc locale-archive (Ubuntu/Debian/Fedora-family).
-        # `localedef --delete-from-archive` only marks entries unused;
-        # it doesn't reclaim disk space. To actually shrink the
-        # 115 MiB archive we have to wipe it and re-localedef the
-        # kept locales from /usr/share/i18n/locales sources, which is
-        # why /usr/share/i18n/locales is trimmed AFTER this step.
+        # Rebuild glibc locale-archive to Latin-only.
         if command -v localedef >/dev/null 2>&1 && [ -f /usr/lib/locale/locale-archive ] && [ -d /usr/share/i18n/locales ]; then
             keep_list=$(localedef --list-archive 2>/dev/null | grep -E "$keep_arch_re" || true)
             rm -f /usr/lib/locale/locale-archive
             echo "$keep_list" | while IFS= read -r loc; do
                 [ -z "$loc" ] && continue
-                # Split "en_US.utf8" → base=en_US charset=utf8
                 base=${loc%.*}
                 charset=${loc#*.}
-                # Map charset alias → localedef -f form. UTF-8 covers
-                # 99% of the kept set; skip unusual encodings in trim
-                # mode (operator can rebuild via locale-gen if needed).
                 case "$charset" in
                     utf8|UTF-8|UTF8|"$loc") cf=UTF-8 ;;
                     *) continue ;;
                 esac
-                # Skip the C/POSIX pseudo-locales — they live in /usr/lib/locale
-                # not in the archive.
                 [ "$base" = "C" ] || [ "$base" = "POSIX" ] && continue
                 localedef -i "$base" -f "$cf" "${base}.UTF-8" 2>/dev/null || true
             done
         fi
-
-        # /usr/share/i18n/locales (locale source files). Only safe to
-        # remove AFTER the archive rebuild above.
+        # /usr/share/i18n/locales (locale source files).
         if [ -d /usr/share/i18n/locales ]; then
             for f in /usr/share/i18n/locales/*; do
                 [ -f "$f" ] || continue
@@ -236,13 +219,54 @@ case "${KASM_LANG_PROFILE:-full}" in
             done
         fi
 
-        # Drop CJK Noto fonts (the big single-file consumers).
+        # Drop CJK Noto fonts and ibus CJK dictionaries.
         rm -f /usr/share/fonts/opentype/noto/NotoSansCJK*.ttc \
               /usr/share/fonts/opentype/noto/NotoSerifCJK*.ttc \
               /usr/share/fonts/truetype/noto/NotoSansCJK*.ttc \
               /usr/share/fonts/truetype/noto/NotoSerifCJK*.ttc 2>/dev/null || true
+        rm -rf /usr/share/ibus/dicts 2>/dev/null || true
+        ;;
+    en)
+        # Drop all gettext .mo translation catalogs entirely — these only
+        # translate system utility UI strings and are never needed in a
+        # browser-focused image. English is the runtime default regardless.
+        rm -rf /usr/share/locale-langpack 2>/dev/null || true
+        if [ -d /usr/share/locale ]; then
+            for d in /usr/share/locale/*; do
+                [ -d "$d" ] || continue
+                name=$(basename "$d")
+                echo "$name" | grep -qE '^(en|en_.*|C|C\.UTF-8|POSIX)$' || rm -rf "$d"
+            done
+        fi
 
-        # Drop ibus CJK dictionaries (anthy, libpinyin, hangul, etc.).
+        # Rebuild glibc locale-archive to en_* only.
+        if command -v localedef >/dev/null 2>&1 && [ -f /usr/lib/locale/locale-archive ] && [ -d /usr/share/i18n/locales ]; then
+            keep_list=$(localedef --list-archive 2>/dev/null | grep -E '^(en_|C|POSIX)' || true)
+            rm -f /usr/lib/locale/locale-archive
+            echo "$keep_list" | while IFS= read -r loc; do
+                [ -z "$loc" ] && continue
+                base=${loc%.*}
+                charset=${loc#*.}
+                case "$charset" in
+                    utf8|UTF-8|UTF8|"$loc") cf=UTF-8 ;;
+                    *) continue ;;
+                esac
+                [ "$base" = "C" ] || [ "$base" = "POSIX" ] && continue
+                localedef -i "$base" -f "$cf" "${base}.UTF-8" 2>/dev/null || true
+            done
+        fi
+        # /usr/share/i18n/locales (locale source files).
+        if [ -d /usr/share/i18n/locales ]; then
+            for f in /usr/share/i18n/locales/*; do
+                [ -f "$f" ] || continue
+                name=$(basename "$f")
+                echo "$name" | grep -qE '^(en|en_.*|C|C\.UTF-8|POSIX)$' || rm -f "$f"
+            done
+        fi
+
+        # Fonts are kept in full (including CJK) so browsers can render
+        # any language. Drop only ibus input method dicts (not needed
+        # when the system locale is English).
         rm -rf /usr/share/ibus/dicts 2>/dev/null || true
         ;;
     *)

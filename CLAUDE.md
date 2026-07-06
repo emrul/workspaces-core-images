@@ -83,13 +83,26 @@ workspaces-core-images/
 │                                     # (lean-noble-build.sh, noble-functional-smoke.sh, ...)
 │
 ├── bin/                              # Operator-side build tools
-│   ├── build-nix-store-volume        # Builds multi-layer OCI Nix store
+│   ├── build-nix-store-volume        # THE Nix build pipeline: one partitioned
+│   │                                 #   store → fat store-mount image, AND
+│   │                                 #   (--emit-app-images) per-app baked images
+│   │                                 #   that share base/shared layers by digest
 │   └── nix-profiles.toml             # Profile set for the Nix store image
 │
-├── dockerfile-nix-ubuntu        # Fork-specific: ubuntu core + Nix activation hooks
+├── dockerfile-nix-ubuntu             # Fork-specific: ubuntu core + Nix activation hooks
+├── dockerfile-nix-app-finish         # Wiring-only finish build for --emit-app-images
+├── dockerfile-nix-app                # SUPERSEDED PoC: standalone single-app build
+│                                     #   (monolithic COPY /nix, no layer dedup) —
+│                                     #   chrome/angelfish proof; one-off escape hatch
 │
 └── kasm-desktop-kde/                 # KDE desktop variant (WIP/placeholder)
 ```
+
+> **Nix per-app images:** build them with `bin/build-nix-store-volume
+> --emit-app-images`, NOT `dockerfile-nix-app` (that's the superseded PoC). One
+> store, two delivery shapes, shared layers dedupe. See
+> `design/nix-package-process.md` §§ Architecture / Component 3b and
+> `docs/nix-how-to.md` § 1.4.
 
 ## What's inside a core image
 

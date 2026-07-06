@@ -18,7 +18,9 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-IMAGE="${1:-nix-chrome:dev}"
+# shellcheck source=runs/registry.conf
+source "${here}/registry.conf"
+IMAGE="${1:-$(kasm_image nix-chrome)}"
 PORT="${2:-6902}"
 NAME=nix-chrome-gpu
 SECCOMP="$here/../src/common/seccomp/chrome.json"

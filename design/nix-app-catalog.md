@@ -209,13 +209,16 @@ Two viable models, not mutually exclusive:
   everywhere. **Best for the multi-app desktop images** (`*-desktop`,
   `desktop-deluxe`) — those ~14-app bundles become "activate profiles
   X,Y,Z" instead of 14 apt installs.
-- **Self-contained single-app baked image** (the `dockerfile-nix-angelfish`
-  pattern): bake one profile's `/nix` into the image, no runtime mount.
+- **Self-contained single-app baked image** (`dockerfile-nix-app` template):
+  bake one profile's `/nix` into the image at build time, no runtime mount.
   **Best for the public single-app catalog** — matches Kasm's "one
   workspace = one image" UX and needs no orchestration changes.
+  See `design/nix-package-process.md` § "Component 3" for the template
+  build-arg reference and per-app file convention.
 
-Recommendation: baked single-app images for the public catalog;
-shared-store for internal/desktop bundles where dedup pays off.
+Recommendation: baked single-app images (`dockerfile-nix-app`) for the public
+catalog; shared-store (`build-nix-store-volume` + thin `nix-ubuntu`) for
+internal/desktop bundles where dedup pays off.
 
 ---
 
@@ -232,7 +235,9 @@ shared-store for internal/desktop bundles where dedup pays off.
    the kasmvnc pattern. Wire each into the flake + a TOML profile.
 3. **Phase 3 — topology rollout.** Cut the multi-app desktop bundles over to
    the shared store; publish baked single-app images for the standalone
-   catalog. Decide per-image based on the topology guidance above.
+   catalog using `dockerfile-nix-app`. Build steps for both are in
+   `docs/nix-how-to.md` §§ 1.3–1.4. Decide per-image based on the topology
+   guidance above.
 4. **Phase 4 (optional) — overlays.** Tackle cross-ref library dedup if
    registry footprint becomes a concern (per `nix-package-process.md`).
 

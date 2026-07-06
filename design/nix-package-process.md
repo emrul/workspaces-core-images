@@ -19,27 +19,50 @@ extension-point unit under `/etc/container-init.d/`.
 
 ## Architecture (end-to-end)
 
+**One pipeline, two delivery shapes.** There is a single source of truth:
+the Nix store built by `bin/build-nix-store-volume`, partitioned into a base
+layer + named shared layers (qt6, electron, …) + one delta layer per profile.
+From that one partition the script emits **both** delivery shapes below, and
+because every layer directory is byte-identical across outputs, the base and
+shared layers **dedupe by blob digest** across the fat store and every per-app
+image at the registry. You do not run two separate build mechanisms — you run
+one, and choose which outputs you want.
+
 ```
-                build-time (operator)                          runtime (per session)
-   ┌────────────────────────────────────────┐      ┌──────────────────────────────────┐
-   │  bin/build-nix-store-volume            │      │ kasmweb/nix-ubuntu:<tag>    │
-   │                                        │      │   (FROM kasmweb/core-ubuntu-     │
-   │  - reads bin/nix-profiles.toml         │      │      noble:<core-tag>)           │
-   │  - spins up a nixos/nix builder        │      │                                  │
-   │    container with $stage/nix mounted   │      │  + /etc/container-init.d/        │
-   │  - nix profile install per profile     │      │      nix-activate.service   │
-   │    into $stage/var/nix/profiles/       │      │  + /usr/local/bin/               │
-   │  - partitions store across layers      │      │      nix-activate           │
-   │    (base + per-profile + meta)         │      │      nix-app          (CLI)     │
-   │  - emits multi-layer OCI image         │      │                                  │
-   │      kasmweb/nix-store-<arch>:<tag>    │      │  no Nix install in image —       │
-   └────────────────────────────────────────┘      │  PATH/desktop integration only   │
-                       │                            └──────────────────────────────────┘
-                       ▼                                            │
-              registry / local store                                ▼
-                       │                       --mount type=image,src=...:/nix,readonly
-                       └────────────────────────────────────────────┘
+                       bin/build-nix-store-volume
+                  (reads bin/nix-profiles.toml, one Nix store,
+                   partition: base / shared layers / per-profile deltas)
+                                      │
+                 ┌────────────────────┴─────────────────────┐
+                 ▼                                            ▼
+  ── Shape 1: fat store-mount image ──        ── Shape 2: per-app baked images ──
+  (multi-app desktop bundles)                 (--emit-app-images, single-app catalog)
+
+  nix-store-<arch> OCI image                  nix-<app> (×N), FROM nix-ubuntu
+   FROM scratch, store at /store               base + used shared layers +
+   all profiles + meta + db                    app delta baked at /nix/store
+        │                                       + thin per-app meta (no db)
+   runtime: --mount type=image,                 + host finish build adds wiring
+     dst=/nix  +  NIX_APP_PROFILES=…              (dockerfile-nix-app-finish)
+   kasmweb/nix-ubuntu selects subset           runtime: self-contained, no mount
 ```
+
+### Image topology
+
+| Topology | Emitted by | Use-case |
+|---|---|---|
+| Shared store + thin `nix-ubuntu` | `build-nix-store-volume` (default output) | Multi-app desktop bundles; `NIX_APP_PROFILES` selects any subset at runtime |
+| Baked per-app `nix-<app>` | `build-nix-store-volume --emit-app-images` → `dockerfile-nix-app-finish` | Single-app public catalog; matches Kasm's one-image-per-workspace UX; shares base/shared layers with the fat store and every other app |
+
+> **`dockerfile-nix-app` is the superseded PoC.** It built one app standalone
+> (`nix-env` in a `nixos/nix` stage, then a single monolithic `COPY /nix /nix`
+> onto nix-ubuntu) and is how `chrome` and `angelfish` were first proven to
+> work. It is **not** the catalog build path: its monolithic COPY produces one
+> un-shareable layer (zero dedup with other apps), and it re-fetches from the
+> binary cache independently of the store. The `--emit-app-images` pipeline
+> produces the same self-contained per-app images but with full layer dedup,
+> from the same store as the fat image. Keep `dockerfile-nix-app` only as a
+> quick standalone escape hatch for a one-off app; see Component 3.
 
 ### Runtime flow inside the container
 
@@ -206,7 +229,176 @@ it fails the build if the new unit has any parse warning.
 **Build args:** `BASE_IMAGE` defaults to the `develop` tag of the core
 image; production builds override to a pinned core tag.
 
-## Component 3 — boot-time activation
+## Component 3 — `dockerfile-nix-app` (superseded PoC / escape hatch)
+
+> **Status:** superseded by the `--emit-app-images` pipeline (Component 3b).
+> This standalone Dockerfile proved the per-app baked shape with `chrome` and
+> `angelfish`, but its single monolithic `COPY --from=nixbuild /nix /nix`
+> flattens the whole closure into one layer (no dedup with the fat store or
+> other apps) and re-fetches from the binary cache independently. Use it only
+> for a quick one-off app build outside the store pipeline. For the catalog,
+> use Component 3b.
+
+Parameterised single-application Dockerfile. Replaces the former per-app
+Dockerfiles (`dockerfile-nix-chrome`, `dockerfile-nix-angelfish`, etc.) with a
+single template.
+
+### Build args
+
+| Arg | Required | Default | Description |
+|---|---|---|---|
+| `NIX_ATTR` | yes | — | nixpkgs attribute, e.g. `google-chrome`, `firefox`, `kdePackages.angelfish` |
+| `PROFILE_NAME` | yes | — | Profile slug, e.g. `chrome`, `firefox`, `angelfish` |
+| `NIXPKGS_REV` | yes | — | Pinned nixpkgs commit hash (no branches — reproducibility) |
+| `GPU_SUPPORT` | no | `0` | `1` = also build the `_gpu` profile (virtualgl + vulkan-loader) for GPU-accelerated apps |
+| `NIX_IMAGE` | no | `docker.io/nixos/nix:2.28.4` | Builder image |
+| `BASE_IMAGE` | no | `localhost/nix-ubuntu:dev` | nix-ubuntu base image |
+
+### Per-app file convention
+
+Each app contributes three files under `src/ubuntu/install/nix/<PROFILE_NAME>/`:
+
+```
+src/ubuntu/install/nix/
+  <PROFILE_NAME>/
+    launch            (required)  launcher script → /usr/local/bin/<PROFILE_NAME>-launch
+    custom_startup.sh (required)  Kasm startup loop → /dockerstartup/custom_startup.sh
+    post-build.sh     (optional)  app-specific build step (managed policies, etc.)
+```
+
+The launcher script's only job is: set `PROFILE=/nix/var/nix/profiles/<name>`,
+resolve the binary, and `exec /usr/local/bin/nix-launch "${BIN}" "$@"`.
+`nix-launch` handles the GPU detection, `LD_LIBRARY_PATH` cleanup, dbus env,
+and chromium-family argv — the launcher stays thin.
+
+`post-build.sh` runs as root during the image build after the `/nix` COPY.
+Use it for things that must be baked in: managed browser policies, extra config
+files, etc. If absent, it's silently skipped.
+
+### Example build (chrome)
+
+```bash
+docker build -f dockerfile-nix-app \
+    --build-arg NIX_ATTR=google-chrome \
+    --build-arg PROFILE_NAME=chrome \
+    --build-arg NIXPKGS_REV=ac62194c3917d5f474c1a844b6fd6da2db95077d \
+    --build-arg GPU_SUPPORT=1 \
+    --build-arg BASE_IMAGE=localhost/nix-ubuntu:dev \
+    -t localhost/nix-chrome:dev .
+```
+
+Stage 1 (the `nixos/nix` builder) takes ~10–20 min on first build (fetching
+Chrome's closure from the binary cache); subsequent builds reuse the Docker
+layer cache for the unchanged `--build-arg` set.
+
+### CI integration (per-app images)
+
+Per-app images are added to `ci-scripts/template-vars.yaml` under `multiImages`
+with `dockerfile: dockerfile-nix-app` and an `extraBuildArgs` field that carries
+the app-specific build args:
+
+```yaml
+- name1: nix
+  name2: chrome
+  base: kasmweb/core-ubuntu-noble:develop
+  bg: bg_noble.png
+  distro: ubuntu
+  dockerfile: dockerfile-nix-app
+  extraBuildArgs: >-
+    --build-arg NIX_ATTR=google-chrome
+    --build-arg PROFILE_NAME=chrome
+    --build-arg NIXPKGS_REV=ac62194c3917d5f474c1a844b6fd6da2db95077d
+    --build-arg GPU_SUPPORT=1
+  changeFiles:
+    - dockerfile-nix-app
+    - src/ubuntu/install/nix/chrome/**
+    - src/ubuntu/install/nix/scripts/nix-launch
+    - src/ubuntu/install/nix/scripts/nix-gpu-run
+    - src/ubuntu/install/nix/scripts/nix-gpu-setup
+```
+
+`ci-scripts/build.sh` passes `extraBuildArgs` as a 7th positional argument
+(word-split directly into the `docker build` command line).
+
+## Component 3b — per-app emission (`--emit-app-images` + `dockerfile-nix-app-finish`)
+
+**This is the canonical way to build the single-app catalog.** It produces the
+same self-contained `nix-<app>` images as the old `dockerfile-nix-app`, but from
+the same store as the fat image and with full cross-app layer dedup.
+
+```bash
+bin/build-nix-store-volume --emit-app-images [--profile <name> …] \
+    [--app-base-image localhost/nix-ubuntu:dev] [--app-repo localhost/nix]
+```
+
+How it works (see the script and `dockerfile-nix-app-finish`):
+
+1. The inner `nixos/nix` build partitions the store into `base/store`,
+   `layer-<n>/store` (shared runtimes), and `profile-<app>/store` (deltas), and
+   **stages** — but does NOT build — the fat-store Dockerfile plus one
+   `Dockerfile.<app>` per profile + a thin meta dir, all into the named volume.
+2. The **outer podman then builds those directly into its own overlay store**
+   from the staging dir (no buildah, no tar). Per profile the `Dockerfile.<app>`
+   is `FROM nix-ubuntu` + **discrete** `COPY base/store` / `COPY layer-<n>/store`
+   (only the shared layers the app's closure actually uses) / `COPY
+   profile-<req>/store` (transitive `requires`) / `COPY profile-<app>/store` →
+   all at `/nix/store`. Discrete COPYs over byte-identical content yield
+   identical layer blobs, so with overlay's layer cache the base + shared layers
+   are built **once** and reused across every app — and dedupe registry-wide on
+   push.
+3. A **thin per-app meta layer** ships at `/nix/var`: `_meta.json` (the app +
+   its `requires`) plus the profile symlinks for the app, its requires, and
+   bootstrap. **No `db.sqlite`** — `nix-activate` reads only profile symlinks +
+   `_meta.json`, and apps launch via absolute store-path `Exec=`; the db is
+   only consumed by the runtime `nix-app` CLI (fat-store profile switching),
+   which a single-app image does not need.
+4. The **finish build** (`dockerfile-nix-app-finish`, `FROM <store-image>`,
+   also outer podman) layers *only* the app wiring on top — leaving the shared
+   store layers untouched, so dedup survives.
+
+The build is **resilient**: a profile whose `nix profile install` fails, or
+whose finish build fails (e.g. no wiring), is recorded and skipped — one bad app
+never aborts the catalog.
+
+> **Why outer-podman-direct instead of buildah→tar→load.** The original design
+> built each image with buildah inside the `nixos/nix` container (forced to the
+> `vfs` driver, since overlay-on-overlay fails when nested) and handed it to the
+> host as a `docker-archive` tar. vfs copies the *entire* rootfs at every layer,
+> so one ~6 GB image cost ~50 GB of writes, and the per-app tars (~6 GB × N) had
+> to coexist before the load phase — ~280 GB for the full catalog, which
+> exhausts a 465 GB disk around app 23. Building in the outer overlay store
+> gives copy-on-write + a shared layer cache (base materialised once) and drops
+> the tar round-trip entirely, so peak disk is ~closures + one app's delta.
+
+### Extension points (custom_startup.sh vs container-init units)
+
+- **`custom_startup.sh` stays the user's documented extension point in the
+  base.** nix-ubuntu ships none; container-init's `custom-startup.service`
+  runs `/dockerstartup/custom_startup.sh` iff present. A downstream desktop
+  image built on nix-ubuntu uses it exactly as the Kasm docs describe.
+- **Single-app leaf images put their launch in `custom_startup.sh`** — same
+  slot upstream `kasmweb/<app>` images use, and *required*: the Kasm agent
+  invokes that path by convention for `docker exec` opens (`-g/-a/-u`). The
+  finish build copies `src/ubuntu/install/nix/<app>/custom_startup.sh` into the
+  leaf's `/dockerstartup` (never the base); if a profile has none, the finish
+  build fails and the resilient loop skips it (store-image still exists).
+  Overriding it downstream = taking over the app, identical semantics to
+  extending an upstream single-app image.
+  - **Wiring is ported from `workspaces-images`, not invented.** Each app's
+    `custom_startup.sh` is the upstream catalog's file with only `START_COMMAND`
+    repointed to `/usr/local/bin/nix-app-launch <profile>` (a shared launcher
+    that resolves the profile's binary from its `.desktop` and hands off to
+    `nix-launch`); `PGREP` / `MAXIMIZE_NAME` / `DEFAULT_ARGS` carry over
+    unchanged. chrome/angelfish keep bespoke `*-launch` scripts. **Caveat:**
+    `PGREP` matches the apt binary's process name, which may differ from the
+    Nix-wrapped name — the relaunch loop's "already running" check is unverified
+    per app and is the main runtime follow-up.
+- **container-init unit drop-ins (`/etc/container-init.d/<name>.service`) are
+  the advanced extension point** — for adding a background service with
+  ordering / `Restart=` / deps *without* consuming `custom_startup.sh`. Document
+  both; they are complementary, not alternatives.
+
+## Component 4 — boot-time activation
 
 ### `src/ubuntu/install/nix/units/nix-activate.service`
 
@@ -275,7 +467,7 @@ The user-facing `nix-app` CLI does NOT re-invoke this; the CLI
 manages a per-user view at `~/.local/share/applications/` so users
 can activate/deactivate without `sudo`.
 
-## Component 4 — `nix-app` CLI helper
+## Component 5 — `nix-app` CLI helper
 
 POSIX sh, ~80 lines. Subcommands:
 

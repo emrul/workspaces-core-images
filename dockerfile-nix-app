@@ -1,0 +1,135 @@
+# dockerfile-nix-app — parameterised single-application Nix image.
+#
+# Builds a self-contained workspace image for any app in nixpkgs.
+# Stage 1 (nixbuild) bakes the app's Nix store; Stage 2 layers it onto
+# nix-ubuntu so container-init / nix-activate wire it into the desktop.
+#
+# Required build args:
+#   NIX_ATTR      nixpkgs attribute path, e.g. google-chrome, firefox,
+#                 slack, kdePackages.angelfish (dots OK, nix-env -A handles them)
+#   PROFILE_NAME  profile slug / image name, e.g. chrome, firefox, slack
+#   NIXPKGS_REV   pinned nixpkgs commit hash (no branch names — reproducibility)
+#
+# Optional build args:
+#   GPU_SUPPORT   1 = also build the _gpu profile (virtualgl + vulkan-loader)
+#                 for apps that benefit from VirtualGL hardware acceleration
+#                 (blender, retroarch, obs-studio, …). Default: 0.
+#   NIX_IMAGE     nixos/nix builder image. Default: docker.io/nixos/nix:2.28.4
+#   BASE_IMAGE    nix-ubuntu base. Default: localhost/nix-ubuntu:dev
+#
+# Per-app convention (src/ubuntu/install/nix/<PROFILE_NAME>/):
+#   launch            required  launcher script → /usr/local/bin/<PROFILE_NAME>-launch
+#   custom_startup.sh required  Kasm startup loop → /dockerstartup/custom_startup.sh
+#   post-build.sh     optional  app-specific build step (e.g. managed policies);
+#                               run as root in the runtime stage after the COPY.
+#
+# Example local build (chrome):
+#   docker build -f dockerfile-nix-app \
+#     --build-arg NIX_ATTR=google-chrome \
+#     --build-arg PROFILE_NAME=chrome \
+#     --build-arg NIXPKGS_REV=ac62194c3917d5f474c1a844b6fd6da2db95077d \
+#     --build-arg GPU_SUPPORT=1 \
+#     -t nix-chrome:dev .
+
+ARG NIX_IMAGE="docker.io/nixos/nix:2.28.4"
+ARG NIXPKGS_REV
+ARG BASE_IMAGE="localhost/nix-ubuntu:dev"
+
+# ── Stage 1: build the app profile into a Nix store ──────────────────────────
+FROM $NIX_IMAGE AS nixbuild
+ARG NIXPKGS_REV
+ARG NIX_ATTR
+ARG PROFILE_NAME
+ARG GPU_SUPPORT=0
+
+# Allow unfree + insecure packages (mirrors build-nix-store-volume; many catalog
+# apps are unfree: Chrome, Slack, Zoom, VS Code, …).
+ENV NIXPKGS_ALLOW_UNFREE=1
+ENV NIXPKGS_ALLOW_INSECURE=1
+
+# App profile. nix-env -A accepts dot-separated attribute paths (kdePackages.angelfish,
+# eclipses.eclipse-java, etc.) without quoting.
+RUN nix-env --profile "/nix/var/nix/profiles/${PROFILE_NAME}" \
+        -i -A "${NIX_ATTR}" \
+        -f "https://github.com/NixOS/nixpkgs/archive/${NIXPKGS_REV}.tar.gz"
+
+# GPU support profile: Nix VirtualGL (glibc-matched faker — system /opt/VirtualGL
+# can't preload into a Nix binary) + Nix vulkan-loader (carries VK_KHR_surface/xcb
+# WSI that many bundled loaders lack). nix-gpu-run references these by absolute
+# profile path. Omitted when GPU_SUPPORT != 1 (most catalog apps).
+RUN [ "${GPU_SUPPORT}" != "1" ] || \
+    nix-env --profile /nix/var/nix/profiles/_gpu \
+        -i -A virtualgl -A vulkan-loader \
+        -f "https://github.com/NixOS/nixpkgs/archive/${NIXPKGS_REV}.tar.gz"
+
+# _meta.json: activation gate (ConditionPathExists in nix-activate.service)
+# and the dependency graph read by nix-activate at boot.
+RUN printf '{"profiles":{"%s":{"ref":null,"requires":[]}}}' "${PROFILE_NAME}" \
+        > /nix/var/nix/profiles/_meta.json
+
+# ── Stage 2: nix-ubuntu + baked store + single-app wiring ────────────────────
+FROM $BASE_IMAGE
+ARG PROFILE_NAME
+ARG GPU_SUPPORT=0
+USER 0
+
+# Bake the app (and optionally _gpu) closure into the image.
+# nix-ubuntu ships no /nix; nix-activate.service is gated on ConditionPathExists
+# so the image is inert without this COPY.
+COPY --from=nixbuild /nix /nix
+
+# Activate the profile at boot: nix-activate wires it into PATH, XDG_DATA_DIRS,
+# ld.so.conf, and copies trusted .desktop launchers into /usr/share/applications.
+ENV NIX_APP_PROFILES=${PROFILE_NAME}
+
+# Temporary: carry the kasm-setup fix (register "kasm_user" for VNC web login)
+# until the base core / nix-ubuntu images are rebuilt from the updated
+# src/common/kasm-go. Remove this COPY once that rebuild lands.
+COPY src/common/kasm-go/scripts/kasm-setup /usr/local/bin/kasm-setup
+
+# Per-app scripts. COPY brings the full nix install tree into a temp layer;
+# the RUN immediately copies only what's needed to final destinations and
+# removes the temp tree so it doesn't inflate runtime layers.
+# The overhead (shell scripts only, < 100 KB total) is shared across all
+# app images in the registry because the source digest is identical.
+COPY src/ubuntu/install/nix/ /tmp/nix-install/
+
+RUN set -e; \
+    cp "/tmp/nix-install/${PROFILE_NAME}/launch" \
+           "/usr/local/bin/${PROFILE_NAME}-launch"; \
+    cp "/tmp/nix-install/${PROFILE_NAME}/custom_startup.sh" \
+           /dockerstartup/custom_startup.sh; \
+    # GPU apps: nix-gpu-setup re-chowns /dev/dri nodes to the session user at
+    # boot so the GPU path in nix-launch / nix-gpu-run can open them. The
+    # service unit is already in nix-ubuntu, but copy the script defensively
+    # in case the base image is older than the GPU-setup feature.
+    if [ "${GPU_SUPPORT}" = "1" ]; then \
+        cp /tmp/nix-install/scripts/nix-gpu-setup /usr/local/bin/nix-gpu-setup; \
+        chmod 0755 /usr/local/bin/nix-gpu-setup; \
+    fi; \
+    # Optional app-specific build step (e.g. managed browser policies, extra config).
+    if [ -f "/tmp/nix-install/${PROFILE_NAME}/post-build.sh" ]; then \
+        bash "/tmp/nix-install/${PROFILE_NAME}/post-build.sh"; \
+    fi; \
+    chmod 0755 /usr/local/bin/kasm-setup \
+               "/usr/local/bin/${PROFILE_NAME}-launch" \
+               /dockerstartup/custom_startup.sh; \
+    rm -rf /tmp/nix-install
+
+# Single-application XFCE profile: swap in the no-panel layout so the workspace
+# opens directly into the app (mirrors kasmweb/chrome, kasmweb/firefox, etc.).
+RUN XFCONF=/home/kasm-default-profile/.config/xfce4/xfconf && \
+    cp "$XFCONF/single-application-xfce-perchannel-xml/"* \
+       "$XFCONF/xfce-perchannel-xml/" && \
+    chown -R 1000:0 "$XFCONF/xfce-perchannel-xml" && \
+    apt-get remove -y xfce4-panel && \
+    apt-get autoclean && rm -rf /var/lib/apt/lists/*
+
+# Fail the build on any unit parse warning (same gate as dockerfile-nix-ubuntu).
+RUN /usr/local/bin/container-init \
+        --units /etc/container-init/units \
+        --drop-in /etc/container-init.d \
+        --strict-units --validate
+
+# NOTE: stay USER 0. container-init must start as root so kasm-setup.service
+# can su to the session user and set the VNC password. Matches dockerfile-nix-ubuntu.

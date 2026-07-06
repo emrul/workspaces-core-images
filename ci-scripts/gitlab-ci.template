@@ -63,7 +63,7 @@ build_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
     - when: never
   script:
     - apk add bash
-    - bash ci-scripts/build.sh "{{ IMAGE.name1 }}" "{{ IMAGE.name2 }}" "{{ IMAGE.base }}" "{{ IMAGE.bg }}" "{{ IMAGE.distro }}" "{{ IMAGE.dockerfile }}"
+    - bash ci-scripts/build.sh "{{ IMAGE.name1 }}" "{{ IMAGE.name2 }}" "{{ IMAGE.base }}" "{{ IMAGE.bg }}" "{{ IMAGE.distro }}" "{{ IMAGE.dockerfile }}" "{{ IMAGE.extraBuildArgs | default('') }}"
   tags:
     - ${TAG}
   retry: 1
@@ -96,7 +96,7 @@ build_{{ IMAGE.name1 }}_{{ IMAGE.name2 }}:
     - when: never
   script:
     - apk add bash
-    - bash ci-scripts/build.sh "{{ IMAGE.name1 }}" "{{ IMAGE.name2 }}" "{{ IMAGE.base }}" "{{ IMAGE.bg }}" "{{ IMAGE.distro }}" "{{ IMAGE.dockerfile }}"
+    - bash ci-scripts/build.sh "{{ IMAGE.name1 }}" "{{ IMAGE.name2 }}" "{{ IMAGE.base }}" "{{ IMAGE.bg }}" "{{ IMAGE.distro }}" "{{ IMAGE.dockerfile }}" "{{ IMAGE.extraBuildArgs | default('') }}"
   tags:
     - oci-amd-scheduled
   retry: 1

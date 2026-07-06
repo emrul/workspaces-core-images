@@ -77,6 +77,23 @@ multiImages:
       - src/ubuntu/nvidia/**
       - src/ubuntu/sysbox/**
       - src/ubuntu/virtualgl/**
+  - name1: ubuntu
+    name2: noble-minimal
+    base: ubuntu:24.04
+    bg: bg_noble.png
+    distro: ubuntu
+    dockerfile: dockerfile-kasm-core-minimal
+    changeFiles:
+      - dockerfile-kasm-core-minimal
+      - src/ubuntu/install/security_hardening/**
+      - src/ubuntu/xfce/**
+      - src/ubuntu/xfce/.config/**
+      - src/ubuntu/xfce/.config/xfce4/**
+      - src/ubuntu/xfce/.config/xfce4/xfconf/**
+      - src/ubuntu/xfce/.config/xfce4/xfconf/xfce-perchannel-xml/**
+      - src/ubuntu/xfce/.config/xfce4/xfconf/single-application-xfce-perchannel-xml/**
+      - src/ubuntu/nvidia/**
+      - src/ubuntu/virtualgl/**
   - name1: debian
     name2: bullseye
     base: debian:bullseye-slim
@@ -367,7 +384,7 @@ multiImages:
   # kasm-core-ubuntu-noble:dev. See docs/nix-how-to.md.
   - name1: nix
     name2: ubuntu
-    base: kasmweb/core-ubuntu-noble:develop  # TODO: fork-built tag, not upstream
+    base: forge.emrul.dev/beta/core-ubuntu-noble-minimal:nix
     bg: bg_noble.png
     distro: ubuntu
     dockerfile: dockerfile-nix-ubuntu
@@ -376,22 +393,42 @@ multiImages:
       - src/ubuntu/install/nix/**
       - bin/build-nix-store-volume
       - bin/nix-profiles.toml
-  # Downstream single-app image: nix-angelfish bakes the Nix-built KDE
-  # Angelfish browser into the image (no /nix volume mount needed) and
-  # boots straight into it (LAUNCH_URL/KASM_URL), with GPU acceleration
-  # via VirtualGL when the platform allocates a GPU. FROM nix-ubuntu, so
-  # the same base-tag follow-up as above applies; local builds override
-  # with --build-arg BASE_IMAGE=localhost/nix-ubuntu:dev.
+  # Single-app Nix images built from dockerfile-nix-app.
+  # extraBuildArgs is passed verbatim as extra --build-arg flags to docker build.
+  # NIXPKGS_REV pins the nixpkgs commit; bump together with nix-profiles.toml's
+  # base ref at the next nixos stable release boundary (~6 monthly).
+  # Current rev: nixos-25.05 @ ac62194c3917d5f474c1a844b6fd6da2db95077d
   - name1: nix
     name2: angelfish
-    base: kasmweb/core-ubuntu-noble:develop  # TODO: fork-built nix-ubuntu tag
+    base: forge.emrul.dev/beta/nix-ubuntu:nix
     bg: bg_noble.png
     distro: ubuntu
-    dockerfile: dockerfile-nix-angelfish
+    dockerfile: dockerfile-nix-app
+    extraBuildArgs: >-
+      --build-arg NIX_ATTR=kdePackages.angelfish
+      --build-arg PROFILE_NAME=angelfish
+      --build-arg NIXPKGS_REV=ac62194c3917d5f474c1a844b6fd6da2db95077d
     changeFiles:
-      - dockerfile-nix-angelfish
+      - dockerfile-nix-app
       - src/ubuntu/install/nix/angelfish/**
       - src/ubuntu/install/nix/scripts/nix-launch
+  - name1: nix
+    name2: chrome
+    base: forge.emrul.dev/beta/nix-ubuntu:nix
+    bg: bg_noble.png
+    distro: ubuntu
+    dockerfile: dockerfile-nix-app
+    extraBuildArgs: >-
+      --build-arg NIX_ATTR=google-chrome
+      --build-arg PROFILE_NAME=chrome
+      --build-arg NIXPKGS_REV=ac62194c3917d5f474c1a844b6fd6da2db95077d
+      --build-arg GPU_SUPPORT=1
+    changeFiles:
+      - dockerfile-nix-app
+      - src/ubuntu/install/nix/chrome/**
+      - src/ubuntu/install/nix/scripts/nix-launch
+      - src/ubuntu/install/nix/scripts/nix-gpu-run
+      - src/ubuntu/install/nix/scripts/nix-gpu-setup
 singleImages:
   - name1: cuda
     name2: jammy

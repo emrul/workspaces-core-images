@@ -1,0 +1,57 @@
+#!/bin/sh
+# nix-app-launch — generic launcher for single-app images whose custom_startup.sh
+# was ported from the workspaces-images catalog. Resolves a Nix profile's primary
+# binary from its .desktop Exec line and hands off to nix-launch (GPU detection,
+# LD_LIBRARY_PATH cleanup, dbus/XDG_RUNTIME_DIR env, chromium-family argv).
+#
+# Window maximising is NOT done here — the ported custom_startup.sh runs
+# $STARTUPDIR/maximize_window.sh (wmctrl, matched on $MAXIMIZE_NAME) for that,
+# exactly as it did on the apt-based images.
+#
+# Usage: nix-app-launch <profile-name> [args...]
+#   custom_startup.sh sets START_COMMAND="/usr/local/bin/nix-app-launch <profile>"
+#
+# Binary resolution differs from the bespoke chrome-launch/angelfish-launch
+# (which hardcode their binary) precisely so we can reuse upstream custom_startup
+# unchanged across dozens of apps without a per-app binary map.
+set -u
+
+PROFILE_NAME="${1:?usage: nix-app-launch <profile> [args...]}"
+shift
+PROFILE="/nix/var/nix/profiles/${PROFILE_NAME}"
+
+[ -d "${PROFILE}" ] || { echo "nix-app-launch: no profile ${PROFILE}" >&2; exit 1; }
+
+# 1. Prefer the profile's primary visible .desktop Exec (first token, field codes
+#    like %U/%F dropped). Nix .desktop files carry an absolute /nix/store path.
+BIN=""
+for d in "${PROFILE}"/share/applications/*.desktop; do
+  [ -e "${d}" ] || continue
+  grep -qiE '^(NoDisplay|Hidden)[[:space:]]*=[[:space:]]*true' "${d}" && continue
+  exec_line="$(sed -n 's/^Exec=//p' "${d}" | head -n1)"
+  [ -z "${exec_line}" ] && continue
+  cand="$(printf '%s' "${exec_line}" | awk '{print $1}')"
+  case "${cand}" in
+    /*) BIN="${cand}" ;;
+    *)  BIN="${PROFILE}/bin/${cand}" ;;
+  esac
+  [ -x "${BIN}" ] && break
+  BIN=""
+done
+
+# 2. Fallbacks: bin/<profile-name>, else the sole bin/ entry.
+if [ -z "${BIN}" ]; then
+  if [ -x "${PROFILE}/bin/${PROFILE_NAME}" ]; then
+    BIN="${PROFILE}/bin/${PROFILE_NAME}"
+  else
+    BIN="$(ls "${PROFILE}"/bin/* 2>/dev/null | head -n1)"
+  fi
+fi
+
+[ -n "${BIN}" ] && [ -x "${BIN}" ] || {
+  echo "nix-app-launch: could not resolve a binary for profile '${PROFILE_NAME}'" >&2
+  exit 1
+}
+
+echo "nix-app-launch: ${PROFILE_NAME} → ${BIN}" >&2
+exec /usr/local/bin/nix-launch "${BIN}" "$@"

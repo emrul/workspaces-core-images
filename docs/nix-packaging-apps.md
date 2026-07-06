@@ -234,6 +234,41 @@ reference the same way.
 
 ---
 
+## Choosing the base image for a Nix app image
+
+`dockerfile-nix-ubuntu` takes a `BASE_IMAGE` build arg (default:
+`localhost/kasm-core-ubuntu-noble:dev`). For single-app Nix images — browsers,
+Electron apps, anything whose runtime comes entirely from `/nix/store` — use
+`core-ubuntu-noble-minimal` instead of the standard core:
+
+```bash
+docker build \
+  -f dockerfile-nix-ubuntu \
+  --build-arg BASE_IMAGE=kasmweb/core-ubuntu-noble-minimal:dev \
+  -t kasmweb/nix-ubuntu-chrome:dev .
+```
+
+**Why this is safe for Nix apps.** The minimal image strips system-level LLVM
+(`libLLVM.so`, ~137 MiB) and WebKit (`libwebkit2gtk`, ~121 MiB). These are
+only used by system-installed software that needs software rendering or an
+embedded browser engine. A Nix app's closure is fully self-contained — `nix
+build` resolves every dependency (Mesa, LLVM, GTK, etc.) to paths inside
+`/nix/store`, so the system copies are never consulted. Chrome, Chromium, and
+all QtWebEngine apps have been verified to work correctly from the minimal base.
+
+**Why it matters.** Beyond the ~400 MiB size saving on the base layer, the
+minimal image removes tools (`openssh-client`, compilers, `wget`,
+`add-apt-repository`) that expand the attack surface of a long-lived browser
+container. See `design/core-minimal.md` for the full list of removals.
+
+**When to keep the standard core.** If a Nix app's activation script or
+wrapper needs to fall back to system-installed tools (unusual), or you are
+building a general-purpose desktop image rather than a single-app image, use
+the standard `core-ubuntu-noble`. The minimal image is specifically for
+browser/app containers where the Nix store is the sole software source.
+
+---
+
 ## Dev / feature-branch builds
 
 Day to day we don't test against released artifacts — we test against

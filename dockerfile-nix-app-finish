@@ -1,0 +1,102 @@
+# dockerfile-nix-app-finish — wiring-only finish build for the per-app
+# store-images emitted by `build-nix-store-volume --emit-app-images`.
+#
+# The store-image (STORE_IMAGE) is already FROM nix-ubuntu with the app's
+# Nix store baked in as *discrete* OCI layers (base / shared / app delta)
+# plus a thin meta layer and ENV NIX_APP_PROFILES. This stage layers ONLY
+# the app wiring on top — launcher, Kasm startup loop, single-app XFCE —
+# so the shared store layers below are untouched and continue to dedupe
+# across every app in the registry.
+#
+# Mirrors stage 2 of dockerfile-nix-app, minus the nix-env build and the
+# monolithic `COPY --from=nixbuild /nix /nix` (which would flatten the
+# store into one un-shareable layer).
+#
+# Required build args (set by build-nix-store-volume's finish loop):
+#   STORE_IMAGE   the per-app store-image, e.g. localhost/nix-store/chrome:dev
+#   PROFILE_NAME  profile slug / image name, e.g. chrome, firefox, slack
+#
+# Optional build args:
+#   GPU_SUPPORT   1 = copy nix-gpu-setup (defensive; the _gpu closure is
+#                 already in the shared base layer). Default: 1.
+#
+# Per-app convention (src/ubuntu/install/nix/<PROFILE_NAME>/):
+#   launch            required  launcher → /usr/local/bin/<PROFILE_NAME>-launch
+#   custom_startup.sh required  Kasm startup loop → /dockerstartup/custom_startup.sh
+#   post-build.sh     optional  app-specific build step (run as root here).
+#
+# Example (normally invoked by build-nix-store-volume, not by hand):
+#   docker build -f dockerfile-nix-app-finish \
+#     --build-arg STORE_IMAGE=localhost/nix-store/chrome:dev \
+#     --build-arg PROFILE_NAME=chrome \
+#     -t localhost/nix-chrome:dev .
+
+ARG STORE_IMAGE
+
+FROM $STORE_IMAGE
+ARG PROFILE_NAME
+ARG GPU_SUPPORT=1
+USER 0
+
+# Temporary: carry the kasm-setup fix (register "kasm_user" for VNC web login)
+# until the base core / nix-ubuntu images are rebuilt from the updated
+# src/common/kasm-go. Remove this COPY once that rebuild lands.
+COPY src/common/kasm-go/scripts/kasm-setup /usr/local/bin/kasm-setup
+
+# Per-app scripts. COPY brings the full nix install tree into a temp layer;
+# the RUN copies only what's needed to final destinations and removes the
+# temp tree so it doesn't inflate runtime layers. The overhead (shell
+# scripts only, < 100 KB) is shared across all app images in the registry
+# because the source digest is identical.
+COPY src/ubuntu/install/nix/ /tmp/nix-install/
+
+RUN set -e; \
+    # custom_startup.sh is required — it IS the single-app launcher + the Kasm
+    # docker-exec open handler. No file → fail the build (the resilient catalog
+    # loop in build-nix-store-volume records it and moves on).
+    if [ ! -f "/tmp/nix-install/${PROFILE_NAME}/custom_startup.sh" ]; then \
+        echo "no custom_startup.sh for ${PROFILE_NAME} — no wiring to install" >&2; exit 1; \
+    fi; \
+    cp "/tmp/nix-install/${PROFILE_NAME}/custom_startup.sh" \
+           /dockerstartup/custom_startup.sh; \
+    chmod 0755 /dockerstartup/custom_startup.sh /usr/local/bin/kasm-setup; \
+    # Shared launcher used by ported custom_startup.sh (START_COMMAND=
+    # "/usr/local/bin/nix-app-launch <profile>"). Always present.
+    cp /tmp/nix-install/scripts/nix-app-launch /usr/local/bin/nix-app-launch; \
+    chmod 0755 /usr/local/bin/nix-app-launch; \
+    # Optional bespoke per-app launcher (chrome, angelfish) — only when present.
+    if [ -f "/tmp/nix-install/${PROFILE_NAME}/launch" ]; then \
+        cp "/tmp/nix-install/${PROFILE_NAME}/launch" "/usr/local/bin/${PROFILE_NAME}-launch"; \
+        chmod 0755 "/usr/local/bin/${PROFILE_NAME}-launch"; \
+    fi; \
+    # GPU apps: nix-gpu-setup re-chowns /dev/dri nodes to the session user at
+    # boot so the GPU path in nix-launch / nix-gpu-run can open them. The
+    # service unit is already in nix-ubuntu; copy the script defensively in
+    # case the base image predates the GPU-setup feature.
+    if [ "${GPU_SUPPORT}" = "1" ]; then \
+        cp /tmp/nix-install/scripts/nix-gpu-setup /usr/local/bin/nix-gpu-setup; \
+        chmod 0755 /usr/local/bin/nix-gpu-setup; \
+    fi; \
+    # Optional app-specific build step (e.g. managed browser policies, extra config).
+    if [ -f "/tmp/nix-install/${PROFILE_NAME}/post-build.sh" ]; then \
+        bash "/tmp/nix-install/${PROFILE_NAME}/post-build.sh"; \
+    fi; \
+    rm -rf /tmp/nix-install
+
+# Single-application XFCE profile: swap in the no-panel layout so the workspace
+# opens directly into the app (mirrors kasmweb/chrome, kasmweb/firefox, etc.).
+RUN XFCONF=/home/kasm-default-profile/.config/xfce4/xfconf && \
+    cp "$XFCONF/single-application-xfce-perchannel-xml/"* \
+       "$XFCONF/xfce-perchannel-xml/" && \
+    chown -R 1000:0 "$XFCONF/xfce-perchannel-xml" && \
+    apt-get remove -y xfce4-panel && \
+    apt-get autoclean && rm -rf /var/lib/apt/lists/*
+
+# Fail the build on any unit parse warning (same gate as dockerfile-nix-ubuntu).
+RUN /usr/local/bin/container-init \
+        --units /etc/container-init/units \
+        --drop-in /etc/container-init.d \
+        --strict-units --validate
+
+# NOTE: stay USER 0. container-init must start as root so kasm-setup.service
+# can su to the session user and set the VNC password. Matches dockerfile-nix-app.

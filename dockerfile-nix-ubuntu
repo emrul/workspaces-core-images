@@ -6,10 +6,17 @@
 # overrides live at $HOME/.config/nix-app/active.
 #
 # IMPORTANT: BASE_IMAGE must be a core image built from THIS fork's
-# dockerfile-kasm-core — not the upstream kasmweb/core-ubuntu-noble.
-# We drop a unit into /etc/container-init.d/, which only exists in
-# container-init-based images. See docs/nix-how-to.md § "Step 1: build
-# the core image" for the local build commands.
+# dockerfile-kasm-core (or dockerfile-kasm-core-minimal) — not the
+# upstream kasmweb/core-ubuntu-noble. We drop a unit into
+# /etc/container-init.d/, which only exists in container-init-based
+# images.
+#
+# For single-app Nix images (browsers, Electron apps) prefer
+# core-ubuntu-noble-minimal as BASE_IMAGE — Nix closures are
+# self-contained so the stripped system LLVM/WebKit are not needed.
+# See docs/nix-packaging-apps.md § "Choosing the base image".
+# See docs/nix-how-to.md § "Step 1: build the core image" for build
+# commands.
 #
 # See design/nix-package-process.md for the full design.
 
