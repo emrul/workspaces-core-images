@@ -71,7 +71,7 @@ base:
   allow_failure: true
   script:
     - |
-      sudo nerdctl run --rm --privileged --name "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         "$DIND_IMG" bash /work/runs/nix-portal/dind-base.sh
@@ -85,7 +85,7 @@ build:
     - |
       if [ "${NIX_PROFILES:-}" = "__none__" ]; then echo "no image-relevant changes — skipping build"; exit 0; fi
       echo "building profiles: ${NIX_PROFILES:-<all>}  (per-app parallel=${BUILD_PARALLEL})"
-      sudo nerdctl run --rm --privileged --name "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/root/.cache/nix-build-output" \
         -v "$CI_PROJECT_DIR:/work:ro" \
@@ -99,7 +99,7 @@ publish:
   script:
     - |
       if [ "${NIX_PROFILES:-}" = "__none__" ]; then echo "no image-relevant changes — skipping publish"; exit 0; fi
-      sudo nerdctl run --rm --privileged --name "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" -e NIX_PROFILES="$NIX_PROFILES" \
