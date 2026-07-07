@@ -389,6 +389,26 @@ trust_shims_as_user() {
   '
 }
 
+# ───── 8. single-app desktop toggle (runtime) ─────────────────────────
+# When exactly one app is active, switch XFCE to the no-panel "single
+# application" layout so the session opens straight into the app — the runtime
+# replacement for the old finish build's `apt-get remove xfce4-panel`. Multi-app
+# (desktop) sessions keep the full panel. Both layouts ship in the core image.
+# Toggle off with NIX_SINGLE_APP_DESKTOP=0.
+apply_single_app_desktop() {
+  [ "${NIX_SINGLE_APP_DESKTOP:-1}" = "1" ] || return 0
+  n="$(printf '%s\n' $1 | grep -c . || true)"
+  [ "${n}" = "1" ] || return 0
+  for home in "${KASM_OS_HOME}" /home/kasm-default-profile; do
+    src="${home}/.config/xfce4/xfconf/single-application-xfce-perchannel-xml"
+    dst="${home}/.config/xfce4/xfconf/xfce-perchannel-xml"
+    [ -d "${src}" ] && [ -d "${dst}" ] || continue
+    cp -f "${src}"/*.xml "${dst}"/ 2>/dev/null || true
+    chown -R "${KASM_OS_USER}:${KASM_OS_GROUP}" "${dst}" 2>/dev/null || true
+  done
+  log "single app active; applied no-panel XFCE layout"
+}
+
 # ───── main ────────────────────────────────────────────────────────────
 [ -f "${META_JSON}" ] || {
   log "no /nix volume mounted (${META_JSON} absent); nothing to do"
@@ -410,6 +430,7 @@ if [ -n "${active}" ]; then
   done
   populate_desktop
   trust_shims_as_user
+  apply_single_app_desktop "${active}"
 fi
 
 log "complete"

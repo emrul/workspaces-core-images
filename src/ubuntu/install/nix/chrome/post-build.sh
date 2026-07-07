@@ -8,6 +8,9 @@
 # nixpkgs google-chrome is the upstream binary, so it reads the stock
 # /etc/opt/chrome/policies/managed path.
 set -eu
-mkdir -p /etc/opt/chrome/policies/managed
+# DESTDIR lets the content-addressed (crane) build stage this into a wiring tar
+# instead of a build-time RUN; empty = write to the live root (legacy podman path).
+: "${DESTDIR:=}"
+mkdir -p "${DESTDIR}/etc/opt/chrome/policies/managed"
 printf '%s\n' '{ "CommandLineFlagSecurityWarningsEnabled": false }' \
-    > /etc/opt/chrome/policies/managed/kasm-flags.json
+    > "${DESTDIR}/etc/opt/chrome/policies/managed/kasm-flags.json"

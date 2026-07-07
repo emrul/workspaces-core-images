@@ -737,18 +737,23 @@ if [ "${EMIT_APP_IMAGES:-0}" = "1" ]; then
     {
       echo "FROM ${APP_BASE_REF}"
       echo "USER 0"
-      echo "COPY base/store /nix/store"
+      # Store lands at /store (root), NOT /nix/store — the SAME source dirs and
+      # destination the fat-store Dockerfile uses, so these COPY layers are
+      # byte-identical to the fat store's and dedupe by blob digest (see
+      # design/nix-delivery-model.md). A /nix/store -> /store symlink keeps the
+      # image self-contained (runs with no /nix mount).
+      echo "COPY base/store /store"
       for lname in $used_layers; do
-        echo "COPY layer-${lname}/store /nix/store"
+        echo "COPY layer-${lname}/store /store"
       done
       for r in $reqs; do
-        echo "COPY profile-${r}/store /nix/store"
+        echo "COPY profile-${r}/store /store"
       done
-      echo "COPY profile-${P}/store /nix/store"
-      # Baked image (not mounted at /nix), so meta lands at /nix/var — NOT
-      # /var like the fat store, whose whole root is mounted at /nix. This
-      # puts profiles at /nix/var/nix/profiles where nix-activate reads them.
-      echo "COPY ${appmeta}/var /nix/var"
+      echo "COPY profile-${P}/store /store"
+      echo "COPY ${appmeta}/var /var"
+      # Point /nix/store and /nix/var at the /store-layout roots. Replace only
+      # these entries; never wipe /nix (the base may bootstrap from it).
+      echo "RUN rm -rf /nix/store /nix/var 2>/dev/null || true; mkdir -p /nix && ln -sfn /store /nix/store && ln -sfn /var /nix/var"
       echo "ENV NIX_APP_PROFILES=${P}"
     } > "${appdf}"
     echo "[inner] ${P}: staged ${appdf}" >&2
@@ -861,108 +866,24 @@ inner_run_args+=( --entrypoint /bin/sh "${NIX_IMAGE_DEFAULT}" /inner-build.sh )
 # build, so the identical base/shared `COPY` layers are materialised once and
 # reused — no per-app recopy, no docker-archive tar round-trip.
 STAGING="$("${CONTAINER_CLI}" volume inspect "${STAGE_VOLUME}" --format '{{ .Mountpoint }}')/.build/layers"
-[[ -f "${STAGING}/Dockerfile" ]] || fail "inner build staged no ${STAGING}/Dockerfile"
+[[ -d "${STAGING}" ]] || fail "inner build staged nothing at ${STAGING}"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-log "[2/3] building fat store ${TAG} from staging (overlay store, no tar)"
-"${CONTAINER_CLI}" build --platform "${PLATFORM}" -t "${TAG}" -f "${STAGING}/Dockerfile" "${STAGING}"
+# Content-addressed assembly (crane + deterministic tars): the fat store and
+# every per-app image share store layers by blob digest — across apps, the fat
+# store, and distro bases. Fat store stays mountable (/store); per-app images
+# are self-contained (/nix/store->/store symlink) with runtime wiring. Replaces
+# the non-reproducible podman COPY build. See design/nix-delivery-model.md.
+log "[2/3] assembling images (crane, content-addressed) from ${STAGING}"
+asm_env=(
+  "STAGING=${STAGING}" "REPO_ROOT=${REPO_ROOT}"
+  "FAT_TAG=${TAG}" "APP_REPO=${APP_REPO}" "APP_TAG=${APP_TAG}"
+  "CONTAINER_CLI=${CONTAINER_CLI}" "ARCH=${ARCH}" "BUILD_PARALLEL=${BUILD_PARALLEL:-}"
+)
+[[ "${EMIT_APP_IMAGES}" == 1 ]] && asm_env+=( "APP_BASE_IMAGE=${APP_BASE_IMAGE}" )
+[[ -n "${PUSH_REGISTRY}" ]] && asm_env+=( "PUSH_REGISTRY=${PUSH_REGISTRY}" )
+env "${asm_env[@]}" bash "${SCRIPT_DIR}/nix-crane-assemble"
 
-if [[ -n "${PUSH_REGISTRY}" ]]; then
-  log "[3/3] pushing ${TAG} → ${PUSH_REGISTRY}"
-  remote_tag="${PUSH_REGISTRY}/${TAG#localhost/}"
-  "${CONTAINER_CLI}" tag "${TAG}" "${remote_tag}" \
-    && "${CONTAINER_CLI}" push "${remote_tag}" && log "pushed: ${remote_tag}"
-fi
-
-# ───── Per-app: build store-image (staging context) + finish (repo) ────
-# Both builds run in the outer overlay store. The store-image build reuses the
-# cached base/shared layers; the finish build layers app wiring on top without
-# touching them, so the shared layers dedupe at the registry on push.
-if [[ "${EMIT_APP_IMAGES}" == 1 ]]; then
-  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-  FINISH_DOCKERFILE="${REPO_ROOT}/dockerfile-nix-app-finish"
-  [[ -f "${FINISH_DOCKERFILE}" ]] || fail "missing ${FINISH_DOCKERFILE}"
-  [[ -f "${STAGING}/apps.txt" ]] || fail "inner build staged no ${STAGING}/apps.txt"
-
-  mapfile -t apps < <(grep -v '^$' "${STAGING}/apps.txt")
-  # Per-app builds are independent and share the same cached base/shared layers,
-  # so they parallelise well. BUILD_PARALLEL (env) caps the concurrency; it
-  # defaults to min(nproc, 4) — parallel is the sane default (serial rebuilds of
-  # the whole catalog are a needless slog), capped so a many-core box doesn't
-  # thrash disk I/O copying multi-GB store layers. To avoid N builds racing to
-  # create the identical base/shared COPY layers (a cache stampede + store-lock
-  # contention), the FIRST app is built serially to warm those layers, then the
-  # rest fan out.
-  _np="$( { command -v nproc >/dev/null 2>&1 && nproc; } 2>/dev/null || echo 4 )"
-  [[ "${_np}" =~ ^[0-9]+$ ]] && [[ "${_np}" -ge 1 ]] || _np=4
-  _defpar=$(( _np < 4 ? _np : 4 ))
-  PAR="${BUILD_PARALLEL:-${_defpar}}"
-  [[ "${PAR}" =~ ^[0-9]+$ ]] && [[ "${PAR}" -ge 1 ]] || PAR="${_defpar}"
-  log "[apps] building ${#apps[@]} per-app image(s) (parallel=${PAR}): store-image + finish (wiring)"
-
-  RESULTS_DIR="${STAGING}/.app-results"; rm -rf "${RESULTS_DIR}"; mkdir -p "${RESULTS_DIR}"
-
-  # Build (and optionally push) one app. Never aborts the batch: writes an
-  # OK / FAIL-<phase> sentinel + a per-app log the aggregator reads back.
-  build_one_app() {
-    local p="$1"
-    local store_image="${APP_REPO}-store/${p}:${APP_TAG}"
-    local final_image="${APP_REPO}-${p}:${APP_TAG}"
-    local logf="${RESULTS_DIR}/${p}.log"
-    {
-      echo "[apps] ${p}: store-image ${store_image}"
-      if ! "${CONTAINER_CLI}" build --platform "${PLATFORM}" \
-          -t "${store_image}" -f "${STAGING}/Dockerfile.${p}" "${STAGING}"; then
-        printf 'store\n' > "${RESULTS_DIR}/${p}.fail"; return 0
-      fi
-      echo "[apps] ${p}: finish ${final_image}"
-      if ! "${CONTAINER_CLI}" build --platform "${PLATFORM}" \
-          -f "${FINISH_DOCKERFILE}" \
-          --build-arg "STORE_IMAGE=${store_image}" \
-          --build-arg "PROFILE_NAME=${p}" \
-          -t "${final_image}" "${REPO_ROOT}"; then
-        printf 'finish\n' > "${RESULTS_DIR}/${p}.fail"; return 0
-      fi
-      if [[ -n "${PUSH_REGISTRY}" ]]; then
-        local remote_final="${PUSH_REGISTRY}/${final_image#localhost/}"
-        if ! { "${CONTAINER_CLI}" tag "${final_image}" "${remote_final}" \
-               && "${CONTAINER_CLI}" push "${remote_final}"; }; then
-          printf 'push\n' > "${RESULTS_DIR}/${p}.fail"; return 0
-        fi
-      fi
-      printf 'ok\n' > "${RESULTS_DIR}/${p}.ok"
-    } > "${logf}" 2>&1
-  }
-
-  if [[ "${PAR}" -gt 1 && "${#apps[@]}" -gt 1 ]]; then
-    log "[apps] warming shared layers with '${apps[0]}' (serial), then fanning out ${PAR}-wide"
-    build_one_app "${apps[0]}"
-    rest=( "${apps[@]:1}" )
-  else
-    rest=( "${apps[@]}" )
-  fi
-
-  inflight=0
-  for p in "${rest[@]}"; do
-    build_one_app "${p}" &
-    inflight=$((inflight+1))
-    if [[ "${inflight}" -ge "${PAR}" ]]; then wait -n 2>/dev/null || wait; inflight=$((inflight-1)); fi
-  done
-  wait
-
-  # Aggregate results; surface failing apps' logs (successes stay quiet).
-  emitted_finals=(); failed_finals=()
-  for p in "${apps[@]}"; do
-    if [[ -f "${RESULTS_DIR}/${p}.ok" ]]; then
-      emitted_finals+=( "${APP_REPO}-${p}:${APP_TAG}" )
-      log "[apps] ${p}: OK"
-    else
-      phase="$(cat "${RESULTS_DIR}/${p}.fail" 2>/dev/null || echo '?')"
-      failed_finals+=( "${p}(${phase})" )
-      log "[apps] ${p}: FAILED (${phase}) — last lines:"
-      tail -25 "${RESULTS_DIR}/${p}.log" 2>/dev/null | sed "s/^/    [${p}] /" >&2 || true
-    fi
-  done
-fi
 
 # ───── Optional volume prune ───────────────────────────────────────────
 if [[ "${PRUNE_STAGE}" == 1 ]]; then
@@ -974,10 +895,6 @@ log "done: ${TAG}"
 log "to inspect layers:"
 log "  ${CONTAINER_CLI} image inspect ${TAG} | grep RootFS -A 20"
 if [[ "${EMIT_APP_IMAGES}" == 1 ]]; then
-  log "per-app runnable images (${#emitted_finals[@]}):"
-  for fi in "${emitted_finals[@]}"; do log "  ${fi}"; done
-  if [[ ${#failed_finals[@]} -gt 0 ]]; then
-    log "per-app finish FAILED / skipped (${#failed_finals[@]}): ${failed_finals[*]}"
-    log "  (their store-images still exist as ${APP_REPO}-store/<name>:${APP_TAG})"
-  fi
+  log "per-app images assembled via crane (${APP_REPO}-<app>:${APP_TAG});"
+  log "  see the 'per-app: ok=… failed=…' line above for each result."
 fi

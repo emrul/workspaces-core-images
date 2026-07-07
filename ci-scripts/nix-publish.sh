@@ -83,5 +83,25 @@ for img in "${imgs[@]}"; do
   fi
 done
 
+# Optional: also publish the fat store-mount image (all profiles' Nix store in
+# shared layers). Registry entry is marked enabled:false — it's for pre-caching
+# the shared layers / runtime app-selection, not a runnable single-app workspace.
+# Enable with PUBLISH_FAT_STORE=1; image name is nix-store:<tag>.
+if [[ "${PUBLISH_FAT_STORE:-0}" == "1" ]]; then
+  fat_local="$("${DOCKER}" images --format '{{.Repository}}:{{.Tag}}' \
+    | grep -E "^localhost/nix-store-(amd64|arm64):dev$" | sort -u | head -1)"
+  if [[ -n "${fat_local}" ]]; then
+    fat_dest="${REGISTRY_NS}/nix-store:${KASM_TAG}"
+    echo "[nix-publish] fat store: ${fat_local} → ${fat_dest}"
+    if run "${DOCKER}" tag "${fat_local}" "${fat_dest}" && run "${DOCKER}" push "${fat_dest}"; then
+      pushed=$((pushed+1))
+    else
+      echo "[nix-publish] WARN fat store push failed" >&2; failed+=("nix-store")
+    fi
+  else
+    echo "[nix-publish] PUBLISH_FAT_STORE=1 but no localhost/nix-store-<arch>:dev found" >&2
+  fi
+fi
+
 echo "[nix-publish] done: pushed=${pushed} failed=${#failed[@]} ${failed[*]:-}"
 [[ ${#failed[@]} -eq 0 ]]

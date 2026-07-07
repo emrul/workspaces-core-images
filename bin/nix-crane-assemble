@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# nix-crane-assemble — content-addressed image assembly for the Nix catalog.
+#
+# Replaces the podman-`build` (COPY) assembly in build-nix-store-volume. It tars
+# each store partition DETERMINISTICALLY (GNU tar --sort=name → reproducible tar,
+# and crane uses the tar AS the layer, so diff_id = sha256(tar)); the fat store
+# and every per-app image then share byte-identical base/shared/profile layers
+# that dedupe by digest — across apps, the fat store, and distro bases. Per-app
+# images are fully crane-assembled (no podman finish): store layers + a
+# /nix/store->/store symlink layer + a per-app wiring layer + ENV.
+#
+# Expects the partition tree the inner build staged under $STAGING:
+#   base/store, layer-<n>/store, profile-<app>/store, meta/var,
+#   appmeta-<app>/var, Dockerfile.<app> (parsed for each app's layer set),
+#   apps.txt
+#
+# Env:
+#   STAGING        staging dir (…/.build/layers)          [required]
+#   REPO_ROOT      repo root (for src/ubuntu/install/nix) [required]
+#   FAT_TAG        fat store image tag (localhost/nix-store-<arch>:dev)
+#   APP_REPO       per-app repo prefix (localhost/nix)
+#   APP_TAG        per-app tag (dev)
+#   APP_BASE_IMAGE nix-<distro> base (local podman image ref)
+#   CONTAINER_CLI  podman|docker (default podman)
+#   ARCH           amd64|arm64 (for the crane download)
+#   ONLY_APPS      space list to assemble (default: all in apps.txt)
+#   PUSH_REGISTRY  optional final push target
+set -euo pipefail
+
+STAGING="${STAGING:?set STAGING}"
+REPO_ROOT="${REPO_ROOT:?set REPO_ROOT}"
+FAT_TAG="${FAT_TAG:-localhost/nix-store-${ARCH:-amd64}:dev}"
+APP_REPO="${APP_REPO:-localhost/nix}"
+APP_TAG="${APP_TAG:-dev}"
+CONTAINER_CLI="${CONTAINER_CLI:-podman}"
+ARCH="${ARCH:-amd64}"
+REG_LOCAL="127.0.0.1:5000"
+NIXSRC="${REPO_ROOT}/src/ubuntu/install/nix"
+BLOBS="${STAGING}/.blobs"; mkdir -p "${BLOBS}"
+
+log(){ printf '[crane-assemble] %s\n' "$*" >&2; }
+fail(){ printf '[crane-assemble] ERROR: %s\n' "$*" >&2; exit 1; }
+
+# ── tooling ────────────────────────────────────────────────────────────────
+ensure_crane() {
+  CRANE="$(command -v crane 2>/dev/null || true)"
+  [[ -n "${CRANE}" ]] && return 0
+  CRANE=/usr/local/bin/crane
+  [[ -x "${CRANE}" ]] && return 0
+  local a="x86_64"; [[ "${ARCH}" == arm64 ]] && a="arm64"
+  log "downloading crane (${a})"
+  curl -fsSL "https://github.com/google/go-containerregistry/releases/download/v0.20.2/go-containerregistry_Linux_${a}.tar.gz" \
+    | tar xz -C /usr/local/bin crane
+}
+ensure_registry() {
+  "${CONTAINER_CLI}" inspect nix-crane-registry >/dev/null 2>&1 && \
+    { "${CONTAINER_CLI}" start nix-crane-registry >/dev/null 2>&1 || true; } || \
+    "${CONTAINER_CLI}" run -d --name nix-crane-registry -p 127.0.0.1:5000:5000 registry:2 >/dev/null
+  local i; for i in $(seq 1 30); do
+    curl -sf "http://${REG_LOCAL}/v2/" >/dev/null 2>&1 && return 0; sleep 0.5
+  done
+  fail "local registry did not come up"
+}
+
+# ── deterministic tar of a partition (once; crane uses it AS the layer) ──────
+# det_tar <staging-subdir> <member-root> <blob-basename>
+det_tar() {
+  local out="${BLOBS}/$3.tar"
+  [[ -s "${out}" ]] && return 0
+  [[ -d "${STAGING}/$1/$2" ]] || return 1
+  tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+      -C "${STAGING}/$1" -cf "${out}" "$2"
+}
+
+# ── symlink layer (shared by all per-app images): /nix/store->/store etc. ────
+mk_symlink_tar() {
+  [[ -s "${BLOBS}/symlink.tar" ]] && return 0
+  local d="${STAGING}/.symlink"; rm -rf "${d}"; mkdir -p "${d}/nix"
+  ln -s /store "${d}/nix/store"; ln -s /var "${d}/nix/var"
+  tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+      -C "${d}" -cf "${BLOBS}/symlink.tar" nix
+}
+
+# ── per-app wiring layer (custom_startup, launchers, post-build output) ──────
+stage_wiring_tar() {
+  local p="$1" w="${STAGING}/.wiring-${p}"
+  [[ -s "${BLOBS}/wiring-${p}.tar" ]] && return 0
+  [[ -f "${NIXSRC}/${p}/custom_startup.sh" ]] || { log "${p}: no custom_startup.sh — skip"; return 1; }
+  rm -rf "${w}"; mkdir -p "${w}/dockerstartup" "${w}/usr/local/bin"
+  install -m0755 "${NIXSRC}/${p}/custom_startup.sh" "${w}/dockerstartup/custom_startup.sh"
+  install -m0755 "${NIXSRC}/scripts/nix-app-launch" "${w}/usr/local/bin/nix-app-launch"
+  [[ -f "${NIXSRC}/${p}/launch" ]] && install -m0755 "${NIXSRC}/${p}/launch" "${w}/usr/local/bin/${p}-launch"
+  [[ -f "${NIXSRC}/${p}/post-build.sh" ]] && DESTDIR="${w}" sh "${NIXSRC}/${p}/post-build.sh"
+  tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C "${w}" -cf "${BLOBS}/wiring-${p}.tar" .
+}
+
+# ── parse an app's store/meta partitions from its staged Dockerfile ─────────
+app_store_parts(){ grep -E '^COPY .+/store /store$' "${STAGING}/Dockerfile.$1" | awk '{print $2}' | sed 's#/store$##'; }
+app_meta_dir(){ grep -E '^COPY .+/var /var$' "${STAGING}/Dockerfile.$1" | awk '{print $2}' | sed 's#/var$##' | head -1; }
+
+ensure_crane
+ensure_registry
+
+# ── fat store: scratch + all store partitions + full meta (mountable /store) ─
+log "assembling fat store ${FAT_TAG}"
+fat_args=()
+det_tar base store base && fat_args+=( -f "${BLOBS}/base.tar" )
+for d in "${STAGING}"/layer-*; do [[ -d "${d}/store" ]] || continue; n="$(basename "${d}")"; det_tar "${n}" store "${n}" && fat_args+=( -f "${BLOBS}/${n}.tar" ); done
+for d in "${STAGING}"/profile-*; do [[ -d "${d}/store" ]] || continue; n="$(basename "${d}")"; det_tar "${n}" store "${n}" && fat_args+=( -f "${BLOBS}/${n}.tar" ); done
+det_tar meta var meta && fat_args+=( -f "${BLOBS}/meta.tar" )
+fat_ref="${REG_LOCAL}/nix-store:${APP_TAG}"
+"${CRANE}" append --insecure --oci-empty-base "${fat_args[@]}" -t "${fat_ref}"
+"${CONTAINER_CLI}" pull --tls-verify=false "${fat_ref}" >/dev/null
+"${CONTAINER_CLI}" tag "${fat_ref}" "${FAT_TAG}"
+log "fat store ready: ${FAT_TAG}"
+
+# ── per-app: base + its store subset + meta + symlink + wiring + ENV ────────
+# Parallel: shared partitions are already tarred (fat step above); each worker
+# only tars its own meta+wiring and references existing blobs. crane dedups at
+# push (unchanged blobs = "existing blob", no re-upload) → automatic gating.
+mapfile -t apps < <(grep -v '^$' "${STAGING}/apps.txt" 2>/dev/null || true)
+[[ -n "${ONLY_APPS:-}" ]] && apps=( ${ONLY_APPS} )
+RESULTS="${STAGING}/.crane-results"; rm -rf "${RESULTS}"; mkdir -p "${RESULTS}"
+
+assemble_app() {
+  local p="$1"; local logf="${RESULTS}/${p}.log"
+  {
+    local a_args=() part md
+    for part in $(app_store_parts "${p}"); do det_tar "${part}" store "${part}" && a_args+=( -f "${BLOBS}/${part}.tar" ); done
+    md="$(app_meta_dir "${p}")"; [[ -n "${md}" ]] && det_tar "${md}" var "${md}" && a_args+=( -f "${BLOBS}/${md}.tar" )
+    a_args+=( -f "${BLOBS}/symlink.tar" )
+    stage_wiring_tar "${p}" && a_args+=( -f "${BLOBS}/wiring-${p}.tar" ) || { printf 'wiring\n' > "${RESULTS}/${p}.fail"; return 0; }
+    local app_ref="${REG_LOCAL}/nix-${p}:${APP_TAG}" final="${APP_REPO}-${p}:${APP_TAG}"
+    "${CRANE}" append --insecure -b "${base_ref}" "${a_args[@]}" -t "${app_ref}" \
+      && "${CRANE}" mutate --insecure "${app_ref}" --env "NIX_APP_PROFILES=${p}" -t "${app_ref}" \
+      || { printf 'assemble\n' > "${RESULTS}/${p}.fail"; return 0; }
+    "${CONTAINER_CLI}" pull --tls-verify=false "${app_ref}" >/dev/null \
+      && "${CONTAINER_CLI}" tag "${app_ref}" "${final}" \
+      || { printf 'pull\n' > "${RESULTS}/${p}.fail"; return 0; }
+    if [[ -n "${PUSH_REGISTRY:-}" ]]; then
+      "${CRANE}" copy --insecure "${app_ref}" "${PUSH_REGISTRY}/nix-${p}:${APP_TAG}" \
+        || { printf 'push\n' > "${RESULTS}/${p}.fail"; return 0; }
+    fi
+    printf 'ok\n' > "${RESULTS}/${p}.ok"
+  } > "${logf}" 2>&1
+}
+
+if [[ "${#apps[@]}" -gt 0 ]]; then
+  [[ -n "${APP_BASE_IMAGE:-}" ]] || fail "APP_BASE_IMAGE required to assemble per-app images"
+  base_ref="${REG_LOCAL}/nixbase:${APP_TAG}"
+  "${CONTAINER_CLI}" tag "${APP_BASE_IMAGE}" "${base_ref}"
+  "${CONTAINER_CLI}" push --tls-verify=false "${base_ref}" >/dev/null
+  mk_symlink_tar
+
+  _np="$( { command -v nproc >/dev/null 2>&1 && nproc; } 2>/dev/null || echo 4 )"
+  [[ "${_np}" =~ ^[0-9]+$ ]] || _np=4
+  PAR="${BUILD_PARALLEL:-$(( _np < 4 ? _np : 4 ))}"
+  [[ "${PAR}" =~ ^[0-9]+$ ]] && [[ "${PAR}" -ge 1 ]] || PAR=4
+  log "assembling ${#apps[@]} per-app image(s), parallel=${PAR}"
+  inflight=0
+  for p in "${apps[@]}"; do
+    assemble_app "${p}" &
+    inflight=$((inflight+1))
+    if [[ "${inflight}" -ge "${PAR}" ]]; then wait -n 2>/dev/null || wait; inflight=$((inflight-1)); fi
+  done
+  wait
+
+  ok=0; failed=()
+  for p in "${apps[@]}"; do
+    if [[ -f "${RESULTS}/${p}.ok" ]]; then ok=$((ok+1)); log "  ${p}: OK"
+    else failed+=( "${p}($(cat "${RESULTS}/${p}.fail" 2>/dev/null || echo '?'))" )
+      log "  ${p}: FAILED — last lines:"; tail -15 "${RESULTS}/${p}.log" 2>/dev/null | sed "s/^/    [${p}] /" >&2 || true
+    fi
+  done
+  log "per-app: ok=${ok} failed=${#failed[@]} ${failed[*]:-}"
+fi
+
+# also push the fat store if requested
+if [[ -n "${PUSH_REGISTRY:-}" ]]; then
+  "${CRANE}" copy --insecure "${fat_ref}" "${PUSH_REGISTRY}/${FAT_TAG#localhost/}" && log "pushed fat store → ${PUSH_REGISTRY}"
+fi
+log "done"
