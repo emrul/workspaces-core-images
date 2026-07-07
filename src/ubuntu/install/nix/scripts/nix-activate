@@ -62,6 +62,15 @@ warn() { printf 'nix-activate: WARN %s\n' "$*" >&2; }
 # Debian/Ubuntu multiarch (/usr/lib/<arch>-linux-gnu), Fedora/RHEL
 # (/usr/lib64), generic /usr/lib — so we search a candidate list per lib.
 setup_narrow_lib_dir() {
+  # On musl hosts (Alpine) the system mesa/GL stack is musl-built, but Nix apps
+  # are glibc — they CANNOT dlopen the system libGL (libc mismatch). Skip the
+  # compat dir entirely so apps fall back to their OWN bundled (glibc) mesa /
+  # llvmpipe from the Nix closure (software GL). No hardware/system-GL interop
+  # on musl; that's expected.
+  if [ -e /lib/ld-musl-x86_64.so.1 ] || [ -e /lib/ld-musl-aarch64.so.1 ]; then
+    log "musl host; skipping system-GL compat dir (Nix apps use bundled mesa)"
+    return 0
+  fi
   arch="$(uname -m)"
   lib_search="/usr/lib/${arch}-linux-gnu /usr/lib64 /lib64 /usr/lib /lib"
   out=/opt/nix-libs

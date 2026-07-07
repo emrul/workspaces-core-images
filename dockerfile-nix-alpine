@@ -1,0 +1,52 @@
+# nix-alpine: alpine (musl) core + Nix activation hooks.
+#
+# Alpine sibling of dockerfile-nix-ubuntu/-fedora. The surprise: Nix's
+# glibc app binaries RUN on a musl host, because their ELF interpreter
+# points into /nix/store (the Nix glibc's ld-linux), never the host's
+# musl libc — so the same distro-independent fat-store image mounts and
+# runs here too. The one musl caveat is graphics: the system mesa is
+# musl-built and a glibc app can't dlopen it, so nix-activate SKIPS the
+# system-GL compat dir on musl and apps use their own bundled (glibc)
+# mesa/llvmpipe from the Nix closure — i.e. software GL only on alpine.
+#
+# The nix-activate/nix-launch/nix-gpu-* scripts are POSIX sh and shared
+# from src/ubuntu/install/nix (busybox-ash compatible).
+#
+# BASE_IMAGE must be a container-init-based alpine core from THIS fork
+# (dockerfile-kasm-core-alpine) — container-init is a static Go binary,
+# so it runs on musl. See dockerfile-nix-ubuntu and
+# design/nix-package-process.md.
+
+ARG BASE_IMAGE="localhost/kasm-core-alpine:dev"
+FROM $BASE_IMAGE
+
+ARG DISTRO=alpine
+USER 0
+
+# Drop-in unit + scripts (shared with ubuntu/fedora). Gated by
+# ConditionPathIsDirectory so the image still boots without /nix mounted.
+COPY src/ubuntu/install/nix/units/nix-activate.service \
+     src/ubuntu/install/nix/units/nix-gpu-setup.service \
+     /etc/container-init.d/
+COPY src/ubuntu/install/nix/scripts/nix-activate \
+     src/ubuntu/install/nix/scripts/nix-app \
+     src/ubuntu/install/nix/scripts/nix-launch \
+     src/ubuntu/install/nix/scripts/nix-gpu-run \
+     src/ubuntu/install/nix/scripts/nix-gpu-setup \
+     /usr/local/bin/
+
+RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app /usr/local/bin/nix-launch /usr/local/bin/nix-gpu-run /usr/local/bin/nix-gpu-setup && \
+    /usr/local/bin/container-init \
+        --units /etc/container-init/units \
+        --drop-in /etc/container-init.d \
+        --strict-units --validate
+
+# Alpine's /etc/profile already sources /etc/profile.d/*.sh for login shells, so
+# nix-activate's generated /etc/profile.d/nix-app.sh is picked up there. Add a
+# best-effort /etc/bash.bashrc hook for non-login interactive bash terminals
+# (menu/.desktop launchers use absolute paths regardless).
+RUN { \
+      echo ''; \
+      echo '# nix-app: ensure interactive shells see the activated profiles.'; \
+      echo '[ -f /etc/profile.d/nix-app.sh ] && . /etc/profile.d/nix-app.sh'; \
+    } >> /etc/bash.bashrc

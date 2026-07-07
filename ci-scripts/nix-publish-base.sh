@@ -36,11 +36,13 @@ BASES="
 localhost/nix-ubuntu:dev|kasm-core-ubuntu
 localhost/kasm-core-ubuntu-noble-minimal:dev|kasm-core-ubuntu-minimal
 localhost/nix-fedora:dev|kasm-core-fedora
+localhost/nix-alpine:dev|kasm-core-alpine
 "
-# fedora has no minimal core (dockerfile-kasm-core-minimal is apt-only), so
-# nix-fedora builds on the standard fedora core — just kasm-core-fedora above.
-# Follow-ups (uncomment as each base lands and is tested):
-#   localhost/nix-alpine:dev|kasm-core-alpine   (alpine = musl; needs a glibc shim)
+# fedora/alpine have no minimal core (dockerfile-kasm-core-minimal is apt-only),
+# so nix-fedora/nix-alpine build on their standard cores. Alpine is musl: apps
+# run (own glibc loader from /nix/store) but SOFTWARE-RENDER ONLY — the system
+# mesa is musl (see dockerfile-nix-alpine / nix-activate musl skip). GPU on
+# alpine is future work (glibc GL from nix/host-injection, not host musl mesa).
 
 in_filter() { [ -z "${FILTER}" ] && return 0; local x; for x in ${FILTER}; do [ "${x}" = "$1" ] && return 0; done; return 1; }
 run() { if [ "${DRY_RUN}" = 1 ]; then echo "  DRY: $*"; else "$@"; fi; }
