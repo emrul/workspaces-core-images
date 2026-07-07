@@ -3,7 +3,13 @@ Description=Webcam helper (PyInstaller bundle)
 Requires=webcam.socket
 After=kasm-setup.service
 ConditionEnvironment=KASM_VNC=1
-ConditionPathExists=/dev/video0
+# No ConditionPathExists=/dev/video0 here: this service is driven by
+# webcam.socket in ActivationMode=proxy, and container-init evaluates
+# Condition* once at parse/boot time — the proxy accept→spawn path
+# (driveProxy→runHelperLoop→spawnAndWait) never re-checks it. A guard
+# here would be dead code. The socket listens unconditionally (like
+# gamepad/audio-in); the server needs a real /dev/video0 to function
+# and exits/StartLimits out on connect if none is present.
 
 [Service]
 Type=simple
