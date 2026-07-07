@@ -23,7 +23,37 @@ NAME="${NAME:-nixbuild}"
 PROFILES="${1:-}"
 PUSH="${2:-}"
 
+# Build knobs forwarded into the container:
+#   BUILD_PARALLEL  per-app concurrency (default min(nproc,4) in build script)
+#   EMIT_APPS       1 (default) emit per-app images; 0 = fat store only
+#   FORCE_ALL       1 = skip change-gating, build the whole catalog
+#   NIX_GATE_BASE   git ref to diff against for gating (default HEAD~1)
+BUILD_PARALLEL="${BUILD_PARALLEL:-}"
+EMIT_APPS="${EMIT_APPS:-1}"
+FORCE_ALL="${FORCE_ALL:-0}"
+NIX_GATE_BASE="${NIX_GATE_BASE:-HEAD~1}"
+
 [ -d "$REPO" ] || { echo "repo not found: $REPO" >&2; exit 1; }
+
+# ── change-gating (host-side, where git history lives) ──────────────────────
+# No reason this should be CI-only: when no explicit PROFILES arg is given and
+# FORCE_ALL!=1, compute the profile set from what changed since NIX_GATE_BASE
+# (committed + uncommitted, since /work is the live checkout) using the SAME
+# mapping as CI (ci-scripts/nix-changed-profiles.sh). Result:
+#   ""          shared/base file changed → build all
+#   "a b c"     only these app profiles changed
+#   "__none__"  nothing image-relevant changed → dind-build.sh no-ops
+if [ -z "$PROFILES" ] && [ "$FORCE_ALL" != "1" ]; then
+  if base_sha="$(git -C "$REPO" rev-parse --verify --quiet "${NIX_GATE_BASE}^{commit}" 2>/dev/null)"; then
+    changed="$(git -C "$REPO" diff --name-only "$base_sha" 2>/dev/null || true)"
+    gated="$(NIX_CHANGED_FILES="$changed" bash "$REPO/ci-scripts/nix-changed-profiles.sh" | sed -n 's/^NIX_PROFILES=//p')"
+    PROFILES="$gated"
+    echo "[launch] change-gating vs ${NIX_GATE_BASE} (${base_sha}): PROFILES='${PROFILES:-<all>}'"
+    echo "[launch]   (override with an explicit PROFILES arg, FORCE_ALL=1, or NIX_GATE_BASE=<ref>)"
+  else
+    echo "[launch] gating base '${NIX_GATE_BASE}' not resolvable — building all"
+  fi
+fi
 
 sudo mkdir -p "$ROOT/containers" "$ROOT/output"
 
@@ -32,14 +62,22 @@ sudo mkdir -p "$ROOT/containers" "$ROOT/output"
 sudo nerdctl rm -f "$NAME" 2>/dev/null || true
 : > /tmp/dind-prelaunch || true
 
+if [ "$PROFILES" = "__none__" ]; then
+  echo "[launch] change-gating: no image-relevant changes since ${NIX_GATE_BASE} — nothing to build."
+  echo "[launch] (use FORCE_ALL=1 or pass an explicit PROFILES arg to build anyway)"
+  exit 0
+fi
+
 echo "[launch] starting detached build container '$NAME'"
-echo "[launch]   profiles: ${PROFILES:-<all>}   push: ${PUSH:-<none>}"
+echo "[launch]   profiles: ${PROFILES:-<all>}   push: ${PUSH:-<none>}   emit_apps: ${EMIT_APPS}   parallel: ${BUILD_PARALLEL:-<default>}"
 sudo nerdctl run -d --name "$NAME" --privileged \
   -v "$ROOT/containers:/var/lib/containers" \
   -v "$ROOT/output:/root/.cache/nix-build-output" \
   -v "$REPO:/work:ro" \
   -e "PROFILES=$PROFILES" \
   -e "PUSH=$PUSH" \
+  -e "EMIT_APPS=$EMIT_APPS" \
+  -e "BUILD_PARALLEL=$BUILD_PARALLEL" \
   "$IMG" /work/runs/nix-portal/dind-build.sh
 
 echo "[launch] started. Watch with:  runs/nix-portal/dind-check.sh"

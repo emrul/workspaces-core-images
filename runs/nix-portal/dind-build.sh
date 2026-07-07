@@ -12,8 +12,13 @@
 #                                    app-*.tar — all visible on the host)
 #
 # Env:
-#   PROFILES   optional CSV/space list of profiles; empty = all in the toml
-#   PUSH       optional registry to push final images to (e.g. forge.emrul.dev)
+#   PROFILES      optional CSV/space list of profiles; empty = all in the toml.
+#                 "__none__" = change-gating found nothing image-relevant → no-op.
+#   PUSH          optional registry to push final images to (e.g. forge.emrul.dev)
+#   EMIT_APPS     1 (default) = also emit the per-app images; 0 = fat store only
+#                 (skip re-assembling per-app images that already exist).
+#   BUILD_PARALLEL  per-app build concurrency (read directly by
+#                 build-nix-store-volume; default min(nproc,4)).
 set -euo pipefail
 
 cd /work
@@ -30,8 +35,15 @@ trap on_err ERR
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=================================================================="
-echo "[driver] start $(date -u +%FT%TZ)  PROFILES='${PROFILES:-<all>}'  PUSH='${PUSH:-<none>}'"
+echo "[driver] start $(date -u +%FT%TZ)  PROFILES='${PROFILES:-<all>}'  PUSH='${PUSH:-<none>}'  EMIT_APPS='${EMIT_APPS:-1}'  BUILD_PARALLEL='${BUILD_PARALLEL:-<default>}'"
 status "RUNNING setup $(date -u +%FT%TZ)"
+
+# Change-gating: nothing image-relevant changed — build nothing, exit clean.
+if [ "${PROFILES:-}" = "__none__" ]; then
+  echo "[driver] PROFILES=__none__ — no image-relevant changes; nothing to build"
+  status "SUCCESS apps=0 (no changes) $(date -u +%FT%TZ)"
+  exit 0
+fi
 
 # ── 1. ensure the nix-ubuntu base is present in the podman store ──────────
 if ! podman image exists localhost/nix-ubuntu:dev; then
@@ -49,7 +61,9 @@ echo "[driver] base image OK: $(podman image inspect -f '{{.Id}}' localhost/nix-
 # ── 2. assemble args ──────────────────────────────────────────────────────
 # --keep-output preserves app-*.tar after the run so the checker can verify
 # per-app artifacts post-build (the script otherwise cleans them on exit).
-args=(--emit-app-images --keep-output --app-base-image localhost/nix-ubuntu:dev)
+args=(--keep-output --app-base-image localhost/nix-ubuntu:dev)
+# EMIT_APPS=0 → fat store only (don't re-assemble per-app images we already have).
+[ "${EMIT_APPS:-1}" = "0" ] || args=(--emit-app-images "${args[@]}")
 if [ -n "${PROFILES:-}" ]; then
   for p in $(printf '%s' "$PROFILES" | tr ',' ' '); do
     [ -n "$p" ] && args+=(--profile "$p")

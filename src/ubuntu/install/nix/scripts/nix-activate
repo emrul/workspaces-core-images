@@ -11,9 +11,24 @@
 #   4. user-context gio set metadata::xfce-exe-checksum for each shim,
 #      via `su` so gvfsd-metadata writes land in the user's home
 #
-# Profile source order (first match wins, else nothing activated):
-#   - $HOME/.config/nix-app/active   (per-user override; one name per line)
-#   - NIX_APP_PROFILES                (CSV)
+# Profile source order (first non-empty wins, else nothing activated):
+#   - $HOME/.config/nix-app/active     (per-user override; one name per line)
+#   - Kasm launch-form selections file (see below)
+#   - NIX_APP_PROFILES                  (CSV; e.g. run_config default)
+#
+# Kasm launch forms (guide/launch_config) can't set env vars — they write the
+# user's choices as JSON to a file (default /tmp/launch_selections.json, baked
+# in BEFORE PID 1). We read profile names from it so a per-session form can pick
+# apps. Configurable:
+#   NIX_LAUNCH_SELECTIONS  file path (default /tmp/launch_selections.json)
+#   NIX_LAUNCH_KEY         primary key (default nix_profiles)
+# We accept, and merge, ALL of these form styles (no Kasm patch needed):
+#   - text field  keyed nix_profiles        -> "chrome,firefox,vlc"
+#   - select      keyed nix_profiles         -> option value may be a CSV bundle
+#   - array value keyed nix_profiles         -> ["chrome","firefox"] (future multi)
+#   - chained single-selects nix_profiles_1,nix_profiles_2 … -> merged
+# The last covers real multi-select using only the product's current single
+# select: any key equal to the primary key or starting with "<key>_" (jq only).
 #
 # The script is idempotent. The nix-app CLI does NOT re-invoke this;
 # it manages a USER-LEVEL view via ~/.local/share/applications (see
@@ -33,28 +48,39 @@ KASM_OS_USER="${KASM_OS_USER:-kasm-user}"
 KASM_OS_GROUP="${KASM_OS_GROUP:-kasm-user}"
 KASM_OS_HOME="${KASM_OS_HOME:-/home/${KASM_OS_USER}}"
 
+NIX_LAUNCH_SELECTIONS="${NIX_LAUNCH_SELECTIONS:-/tmp/launch_selections.json}"
+NIX_LAUNCH_KEY="${NIX_LAUNCH_KEY:-nix_profiles}"
+
 log()  { printf 'nix-activate: %s\n' "$*" >&2; }
 warn() { printf 'nix-activate: WARN %s\n' "$*" >&2; }
 
 # ───── 0. populate /opt/nix-libs with narrow graphics symlinks ───
-# Symlinks ONLY the libEGL/libGL family from /usr/lib/<arch>-linux-gnu
-# so nix-built apps that dlopen unversioned libEGL.so find the system
-# mesa libs without dragging in libc.so.6 (which would clash with
-# their bundled glibc's GLIBC_PRIVATE symbols).
+# Symlinks ONLY the libEGL/libGL family from the system mesa libdir so
+# nix-built apps that dlopen unversioned libEGL.so find the system mesa
+# libs without dragging in libc.so.6 (which would clash with their
+# bundled glibc's GLIBC_PRIVATE symbols). The libdir differs by distro —
+# Debian/Ubuntu multiarch (/usr/lib/<arch>-linux-gnu), Fedora/RHEL
+# (/usr/lib64), generic /usr/lib — so we search a candidate list per lib.
 setup_narrow_lib_dir() {
-  arch_triple="$(uname -m)-linux-gnu"
-  sys_libdir="/usr/lib/${arch_triple}"
+  arch="$(uname -m)"
+  lib_search="/usr/lib/${arch}-linux-gnu /usr/lib64 /lib64 /usr/lib /lib"
   out=/opt/nix-libs
   install -d -m 0755 "${out}"
-  # Versioned libs that exist on Ubuntu noble's kasm-core image.
+  _find_syslib() {
+    for d in ${lib_search}; do
+      [ -e "${d}/$1" ] && { printf '%s' "${d}/$1"; return 0; }
+    done
+    return 1
+  }
+  # Versioned libs that exist on the kasm-core image (any supported distro).
   for v in libEGL.so.1 libEGL_mesa.so.0 libGL.so.1 libGLX.so.0 \
            libGLX_mesa.so.0 libGLX_indirect.so.0 \
            libGLdispatch.so.0 libGLESv2.so.2 libglapi.so.0; do
-    [ -e "${sys_libdir}/${v}" ] && ln -sfn "${sys_libdir}/${v}" "${out}/${v}"
+    p="$(_find_syslib "${v}")" && ln -sfn "${p}" "${out}/${v}"
   done
   # Unversioned aliases some Nix-built apps dlopen.
-  [ -e "${sys_libdir}/libEGL.so.1" ] && ln -sfn "${sys_libdir}/libEGL.so.1" "${out}/libEGL.so"
-  [ -e "${sys_libdir}/libGL.so.1"  ] && ln -sfn "${sys_libdir}/libGL.so.1"  "${out}/libGL.so"
+  p="$(_find_syslib libEGL.so.1)" && ln -sfn "${p}" "${out}/libEGL.so"
+  p="$(_find_syslib libGL.so.1)"  && ln -sfn "${p}" "${out}/libGL.so"
 
   # Add /opt/nix-libs to the system ld.so.cache so the libs above
   # are discoverable via /etc/ld.so.cache lookup — lower priority than
@@ -95,15 +121,67 @@ EOF
   chmod 0644 "${PROFILE_D_STATE}"
 }
 
-# ───── 2. resolve active profile list ──────────────────────────────────
+# Normalise a CSV/space list on stdin/args to one trimmed name per line.
+csv_to_lines() {
+  printf '%s' "$1" | tr ', ' '\n\n' \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+    | grep -v '^$' || true
+}
+
+# ───── 2a. Kasm launch-form selections → profile names ─────────────────
+resolve_launch_form() {
+  [ -f "${NIX_LAUNCH_SELECTIONS}" ] || return 0
+  val=""
+  if command -v jq >/dev/null 2>&1; then
+    # Merge every key named like the primary key (nix_profiles,
+    # nix_profile_1, …); array values are joined. Covers text CSV,
+    # comma-valued selects, future array multi-select, and chained
+    # single-selects — all at once.
+    val="$(jq -r --arg k "${NIX_LAUNCH_KEY}" '
+        to_entries
+        | map(select(.key == $k or (.key | startswith($k + "_"))))
+        | map(.value
+              | if   type == "array" then join(",")
+                elif . == null       then empty
+                else tostring end)
+        | join(",")' "${NIX_LAUNCH_SELECTIONS}" 2>/dev/null || true)"
+  else
+    # Portable fallback (no jq). Handles the primary key as either a
+    # string ("a,b") or a JSON array (["a","b"]) — the latter is the
+    # likely shape once Kasm ships native multi-select. Chained
+    # nix_profiles_N keys need jq (and are redundant with a comma-valued
+    # select or the string form anyway).
+    raw="$(tr -d '\n\r' < "${NIX_LAUNCH_SELECTIONS}" 2>/dev/null || true)"
+    # array form: "<key>" : [ "a", "b" ] — quoted items after the key name
+    val="$(printf '%s' "${raw}" \
+        | grep -oE "\"${NIX_LAUNCH_KEY}\"[[:space:]]*:[[:space:]]*\[[^]]*\]" \
+        | grep -oE '"[^"]*"' | sed -n '2,$p' | tr -d '"' \
+        | paste -sd, - 2>/dev/null || true)"
+    if [ -z "${val}" ]; then
+      # string form: "<key>" : "..."
+      val="$(printf '%s' "${raw}" \
+          | sed -n "s/.*\"${NIX_LAUNCH_KEY}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
+          | head -n1)"
+    fi
+  fi
+  [ -n "${val}" ] || return 0
+  csv_to_lines "${val}"
+}
+
+# ───── 2b. resolve active profile list ─────────────────────────────────
 resolve_active() {
   user_file="${KASM_OS_HOME}/.config/nix-app/active"
   if [ -f "${user_file}" ]; then
     cat "${user_file}"
-  elif [ -n "${NIX_APP_PROFILES:-}" ]; then
-    printf '%s' "${NIX_APP_PROFILES}" | tr ',' '\n' \
-      | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-      | grep -v '^$' || true
+    return 0
+  fi
+  lf="$(resolve_launch_form)"
+  if [ -n "${lf}" ]; then
+    printf '%s\n' "${lf}"
+    return 0
+  fi
+  if [ -n "${NIX_APP_PROFILES:-}" ]; then
+    csv_to_lines "${NIX_APP_PROFILES}"
   fi
 }
 

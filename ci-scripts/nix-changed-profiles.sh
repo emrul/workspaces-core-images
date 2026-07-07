@@ -13,20 +13,33 @@
 #
 # A manual/trigger `NIX_PROFILES` pipeline variable has higher precedence than
 # dotenv, so it always overrides this.
+#
+# Reuse outside CI (e.g. runs/nix-portal/dind-launch.sh): set NIX_CHANGED_FILES
+# to a newline-separated list of changed paths and the git/SHA logic is skipped
+# — the same path→profile mapping is applied. An explicitly-empty list means
+# "genuinely nothing changed" → __none__ (unlike the CI no-diff-base case, which
+# conservatively builds everything).
 set -euo pipefail
 
 emit() { echo "NIX_PROFILES=$1"; }
 
-# Whole catalog on schedules or when there's no usable diff base.
-[ "${CI_PIPELINE_SOURCE:-}" = "schedule" ] && { emit ""; exit 0; }
-before="${CI_COMMIT_BEFORE_SHA:-}"
-case "${before}" in
-  ""|0000000000000000000000000000000000000000) emit ""; exit 0 ;;
-esac
-git rev-parse --quiet --verify "${before}^{commit}" >/dev/null 2>&1 || { emit ""; exit 0; }
+if [ -n "${NIX_CHANGED_FILES+x}" ]; then
+  # Caller supplied the file list explicitly (manual / non-CI path).
+  changed="${NIX_CHANGED_FILES}"
+  [ -n "${changed}" ] || { emit "__none__"; exit 0; }
+else
+  # CI path: derive the file list from the commit range.
+  # Whole catalog on schedules or when there's no usable diff base.
+  [ "${CI_PIPELINE_SOURCE:-}" = "schedule" ] && { emit ""; exit 0; }
+  before="${CI_COMMIT_BEFORE_SHA:-}"
+  case "${before}" in
+    ""|0000000000000000000000000000000000000000) emit ""; exit 0 ;;
+  esac
+  git rev-parse --quiet --verify "${before}^{commit}" >/dev/null 2>&1 || { emit ""; exit 0; }
 
-changed="$(git diff --name-only "${before}" "${CI_COMMIT_SHA}" 2>/dev/null || true)"
-[ -n "${changed}" ] || { emit ""; exit 0; }
+  changed="$(git diff --name-only "${before}" "${CI_COMMIT_SHA}" 2>/dev/null || true)"
+  [ -n "${changed}" ] || { emit ""; exit 0; }
+fi
 
 apps=""
 all=0

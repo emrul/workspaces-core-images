@@ -32,6 +32,7 @@ variables:
   KASM_TAG: "nix"
   REGISTRY_NS: "$CI_REGISTRY_IMAGE"
   NIX_PROFILES: ""          # manual override; else `prepare` computes it
+  NIX_BASES: ""             # publish-base filter; empty = every base in the store
   BUILD_PARALLEL: "4"       # per-app build concurrency in build-nix-store-volume
   DIND_ROOT: "/srv/nix-build"
   DIND_IMG: "quay.io/podman/stable"
@@ -91,6 +92,28 @@ build:
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e PROFILES="$NIX_PROFILES" -e BUILD_PARALLEL="$BUILD_PARALLEL" \
         "$DIND_IMG" /work/runs/nix-portal/dind-build.sh
+
+# ── publish-base: push the Nix core/base images (kasm-core-<distro>:nix) ─────
+# Separate from `publish` (app catalog): the bases change rarely, so this is
+# manual. It pushes whatever base images the `base` stage left in the persistent
+# store — run `base` first (or ensure the store is warm). Extend the image map
+# in ci-scripts/nix-publish-base.sh as alpine/fedora/etc. bases land.
+publish-base:
+  stage: publish
+  needs: []
+  when: manual
+  script:
+    - |
+      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+        -v "$DIND_ROOT/containers:/var/lib/containers" \
+        -v "$CI_PROJECT_DIR:/work:ro" \
+        -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" -e NIX_BASES="$NIX_BASES" \
+        -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
+        "$DIND_IMG" bash -c '
+          set -euo pipefail
+          echo "$REG_PASS" | podman login "$REG" -u "$REG_USER" --password-stdin
+          DOCKER=podman bash /work/ci-scripts/nix-publish-base.sh
+        '
 
 # ── publish: tag kasm names + push (scoped to NIX_PROFILES) ──────────────────
 publish:

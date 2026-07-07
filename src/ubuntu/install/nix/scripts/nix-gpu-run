@@ -70,7 +70,8 @@ fi
 # nix-activate seeds a partial compat dir (/opt/nix-libs) with a libGLX_nvidia
 # symlink that sorts first but lacks the rest of the driver.
 nvsrc=""
-for d in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/local/nvidia/lib64; do
+# Debian/Ubuntu multiarch, Fedora/RHEL (/usr/lib64), and the Kasm GPU inject dir.
+for d in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/lib64 /lib64 /usr/local/nvidia/lib64; do
     if ls "${d}"/libnvidia-glcore.so* >/dev/null 2>&1; then nvsrc="${d}"; break; fi
 done
 # Fallback: dirname of an ldconfig hit that isn't the /opt/nix-libs compat dir.

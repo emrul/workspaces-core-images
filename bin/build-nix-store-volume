@@ -885,12 +885,18 @@ if [[ "${EMIT_APP_IMAGES}" == 1 ]]; then
 
   mapfile -t apps < <(grep -v '^$' "${STAGING}/apps.txt")
   # Per-app builds are independent and share the same cached base/shared layers,
-  # so they parallelise well. BUILD_PARALLEL (env, default 1 = serial) caps the
-  # concurrency. To avoid N builds racing to create the identical base/shared
-  # COPY layers (a cache stampede + store-lock contention), the FIRST app is
-  # built serially to warm those layers, then the rest fan out.
-  PAR="${BUILD_PARALLEL:-1}"
-  [[ "${PAR}" =~ ^[0-9]+$ ]] && [[ "${PAR}" -ge 1 ]] || PAR=1
+  # so they parallelise well. BUILD_PARALLEL (env) caps the concurrency; it
+  # defaults to min(nproc, 4) — parallel is the sane default (serial rebuilds of
+  # the whole catalog are a needless slog), capped so a many-core box doesn't
+  # thrash disk I/O copying multi-GB store layers. To avoid N builds racing to
+  # create the identical base/shared COPY layers (a cache stampede + store-lock
+  # contention), the FIRST app is built serially to warm those layers, then the
+  # rest fan out.
+  _np="$( { command -v nproc >/dev/null 2>&1 && nproc; } 2>/dev/null || echo 4 )"
+  [[ "${_np}" =~ ^[0-9]+$ ]] && [[ "${_np}" -ge 1 ]] || _np=4
+  _defpar=$(( _np < 4 ? _np : 4 ))
+  PAR="${BUILD_PARALLEL:-${_defpar}}"
+  [[ "${PAR}" =~ ^[0-9]+$ ]] && [[ "${PAR}" -ge 1 ]] || PAR="${_defpar}"
   log "[apps] building ${#apps[@]} per-app image(s) (parallel=${PAR}): store-image + finish (wiring)"
 
   RESULTS_DIR="${STAGING}/.app-results"; rm -rf "${RESULTS_DIR}"; mkdir -p "${RESULTS_DIR}"

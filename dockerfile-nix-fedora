@@ -1,0 +1,55 @@
+# nix-fedora: fedora core + Nix activation hooks.
+#
+# Fedora sibling of dockerfile-nix-ubuntu. Like it, this image does NOT
+# install Nix — it expects the OCI fat-store image built by
+# bin/build-nix-store-volume to be mounted read-only at /nix at run time
+# (the store is glibc/x86_64 and distro-independent, so the SAME
+# nix-store image works here as on ubuntu). Boot-time activation reads
+# NIX_APP_PROFILES / the launch-form file; per-user overrides live at
+# $HOME/.config/nix-app/active.
+#
+# The nix-activate/nix-launch/nix-gpu-* scripts are distro-agnostic
+# (POSIX sh, glibc), so they are shared from src/ubuntu/install/nix.
+# Fedora differences vs ubuntu: the base image, and the system-wide
+# interactive bashrc path (/etc/bashrc, not Debian's /etc/bash.bashrc).
+#
+# BASE_IMAGE must be a container-init-based fedora core from THIS fork
+# (dockerfile-kasm-core-fedora) — we drop a unit into
+# /etc/container-init.d/, which only exists in container-init images.
+#
+# See design/nix-package-process.md and dockerfile-nix-ubuntu.
+
+ARG BASE_IMAGE="localhost/kasm-core-fedora:dev"
+FROM $BASE_IMAGE
+
+ARG DISTRO=fedora42
+USER 0
+
+# Drop-in unit + scripts (shared with ubuntu). The supervisor scans
+# /etc/container-init.d/ for additive units; ours is gated by
+# ConditionPathIsDirectory so the image still boots without /nix mounted.
+COPY src/ubuntu/install/nix/units/nix-activate.service \
+     src/ubuntu/install/nix/units/nix-gpu-setup.service \
+     /etc/container-init.d/
+COPY src/ubuntu/install/nix/scripts/nix-activate \
+     src/ubuntu/install/nix/scripts/nix-app \
+     src/ubuntu/install/nix/scripts/nix-launch \
+     src/ubuntu/install/nix/scripts/nix-gpu-run \
+     src/ubuntu/install/nix/scripts/nix-gpu-setup \
+     /usr/local/bin/
+
+RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app /usr/local/bin/nix-launch /usr/local/bin/nix-gpu-run /usr/local/bin/nix-gpu-setup && \
+    /usr/local/bin/container-init \
+        --units /etc/container-init/units \
+        --drop-in /etc/container-init.d \
+        --strict-units --validate
+
+# Fedora's system-wide interactive bashrc is /etc/bashrc (Debian uses
+# /etc/bash.bashrc). Source our generated /etc/profile.d/nix-app.sh from
+# it so PATH and XDG_DATA_DIRS are visible in every terminal, not just
+# login shells. The `[ -f ]` guard makes this a no-op with no /nix mount.
+RUN { \
+      echo ''; \
+      echo '# nix-app: ensure interactive shells see the activated profiles.'; \
+      echo '[ -f /etc/profile.d/nix-app.sh ] && . /etc/profile.d/nix-app.sh'; \
+    } >> /etc/bashrc
