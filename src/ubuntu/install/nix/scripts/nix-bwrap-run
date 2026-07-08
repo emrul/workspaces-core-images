@@ -1,0 +1,63 @@
+#!/bin/sh
+# nix-bwrap-run — run a Nix buildFHSEnv/bubblewrap-wrapped app under the
+# /nix/store->/store symlink layout used by the assembled Nix images.
+#
+# Usage: nix-bwrap-run <program> [args...]
+#
+# Why this exists
+# ---------------
+# Per-app (and image-mount) Nix images keep the store at /store, with
+# /nix/store a *symlink* to it, so the fat store and per-app OCI layer tars
+# stay byte-identical and dedup (see bin/build-nix-store-volume). nixpkgs'
+# buildFHSEnv wrapper for an FHS/bwrap app does `--bind /nix /nix` and then
+# hardcodes early `--tmpfs /nix/store/<glibc>/etc` + related binds. bwrap
+# builds those mount targets by walking the path literally and REFUSES to
+# traverse the /nix/store symlink, so it dies with
+#   bwrap: Can't mkdir parents for /nix/store/<glibc>/etc: No such file or directory
+# before the app starts. (Just binding /store isn't enough — bwrap still
+# won't follow the symlink; /nix/store must be a real directory.)
+#
+# Fix: run the FHS app inside an OUTER bwrap that presents a real /nix/store —
+# /nix as a fresh tmpfs, then /store bind-mounted onto /nix/store (and /var
+# onto /nix/var). The inner wrapper's `--bind /nix /nix` then carries real
+# content and its glibc mounts resolve. bwrap supplies its own user namespace
+# (CAP_SYS_ADMIN inside it), so this needs no container capabilities; the inner
+# nix-bwrap nests fine.
+#
+# Self-guarding: the outer bwrap is applied ONLY when the store is a symlink
+# (assembled image) AND the target is actually an FHS/bwrap wrapper. Any other
+# program is exec'd unchanged, so callers can route everything through here.
+set -u
+
+BWRAP=/usr/bin/bwrap
+prog="${1:-}"
+[ -n "${prog}" ] || { echo "nix-bwrap-run: no program given" >&2; exit 2; }
+
+# Resolve to a concrete store path in the host mount ns (where the /nix/store
+# symlink still works) so the outer bwrap gets a real target to exec.
+real="$(readlink -f "${prog}" 2>/dev/null || printf '%s' "${prog}")"
+
+# Does this need the fix? Only on the symlink layout, with a usable bwrap, and
+# only for buildFHSEnv wrappers. nixpkgs names those <name>-bwrap; fall back to
+# sniffing the script body for a bubblewrap reference.
+needs_fix=0
+if [ -L /nix/store ] && [ -x "${BWRAP}" ]; then
+    case "${real}" in
+        *-bwrap) needs_fix=1 ;;
+        *) LC_ALL=C head -c 8192 "${real}" 2>/dev/null | grep -qa 'bubblewrap\|bin/bwrap' && needs_fix=1 ;;
+    esac
+fi
+
+if [ "${needs_fix}" = 1 ]; then
+    shift
+    exec "${BWRAP}" \
+        --bind / / \
+        --dev-bind /dev /dev \
+        --proc /proc \
+        --tmpfs /nix \
+        --bind /store /nix/store \
+        --bind /var /nix/var \
+        -- "${real}" "$@"
+fi
+
+exec "$@"

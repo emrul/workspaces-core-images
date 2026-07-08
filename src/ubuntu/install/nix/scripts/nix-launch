@@ -116,4 +116,7 @@ if [ "${is_chromium}" = 1 ]; then
         "$@"
 fi
 
-exec "$@"
+# Generic apps (incl. FHS/bwrap wrappers like steam). nix-bwrap-run gives
+# buildFHSEnv apps a real /nix/store under the /nix/store->/store symlink
+# layout, and is a passthrough for everything else. See nix-bwrap-run.
+exec nix-bwrap-run "$@"
