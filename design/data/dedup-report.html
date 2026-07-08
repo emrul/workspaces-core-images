@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nix catalog — layer dedup report</title>
+<style>
+  :root{
+    --bg:#eef1f5; --panel:#ffffff; --surface:#fcfcfb;
+    --ink:#131a22; --ink-2:#48535f; --muted:#79838f; --line:#e3e8ee; --line-2:#eef1f5;
+    --accent:#2a78d6; --accent-soft:#d7e6fa;
+    --base:#2a78d6; --shared:#1baf7a; --unique:#eda100; --good:#0ca30c;
+    --shadow:0 1px 2px rgba(16,29,48,.05), 0 6px 22px rgba(16,29,48,.06);
+    --mono:ui-monospace,"SF Mono","Cascadia Code","Roboto Mono",Menlo,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#12161b; --panel:#1b2128; --surface:#1a1f26;
+      --ink:#f1f4f8; --ink-2:#c2c9d2; --muted:#8b95a2; --line:#2a323c; --line-2:#222932;
+      --accent:#3987e5; --accent-soft:#17324f;
+      --base:#3987e5; --shared:#199e70; --unique:#c98500; --good:#20b520;
+      --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#eef1f5; --panel:#ffffff; --surface:#fcfcfb;
+    --ink:#131a22; --ink-2:#48535f; --muted:#79838f; --line:#e3e8ee; --line-2:#eef1f5;
+    --accent:#2a78d6; --accent-soft:#d7e6fa;
+    --base:#2a78d6; --shared:#1baf7a; --unique:#eda100; --good:#0ca30c;
+    --shadow:0 1px 2px rgba(16,29,48,.05), 0 6px 22px rgba(16,29,48,.06);
+  }
+  :root[data-theme="dark"]{
+    --bg:#12161b; --panel:#1b2128; --surface:#1a1f26;
+    --ink:#f1f4f8; --ink-2:#c2c9d2; --muted:#8b95a2; --line:#2a323c; --line-2:#222932;
+    --accent:#3987e5; --accent-soft:#17324f;
+    --base:#3987e5; --shared:#199e70; --unique:#c98500; --good:#20b520;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.5;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:920px;margin:0 auto;padding:48px 24px 72px}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+
+  header.rep{border-bottom:1px solid var(--line);padding-bottom:26px;margin-bottom:30px}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);font-weight:600;margin:0 0 12px}
+  h1{font-size:clamp(26px,3.6vw,38px);line-height:1.08;letter-spacing:-.02em;margin:0 0 12px;
+    text-wrap:balance;font-weight:680}
+  .thesis{font-size:16.5px;color:var(--ink-2);max-width:62ch;margin:0}
+  .thesis b{color:var(--ink);font-weight:640}
+  .meta{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px 18px;font-family:var(--mono);
+    font-size:12px;color:var(--muted)}
+
+  h2{font-size:12.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2);
+    font-weight:640;margin:0 0 14px;font-family:var(--sans)}
+  section{margin-top:38px}
+
+  /* stat tiles */
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  @media(max-width:720px){.tiles{grid-template-columns:repeat(2,1fr)}}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 18px 16px;
+    box-shadow:var(--shadow);position:relative;overflow:hidden}
+  .tile .k{font-size:12px;color:var(--muted);font-weight:560;margin-bottom:10px}
+  .tile .v{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:29px;font-weight:600;
+    letter-spacing:-.01em;line-height:1}
+  .tile .u{font-size:14px;color:var(--ink-2);font-weight:500;margin-left:3px}
+  .tile .sub{font-size:12px;color:var(--muted);margin-top:8px;font-family:var(--mono)}
+  .tile.hero .v{color:var(--good)}
+  .tile.hero{border-color:color-mix(in srgb,var(--good) 40%,var(--line))}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    box-shadow:var(--shadow);padding:22px 22px 20px}
+
+  /* comparison proportion bar */
+  .cmp{display:flex;flex-direction:column;gap:8px}
+  .cmp-track{position:relative;height:52px;border-radius:9px;background:var(--line-2);
+    border:1px solid var(--line);overflow:hidden;display:flex}
+  .cmp-stored{background:var(--accent);height:100%;display:flex;align-items:center;padding:0 12px;
+    color:#fff;font-family:var(--mono);font-size:12.5px;font-weight:600;white-space:nowrap;
+    border-radius:8px 0 0 8px}
+  .cmp-saved{flex:1;display:flex;align-items:center;justify-content:flex-end;padding:0 14px;
+    color:var(--ink-2);font-family:var(--mono);font-size:12.5px;font-weight:600;
+    background:repeating-linear-gradient(135deg,transparent 0 7px,color-mix(in srgb,var(--muted) 16%,transparent) 7px 8px)}
+  .cmp-scale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .callout{margin-top:14px;font-size:13.5px;color:var(--ink-2);display:flex;gap:10px;align-items:flex-start;
+    background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 28%,var(--line));
+    padding:11px 14px;border-radius:9px}
+  .callout b{color:var(--ink)}
+  .callout .dot{color:var(--accent);font-weight:700;line-height:1.4}
+
+  /* composition stacked bar */
+  .comp-bar{display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid var(--line);gap:2px;
+    background:var(--line)}
+  .comp-seg{height:100%;min-width:2px}
+  .legend{display:flex;flex-wrap:wrap;gap:14px 22px;margin-top:14px}
+  .lg{display:flex;align-items:center;gap:9px;font-size:13px}
+  .sw{width:12px;height:12px;border-radius:3px;flex:none}
+  .lg .nm{color:var(--ink);font-weight:560}
+  .lg .dt{color:var(--muted);font-family:var(--mono);font-size:12px}
+
+  /* per-app bar chart */
+  .toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+  .seg button{appearance:none;border:0;background:transparent;color:var(--ink-2);font:inherit;
+    font-size:12.5px;font-weight:560;padding:6px 13px;cursor:pointer}
+  .seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+  .seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .hint{font-size:12px;color:var(--muted)}
+
+  .chart{display:flex;flex-direction:column;gap:3px;margin-top:8px}
+  .row{display:grid;grid-template-columns:132px 1fr;align-items:center;gap:12px;padding:3px 0;
+    border-radius:6px;cursor:default}
+  .row:hover{background:var(--line-2)}
+  .row:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .row .lbl{font-size:12.5px;color:var(--ink-2);text-align:right;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;font-weight:540}
+  .row.big .lbl{color:var(--ink);font-weight:620}
+  .track{position:relative;height:20px;display:flex;align-items:center}
+  .bar{height:14px;background:var(--accent);border-radius:0 4px 4px 0;min-width:2px;
+    transition:width .6s cubic-bezier(.2,.7,.2,1)}
+  .val{margin-left:8px;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12px;
+    color:var(--ink-2);white-space:nowrap}
+  @media (prefers-reduced-motion:reduce){.bar{transition:none}}
+
+  /* tooltip */
+  #tip{position:fixed;z-index:50;pointer-events:none;opacity:0;transform:translateY(4px);
+    transition:opacity .12s;background:var(--ink);color:var(--bg);
+    border-radius:8px;padding:9px 11px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.28);max-width:250px}
+  #tip .tt{font-weight:680;margin-bottom:5px;font-size:12.5px}
+  #tip .tr{display:flex;justify-content:space-between;gap:16px;font-family:var(--mono);
+    font-variant-numeric:tabular-nums}
+  #tip .tk{color:color-mix(in srgb,var(--bg) 62%,transparent)}
+
+  footer.rep{margin-top:44px;border-top:1px solid var(--line);padding-top:18px;
+    font-size:12px;color:var(--muted);line-height:1.65}
+  footer.rep code{font-family:var(--mono);color:var(--ink-2)}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="rep">
+    <p class="eyebrow">Nix workspace catalog · content-addressed assembly</p>
+    <h1>One base, 35 apps, 83% less to store</h1>
+    <p class="thesis">Every per-app image is <b>crane-appended onto a shared base</b> and shares its
+      Nix-store layers by digest. Across the 35 published app images that collapses a
+      <b>82.4 GB</b> naive footprint down to <b>13.7 GB</b> actually stored — the same bytes are
+      kept and pulled once, not 35 times.</p>
+    <div class="meta">
+      <span>registry.gitlab.com/…/kasm-nix</span>
+      <span>tag :nix</span>
+      <span>35 app images</span>
+      <span>compressed (pull) bytes</span>
+      <span>2026-07-08</span>
+    </div>
+  </header>
+
+  <section aria-label="headline figures">
+    <div class="tiles">
+      <div class="tile">
+        <div class="k">Deduped footprint</div>
+        <div class="v">13.7<span class="u">GB</span></div>
+        <div class="sub">what the registry &amp; host store</div>
+      </div>
+      <div class="tile">
+        <div class="k">If every app standalone</div>
+        <div class="v">82.4<span class="u">GB</span></div>
+        <div class="sub">Σ full image sizes</div>
+      </div>
+      <div class="tile hero">
+        <div class="k">Saved by dedup</div>
+        <div class="v">83.4<span class="u">%</span></div>
+        <div class="sub">68.7 GB not stored</div>
+      </div>
+      <div class="tile">
+        <div class="k">Shared base</div>
+        <div class="v">1.71<span class="u">GB</span></div>
+        <div class="sub">carried by all 35 apps</div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-label="stored versus standalone">
+    <h2>Stored vs. standalone</h2>
+    <div class="panel">
+      <div class="cmp">
+        <div class="cmp-track" role="img"
+          aria-label="Of an 82.4 gigabyte naive total, 13.7 gigabytes is actually stored and 68.7 gigabytes is saved by deduplication.">
+          <div class="cmp-stored" style="width:16.6%">13.7 GB stored</div>
+          <div class="cmp-saved">saved 68.7 GB · 83.4%</div>
+        </div>
+        <div class="cmp-scale"><span>0</span><span>82.4 GB — sum if each app shipped its own full copy</span></div>
+      </div>
+      <div class="callout">
+        <span class="dot">▸</span>
+        <span><b>Most of the win is the base.</b> That 1.71 GB base sits in all 35 images, so
+          deduping it from 35 copies to 1 avoids ≈58 GB on its own — the rest comes from
+          store layers shared between related apps.</span>
+      </div>
+    </div>
+  </section>
+
+  <section aria-label="composition of the deduped footprint">
+    <h2>What the 13.7 GB is made of</h2>
+    <div class="panel">
+      <div class="comp-bar" role="img"
+        aria-label="Deduped footprint composition: shared base 1.71 gigabytes, cross-app shared layers 0.39 gigabytes, per-app unique layers 11.62 gigabytes.">
+        <div class="comp-seg" style="width:12.5%;background:var(--base)"></div>
+        <div class="comp-seg" style="width:2.8%;background:var(--shared)"></div>
+        <div class="comp-seg" style="width:84.7%;background:var(--unique)"></div>
+      </div>
+      <div class="legend">
+        <div class="lg"><span class="sw" style="background:var(--base)"></span>
+          <span class="nm">Shared base</span><span class="dt">1.71 GB · in all 35 · 7 layers</span></div>
+        <div class="lg"><span class="sw" style="background:var(--shared)"></span>
+          <span class="nm">Cross-app shared</span><span class="dt">0.39 GB · in 2–34 apps · 2 layers</span></div>
+        <div class="lg"><span class="sw" style="background:var(--unique)"></span>
+          <span class="nm">Per-app unique</span><span class="dt">11.62 GB · in 1 app · 105 layers</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-label="per-app unique size">
+    <div class="toolbar">
+      <h2 style="margin:0">Per-app cost</h2>
+      <div style="display:flex;align-items:center;gap:12px">
+        <span class="hint" id="hint">unique layers only — the true incremental cost per app</span>
+        <div class="seg" role="group" aria-label="metric">
+          <button id="btn-uniq" aria-pressed="true">Unique</button>
+          <button id="btn-full" aria-pressed="false">Full image</button>
+        </div>
+      </div>
+    </div>
+    <div class="chart" id="chart"></div>
+  </section>
+
+  <footer class="rep">
+    Sizes are <b>compressed layer blobs</b> read from each image's OCI manifest
+    (<code>docker manifest inspect …:nix</code>), deduplicated by blob digest — so a layer shared
+    across images counts once. <b>Shared base</b> = layers present in all 35 app images (the
+    <code>nix-ubuntu</code> base image plus the common bootstrap store partition). <b>Naive total</b>
+    counts every image at full size. Per-app <b>full</b> ≈ base + its shared + its unique; the ~2 GB
+    floor every app shows is that shared base travelling in each manifest (stored once on disk).
+    Captured 2026-07-08 from <code>labs-sandbox/kasm-nix</code> pipeline #20.
+  </footer>
+</div>
+
+<div id="tip" role="status" aria-live="off"></div>
+
+<script>
+  const DATA = [
+    {app:"only-office",unique:868261669,full:2577586155,n:10},
+    {app:"edge",unique:828509207,full:2612639965,n:11},
+    {app:"super-tux-kart",unique:715371164,full:2809952220,n:12},
+    {app:"brave",unique:689023165,full:2473153923,n:11},
+    {app:"firefox",unique:684705032,full:2394029518,n:10},
+    {app:"chromium",unique:681674865,full:2390999351,n:10},
+    {app:"chrome",unique:668611781,full:2377936267,n:10},
+    {app:"libre-office",unique:639433561,full:2734014617,n:12},
+    {app:"vivaldi",unique:605904383,full:2390035141,n:11},
+    {app:"blender",unique:603365355,full:2697946411,n:12},
+    {app:"retroarch",unique:525975422,full:2620556478,n:12},
+    {app:"zoom",unique:514871980,full:2609453036,n:12},
+    {app:"insomnia",unique:340256360,full:2434837416,n:12},
+    {app:"angelfish",unique:334651040,full:2429232096,n:12},
+    {app:"steam",unique:307884925,full:2402465981,n:12},
+    {app:"inkscape",unique:222471646,full:2317052702,n:12},
+    {app:"signal",unique:217732615,full:2312313671,n:12},
+    {app:"tor-browser",unique:213092241,full:2307673297,n:12},
+    {app:"thunderbird",unique:202188508,full:2296769564,n:12},
+    {app:"teams",unique:200493237,full:2295074293,n:12},
+    {app:"vlc",unique:195452180,full:2290033236,n:12},
+    {app:"gimp",unique:180840577,full:2275421633,n:12},
+    {app:"vs-code",unique:167792124,full:2262373180,n:12},
+    {app:"slack",unique:148612215,full:2243193271,n:12},
+    {app:"audacity",unique:147879299,full:2242460355,n:12},
+    {app:"postman",unique:144328748,full:2238909804,n:12},
+    {app:"discord",unique:114199217,full:2208780273,n:12},
+    {app:"filezilla",unique:107762360,full:2202343416,n:12},
+    {app:"remmina",unique:97385750,full:2191966806,n:12},
+    {app:"sublime-text",unique:96996521,full:2116771305,n:11},
+    {app:"deluge",unique:60863093,full:2155444149,n:12},
+    {app:"pinta",unique:45776746,full:2140357802,n:12},
+    {app:"qbittorrent",unique:22583718,full:2117164774,n:12},
+    {app:"minetest",unique:17403824,full:2111984880,n:12},
+    {app:"obsidian",unique:8911247,full:2103492303,n:12},
+  ];
+  const BASE_GB = 1.71;
+  const fmtMB = b => (b/1e6).toFixed(b<1e8?1:0);
+  const fmtGB = b => (b/1e9).toFixed(2);
+  const chart = document.getElementById("chart");
+  const tip = document.getElementById("tip");
+  const hint = document.getElementById("hint");
+  let metric = "unique";
+
+  function render(){
+    const rows = [...DATA].sort((a,b)=>b[metric]-a[metric]);
+    const max = Math.max(...rows.map(r=>r[metric]));
+    chart.innerHTML = "";
+    rows.forEach((r,i)=>{
+      const pct = (r[metric]/max*100).toFixed(2);
+      const row = document.createElement("div");
+      row.className = "row" + (i<3 ? " big":"");
+      row.tabIndex = 0;
+      const val = metric==="unique" ? fmtMB(r.unique)+" MB" : fmtGB(r.full)+" GB";
+      row.innerHTML =
+        '<div class="lbl">'+r.app+'</div>'+
+        '<div class="track"><div class="bar" style="width:0"></div>'+
+        '<div class="val">'+val+'</div></div>';
+      chart.appendChild(row);
+      const bar = row.querySelector(".bar");
+      requestAnimationFrame(()=>{ bar.style.width = pct+"%"; });
+      const show = e=>{
+        const uPct = (r.unique/r.full*100).toFixed(1);
+        tip.innerHTML =
+          '<div class="tt">'+r.app+'</div>'+
+          '<div class="tr"><span class="tk">unique</span><span>'+fmtMB(r.unique)+' MB</span></div>'+
+          '<div class="tr"><span class="tk">full image</span><span>'+fmtGB(r.full)+' GB</span></div>'+
+          '<div class="tr"><span class="tk">layers</span><span>'+r.n+'</span></div>'+
+          '<div class="tr"><span class="tk">shared / base</span><span>'+(100-uPct).toFixed(1)+'%</span></div>';
+        tip.style.opacity = "1";
+        const rect = (e.target.closest(".row")).getBoundingClientRect();
+        const x = (e.clientX||rect.left+120);
+        tip.style.left = Math.min(x+14, innerWidth-260)+"px";
+        tip.style.top = (rect.top-6)+"px";
+      };
+      row.addEventListener("mousemove",show);
+      row.addEventListener("mouseenter",show);
+      row.addEventListener("focus",show);
+      row.addEventListener("mouseleave",()=>tip.style.opacity="0");
+      row.addEventListener("blur",()=>tip.style.opacity="0");
+    });
+  }
+  function setMetric(m){
+    metric = m;
+    document.getElementById("btn-uniq").setAttribute("aria-pressed", m==="unique");
+    document.getElementById("btn-full").setAttribute("aria-pressed", m==="full");
+    hint.textContent = m==="unique"
+      ? "unique layers only — the true incremental cost per app"
+      : "full pulled image — the ~2 GB floor is the shared base in every manifest";
+    render();
+  }
+  document.getElementById("btn-uniq").onclick=()=>setMetric("unique");
+  document.getElementById("btn-full").onclick=()=>setMetric("full");
+  render();
+</script>
+</body>
+</html>
