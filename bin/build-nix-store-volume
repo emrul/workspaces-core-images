@@ -855,6 +855,12 @@ inner_run_args=(
     -e "APP_TAG=${APP_TAG}"
     -e "APP_BASE_REF=${APP_BASE_IMAGE}"
 )
+# Mount the GPU overlay flake (trimmed VirtualGL) so a [gpu] profile entry can
+# reference it as `path:/config/gpu-overlay#…`. Pinned to the same nixpkgs rev as
+# the build (see bin/nix-gpu-overlay + design/nix-dedup-gap.md). Optional: absent
+# dir → not mounted (a [gpu] path: entry would then fail, which is intended).
+[[ -d "${SCRIPT_DIR}/nix-gpu-overlay" ]] && \
+  inner_run_args+=( --volume "${SCRIPT_DIR}/nix-gpu-overlay:/config/gpu-overlay:ro" )
 inner_run_args+=( --entrypoint /bin/sh "${NIX_IMAGE_DEFAULT}" /inner-build.sh )
 
 "${CONTAINER_CLI}" "${inner_run_args[@]}"

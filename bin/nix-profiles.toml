@@ -9,7 +9,12 @@
 #     base layer's digest stays stable across their bumps.
 
 [nixpkgs]
-ref = "github:NixOS/nixpkgs/nixos-25.05"
+# PINNED to a specific rev (not the floating nixos-25.05 branch) so builds are
+# reproducible AND the bin/nix-gpu-overlay flake (which must use the SAME rev for
+# its trimmed VirtualGL deps to dedup / avoid a second glibc) stays aligned.
+# Bump this and bin/nix-gpu-overlay/flake.{nix,lock} together. See
+# design/nix-dedup-gap.md.
+ref = "github:NixOS/nixpkgs/d407951447dcd00442e97087bf374aad70c04cea"
 
 # Packages that go in the base OCI layer. The build script also includes
 # the closures of these packages — glibc pulls in its own deps, etc.
@@ -42,8 +47,14 @@ pkgs = [
 #   - vulkan-loader: carries VK_KHR_surface/xcb WSI that chrome's bundled loader
 #                    lacks, so ANGLE-Vulkan reaches the GPU instead of SwiftShader.
 [gpu]
+# virtualgl-min: a trimmed VirtualGL from bin/nix-gpu-overlay (mounted into the
+# inner build at /config/gpu-overlay) that drops the FLTK-based `vglconfig` GUI
+# and the 32-bit variant. Stock virtualgl drags the FULL gcc ×2 + binutils +
+# python3 (~1GB) into the base via fltk-config; we only ever run `vglrun -d egl`.
+# The overlay is pinned to the same nixpkgs rev as [nixpkgs].ref above so its
+# deps dedup with the rest of the build. See design/nix-dedup-gap.md.
 pkgs = [
-    "nixpkgs#virtualgl",
+    "path:/config/gpu-overlay#virtualgl-min",
     "nixpkgs#vulkan-loader",
 ]
 
