@@ -9,12 +9,14 @@
 #     base layer's digest stays stable across their bumps.
 
 [nixpkgs]
-# PINNED to a specific rev (not the floating nixos-25.05 branch) so builds are
-# reproducible AND the bin/nix-gpu-overlay flake (which must use the SAME rev for
-# its trimmed VirtualGL deps to dedup / avoid a second glibc) stays aligned.
-# Bump this and bin/nix-gpu-overlay/flake.{nix,lock} together. See
-# design/nix-dedup-gap.md.
-ref = "github:NixOS/nixpkgs/d407951447dcd00442e97087bf374aad70c04cea"
+# NB: this is the FLOATING nixos-25.05 branch. bin/nix-gpu-overlay/flake.lock is
+# pinned to a specific rev (currently the branch HEAD, d407951447…) so its trimmed
+# VirtualGL deps dedup with the build. When the branch advances, bump the overlay
+# lock to match (else virtualgl-min ships a second glibc). Pinning this ref for
+# full reproducibility is a known follow-up — it needs profile-reset logic in
+# build-nix-store-volume (changing the ref string collides with the warm staging
+# volume's profiles). See design/nix-dedup-gap.md.
+ref = "github:NixOS/nixpkgs/nixos-25.05"
 
 # Packages that go in the base OCI layer. The build script also includes
 # the closures of these packages — glibc pulls in its own deps, etc.

@@ -370,6 +370,12 @@ ln -sfn "${KASM_PROFILE_DIR}/_base" "${KASM_GCROOT_DIR}/_base"
 HAS_GPU=0
 if jq -e '.gpu.pkgs | length > 0' "${STAGE_IN}/profiles.json" >/dev/null 2>&1; then
   HAS_GPU=1
+  # Reset _gpu each run: its pkg set can change in a way that collides with the
+  # warm staging volume's profile — e.g. swapping stock virtualgl for the trimmed
+  # path:…#virtualgl-min both provide bin/vglrun, so `nix profile install` errors
+  # with "existing package already provides …". The profile is a cheap symlink
+  # tree over the persistent store, so rebuild it fresh.
+  rm -f "${KASM_PROFILE_DIR}/_gpu" "${KASM_PROFILE_DIR}/_gpu"-*-link
   collect_attrs '.gpu.pkgs[]' "${DEFAULT_REF}" \
     | xargs nix --extra-experimental-features 'nix-command flakes' \
         profile install --impure --profile "${KASM_PROFILE_DIR}/_gpu"

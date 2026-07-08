@@ -1,10 +1,11 @@
 {
   description = "Trimmed VirtualGL: drop FLTK vglconfig GUI so gcc/binutils/python3 leave the closure";
 
-  # Pinned to the SAME rev as bin/nix-profiles.toml [nixpkgs].ref — the trimmed
-  # VirtualGL's deps (glibc, libjpeg-turbo, libglvnd, …) must be byte-identical
-  # to the rest of the build so the store layers dedup and there's no second
-  # glibc. Bump both together. See design/nix-dedup-gap.md.
+  # Pinned to the current HEAD of nixos-25.05 — which is what bin/nix-profiles.toml
+  # [nixpkgs].ref (the floating branch) resolves to today. The trimmed VirtualGL's
+  # deps (glibc, libjpeg-turbo, libglvnd, …) must match the rest of the build or it
+  # ships a second glibc, so when the branch advances, re-pin this to the new HEAD
+  # (nix flake update) in the same change. See design/nix-dedup-gap.md.
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/d407951447dcd00442e97087bf374aad70c04cea";
 
   outputs = { self, nixpkgs }:
