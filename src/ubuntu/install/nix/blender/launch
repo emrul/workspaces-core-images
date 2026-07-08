@@ -1,0 +1,38 @@
+#!/bin/sh
+# blender-launch — GPU-aware launcher for the Nix-built Blender single-app image.
+#
+# Blender is a NATIVE OpenGL app, not chromium/QtWebEngine, so nix-launch's GPU
+# path (deliberately restricted to standalone chromium-family binaries) does not
+# apply to it — routed through nix-launch it ALWAYS lands on software (llvmpipe),
+# which is why an allocated GPU appeared to do nothing. Per nix-launch's own
+# design note, pure-GL apps opt into the GPU by calling nix-gpu-run directly,
+# which is what we do here: when the Kasm platform has allocated a GPU
+# (KASM_EGL_CARD/KASM_RENDERD present and session-owned), Blender runs under Nix
+# VirtualGL (`vglrun -d egl`) so its GL context lands on the real GPU; otherwise
+# it falls back to Mesa llvmpipe software GL via nix-launch.
+#
+# Binary resolved by absolute profile path (container-init services don't source
+# /etc/profile.d).
+set -u
+
+PROFILE=/nix/var/nix/profiles/blender
+BIN="${PROFILE}/bin/blender"
+
+if /usr/local/bin/nix-gpu-run --available; then
+    # dbus/XDG env fixups (container-init services don't source /etc/profile.d);
+    # the clean GPU LD_LIBRARY_PATH is set by nix-gpu-run itself.
+    [ -f /tmp/kasm-dbus.env ] && {
+        . /tmp/kasm-dbus.env 2>/dev/null
+        [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && export DBUS_SESSION_BUS_ADDRESS
+    }
+    if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+        uid=$(id -u); XDG_RUNTIME_DIR="/run/user/${uid}"
+        [ -d "${XDG_RUNTIME_DIR}" ] || mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null
+        export XDG_RUNTIME_DIR
+    fi
+    echo "blender-launch: GPU allocated — handing off to nix-gpu-run (vglrun -d egl)" >&2
+    exec /usr/local/bin/nix-gpu-run "${BIN}" "$@"
+fi
+
+echo "blender-launch: no GPU allocated — software GL (llvmpipe) via nix-launch" >&2
+exec /usr/local/bin/nix-launch "${BIN}" "$@"

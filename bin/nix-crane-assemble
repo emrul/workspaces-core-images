@@ -85,7 +85,6 @@ mk_symlink_tar() {
 stage_wiring_tar() {
   local p="$1" w="${STAGING}/.wiring-${p}"
   [[ -s "${BLOBS}/wiring-${p}.tar" ]] && return 0
-  [[ -f "${NIXSRC}/${p}/custom_startup.sh" ]] || { log "${p}: no custom_startup.sh — skip"; return 1; }
   rm -rf "${w}"; mkdir -p "${w}/dockerstartup" "${w}/usr/local/bin"
   install -m0755 "${NIXSRC}/${p}/custom_startup.sh" "${w}/dockerstartup/custom_startup.sh"
   install -m0755 "${NIXSRC}/scripts/nix-app-launch" "${w}/usr/local/bin/nix-app-launch"
@@ -125,6 +124,11 @@ RESULTS="${STAGING}/.crane-results"; rm -rf "${RESULTS}"; mkdir -p "${RESULTS}"
 assemble_app() {
   local p="$1"; local logf="${RESULTS}/${p}.log"
   {
+    # No custom_startup.sh ⇒ this profile is a fat-store-only extra, not a
+    # standalone workspace image. It has no launch wiring, so a per-app image
+    # couldn't run as a Kasm workspace anyway — skip emitting one (the profile
+    # stays reachable via the fat store). Recorded as skipped, NOT failed.
+    [[ -f "${NIXSRC}/${p}/custom_startup.sh" ]] || { printf 'no custom_startup.sh\n' > "${RESULTS}/${p}.skip"; return 0; }
     local a_args=() part md
     for part in $(app_store_parts "${p}"); do det_tar "${part}" store "${part}" && a_args+=( -f "${BLOBS}/${part}.tar" ); done
     md="$(app_meta_dir "${p}")"; [[ -n "${md}" ]] && det_tar "${md}" var "${md}" && a_args+=( -f "${BLOBS}/${md}.tar" )
@@ -165,14 +169,16 @@ if [[ "${#apps[@]}" -gt 0 ]]; then
   done
   wait
 
-  ok=0; failed=()
+  ok=0; skipped=(); failed=()
   for p in "${apps[@]}"; do
     if [[ -f "${RESULTS}/${p}.ok" ]]; then ok=$((ok+1)); log "  ${p}: OK"
+    elif [[ -f "${RESULTS}/${p}.skip" ]]; then skipped+=( "${p}" ); log "  ${p}: skipped ($(cat "${RESULTS}/${p}.skip" 2>/dev/null || echo '?'))"
     else failed+=( "${p}($(cat "${RESULTS}/${p}.fail" 2>/dev/null || echo '?'))" )
       log "  ${p}: FAILED — last lines:"; tail -15 "${RESULTS}/${p}.log" 2>/dev/null | sed "s/^/    [${p}] /" >&2 || true
     fi
   done
-  log "per-app: ok=${ok} failed=${#failed[@]} ${failed[*]:-}"
+  log "per-app: ok=${ok} skipped=${#skipped[@]} failed=${#failed[@]} ${failed[*]:-}"
+  [[ "${#skipped[@]}" -gt 0 ]] && log "per-app skipped (fat-store-only, no custom_startup.sh): ${skipped[*]}"
 fi
 
 # also push the fat store if requested

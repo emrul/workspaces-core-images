@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -ex
-START_COMMAND="/usr/local/bin/nix-app-launch blender"
+# blender-launch adds the GPU path (nix-gpu-run/vglrun) that nix-app-launch ->
+# nix-launch can't give a native-GL app; falls back to software when no GPU.
+START_COMMAND="/usr/local/bin/blender-launch"
 PGREP="blender"
 export MAXIMIZE="true"
 export MAXIMIZE_NAME="Blender"

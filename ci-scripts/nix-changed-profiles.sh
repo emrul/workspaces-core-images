@@ -47,7 +47,7 @@ while IFS= read -r f; do
   [ -n "${f}" ] || continue
   case "${f}" in
     # Shared / base — anything that changes image content for every app.
-    bin/build-nix-store-volume|bin/nix-profiles.toml|\
+    bin/build-nix-store-volume|bin/nix-crane-assemble|bin/nix-profiles.toml|\
     dockerfile-kasm-core-minimal|dockerfile-nix-ubuntu|dockerfile-nix-app-finish|\
     runs/nix-portal/*|src/common/*|\
     src/ubuntu/install/nix/scripts/*|src/ubuntu/install/nix/units/*)
