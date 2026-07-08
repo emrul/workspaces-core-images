@@ -1,6 +1,11 @@
 # Nix delivery: the fat-store ↔ per-app dedup gap
 
-**Status:** investigated 2026-07-08. Root cause found; fix proposed, not yet applied.
+**Status:** investigated 2026-07-08. TWO causes found and resolved: (1) the fat
+store was stale on the registry — FIXED by publishing it every pipeline
+(`PUBLISH_FAT_STORE=1`); (2) the client image store must be content-addressed —
+the dedup only lands on Docker's **containerd snapshotter** (or containerd/CRI
+directly), NOT the classic `overlay2` graph driver. Host requirement documented
+in `docs/docker-setup.md` (Docker ≥ 28 + containerd snapshotter).
 
 ## Goal (recap)
 
@@ -55,7 +60,33 @@ Zoom's other 8 local layers, correctly NOT in the fat store:
   `.gitlab-ci.yml` does not set it. So `nix-store:nix` only ever got onto the
   registry via a manual one-off push, and has drifted ever since.
 
-**The build achieves cross-dedup; publishing throws it away.**
+**The build achieves cross-dedup; publishing threw it away.** (Fixed:
+`PUBLISH_FAT_STORE=1`, commit ac5a676.)
+
+### 3. Even with a fresh, matched fat store, the CLIENT must be content-addressed
+
+After the fat store is published from the same build (blobs byte-identical to the
+per-app images — verified: zoom's 618 MB store layer `de8b47…` / diff-id
+`62f5a779…` is present in *both* `nix-store:nix` and `zoom:nix`), a `docker pull`
+of an app on a host that has the fat store STILL re-downloaded the store layer.
+
+Root cause is the client image store's reuse model:
+
+- **`overlay2`** (classic Docker graph driver) reuses layers by **chainID** — a
+  layer *plus all its parents*. The fat store is `FROM scratch`; per-app images are
+  on the OS base, so the identical `de8b47` blob sits on different chains → not
+  reused → re-download. (The OS base *does* dedup across per-app images because
+  they all share the same OS-based chain — which is why "the base is cached" but
+  the app store layer isn't.)
+- **containerd content store** (Docker's containerd snapshotter, or containerd/
+  CRI-O directly) reuses by **content digest**, chain-independent → the blob is
+  recognized.
+
+**Proven** (nerdctl on the forge host, containerd): with `de8b47` already in the
+content store, pulling the fat store reported `de8b47 … already exists` (deduped);
+34/35 apps' unique content downloaded, `de8b47` did not. On `overlay2` the same
+layer re-downloads. So the design is correct; the missing piece is the client
+image store.
 
 ## Fix
 
@@ -70,6 +101,13 @@ images, so their store-partition blobs match on the registry:
 - Result: a host holding the current `nix-store:nix` that pulls `nix-<app>:nix`
   transfers only the app's appmeta + wiring (a few MB) **plus** the OS base if it
   isn't already present — never the shared store layers.
+
+### Secondary — the client must use a content-addressed image store
+
+Publishing a matched fat store is necessary but not sufficient: the consuming host
+must reuse layers by content digest, not chainID. Require **Docker ≥ 28 with the
+containerd snapshotter** (`features.containerd-snapshotter: true`), or a
+containerd/CRI runtime. Full host setup + verification in `docs/docker-setup.md`.
 
 ### Nuance — per-app images always carry the OS base
 
