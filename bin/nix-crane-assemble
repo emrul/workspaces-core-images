@@ -53,9 +53,12 @@ ensure_crane() {
     | tar xz -C /usr/local/bin crane
 }
 ensure_registry() {
-  "${CONTAINER_CLI}" inspect nix-crane-registry >/dev/null 2>&1 && \
-    { "${CONTAINER_CLI}" start nix-crane-registry >/dev/null 2>&1 || true; } || \
-    "${CONTAINER_CLI}" run -d --name nix-crane-registry -p 127.0.0.1:5000:5000 registry:2 >/dev/null
+  # This registry is STAGING ONLY for the crane→podman handoff — crane re-pushes
+  # every blob each run, so it never needs to persist. Recreate it fresh each run;
+  # the `-v` on rm drops the previous run's anonymous volume, which otherwise
+  # accumulates ~25-35G PER BUILD and fills the box. See design/nix-ci-disk.md.
+  "${CONTAINER_CLI}" rm -f -v nix-crane-registry >/dev/null 2>&1 || true
+  "${CONTAINER_CLI}" run -d --name nix-crane-registry -p 127.0.0.1:5000:5000 registry:2 >/dev/null
   local i; for i in $(seq 1 30); do
     curl -sf "http://${REG_LOCAL}/v2/" >/dev/null 2>&1 && return 0; sleep 0.5
   done

@@ -58,6 +58,28 @@ if ! podman image exists localhost/nix-ubuntu:dev; then
 fi
 echo "[driver] base image OK: $(podman image inspect -f '{{.Id}}' localhost/nix-ubuntu:dev)"
 
+# ── 1b. reclaim churn before building (KEEP the Nix cache + base images) ────
+# The persistent podman store accumulates transient artifacts each run:
+# superseded localhost/nix-<app>:dev + nix-store:dev tags, dangling layers, and
+# stale anonymous registry volumes. Prune them so the store stays bounded — WITHOUT
+# touching the nix-build-stage-* volume (the Nix build cache that avoids
+# re-realizing unchanged packages) or the base images. See design/nix-ci-disk.md.
+freeG() { df -PBG /var/lib/containers 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4); print $4+0}'; }
+echo "[driver] free before prune: $(freeG)G"
+podman image prune -f >/dev/null 2>&1 || true
+podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+  | grep -E '^localhost/nix-' | grep -vE 'nix-ubuntu|nixbase' \
+  | sort -u | xargs -r -n1 podman rmi -f >/dev/null 2>&1 || true
+# Backstop: if still tight, drop stale anonymous volumes (old registry staging,
+# etc.) — but NEVER the nix-build-stage-* Nix cache.
+if [ "$(freeG)" -lt 80 ]; then
+  echo "[driver] low disk ($(freeG)G) — pruning stale volumes (keeping nix-build-stage-*)"
+  for v in $(podman volume ls --format '{{.Name}}' 2>/dev/null | grep -vE '^nix-build-stage-'); do
+    podman volume rm "$v" >/dev/null 2>&1 || true
+  done
+fi
+echo "[driver] free after prune: $(freeG)G"
+
 # ── 2. assemble args ──────────────────────────────────────────────────────
 # --keep-output preserves app-*.tar after the run so the checker can verify
 # per-app artifacts post-build (the script otherwise cleans them on exit).
