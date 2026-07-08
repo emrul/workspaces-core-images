@@ -21,8 +21,9 @@
 #
 # nixpkgs wraps OnlyOffice in a bubblewrap FHS sandbox: bwrap needs unprivileged
 # user namespaces AND mount/MS_SLAVE/pivot_root, so the workspace must run with
-# seccomp=unconfined (chrome.json is NOT enough — it permits userns clone but not
-# bwrap's mounts → "bwrap: Failed to make / slave").
+# seccomp=bwrap.json (src/common/seccomp/bwrap.json — chrome.json is NOT enough:
+# it permits userns clone but gates bwrap's mount family behind CAP_SYS_ADMIN and
+# omits pivot_root → "bwrap: Failed to make / slave"). unconfined is not needed.
 #
 # custom_startup.sh runs this foreground in its respawn loop (with
 # maximize_window.sh matching MAXIMIZE_NAME=DesktopEditors) — do NOT background
@@ -63,6 +64,44 @@ export QSG_RHI_BACKEND=software
 export LIBGL_ALWAYS_SOFTWARE=1
 
 echo "onlyoffice-launch: software render (CEF GPU process on SwiftShader)" >&2
+
+# ── real /nix/store for the FHS/bwrap sandbox ──────────────────────────
+# In per-app (and image-mount) Nix images the store lives at /store, with
+# /nix/store a *symlink* to it (partition-assembly layout — keeps the OCI
+# layer tars identical between the fat store and per-app images so they
+# dedup; see build-nix-store-volume). nixpkgs' buildFHSEnv bwrap wrapper
+# does `--bind /nix /nix` and then, right after, hardcodes
+# `--tmpfs /nix/store/<glibc>/etc` + related binds. bwrap creates those
+# mount targets by walking path components literally and REFUSES to
+# traverse the /nix/store symlink, so it dies at
+#   bwrap: Can't mkdir parents for /nix/store/<glibc>/etc: No such file or directory
+# before the app ever starts. (Just binding /store isn't enough — bwrap
+# still won't follow the symlink; /nix/store must be a real directory.)
+#
+# Fix: run the FHS app inside an OUTER bwrap that presents a real
+# /nix/store — /nix as a fresh tmpfs, then /store bind-mounted onto
+# /nix/store (and /var onto /nix/var). The inner wrapper's `--bind /nix
+# /nix` then carries real store content and its glibc mounts resolve.
+# bwrap supplies its own user namespace (CAP_SYS_ADMIN inside it), so this
+# needs no container capabilities; the inner nix-bwrap nests fine.
+# No-op when /nix/store is already a real dir (e.g. a plain Nix build host).
+BWRAP=/usr/bin/bwrap
+if [ -L /nix/store ] && [ -x "$BWRAP" ]; then
+    # Resolve BIN in the host mount ns (where the symlink works) so the
+    # outer bwrap gets a concrete store path to exec.
+    BIN_REAL=$(readlink -f "$BIN" 2>/dev/null || printf '%s' "$BIN")
+    exec "$BWRAP" \
+        --bind / / \
+        --dev-bind /dev /dev \
+        --proc /proc \
+        --tmpfs /nix \
+        --bind /store /nix/store \
+        --bind /var /nix/var \
+        -- "${BIN_REAL}" --system-title-bar \
+        --use-gl=angle --use-angle=swiftshader \
+        "$@"
+fi
+
 exec "${BIN}" --system-title-bar \
     --use-gl=angle --use-angle=swiftshader \
     "$@"
