@@ -92,7 +92,12 @@ done
 # Clean LD_LIBRARY_PATH: nvgl (nvidia vendor libs, no glibc) + the Nix Vulkan
 # loader (WSI). Deliberately NOT the system path — inheriting it mixes system
 # glibc into the Nix process ("__vdso_gettimeofday: invalid mode for dlopen").
-export LD_LIBRARY_PATH="${NVGL}:${VK_LIBDIR}"
+# APPEND (not replace) any caller-provided LD_LIBRARY_PATH: a launcher may seed
+# it with the app's OWN Nix lib dir for runtime dlopen deps that aren't on the
+# binary's RUNPATH (e.g. Blender's sdlew dlopen of libSDL3.so.0). Callers must
+# pass a CLEAN path (Nix store dirs only, no system paths) to avoid the vdso trap
+# above — nix-launch unsets it, and app launchers set it to a profile lib dir.
+export LD_LIBRARY_PATH="${NVGL}:${VK_LIBDIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 # Point Nix glvnd at the system EGL vendor JSONs so it loads libEGL_nvidia.
 export __EGL_VENDOR_LIBRARY_DIRS="${__EGL_VENDOR_LIBRARY_DIRS:-/usr/share/glvnd/egl_vendor.d}"

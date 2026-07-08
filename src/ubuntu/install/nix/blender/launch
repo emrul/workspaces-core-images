@@ -20,7 +20,7 @@ BIN="${PROFILE}/bin/blender"
 
 if /usr/local/bin/nix-gpu-run --available; then
     # dbus/XDG env fixups (container-init services don't source /etc/profile.d);
-    # the clean GPU LD_LIBRARY_PATH is set by nix-gpu-run itself.
+    # nix-gpu-run sets the nvidia/vulkan LD_LIBRARY_PATH itself.
     [ -f /tmp/kasm-dbus.env ] && {
         . /tmp/kasm-dbus.env 2>/dev/null
         [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && export DBUS_SESSION_BUS_ADDRESS
@@ -30,6 +30,13 @@ if /usr/local/bin/nix-gpu-run --available; then
         [ -d "${XDG_RUNTIME_DIR}" ] || mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null
         export XDG_RUNTIME_DIR
     fi
+    # Seed a CLEAN LD_LIBRARY_PATH with Blender's own profile lib dir so its
+    # sdlew loader can dlopen libSDL3.so.0 (SDL3 is a runtime dlopen dep, NOT on
+    # the binary's RUNPATH; without it Blender SIGABRTs at "Failed loading SDL3
+    # library" the moment it reaches sdlewInit — after the GL context is up).
+    # nix-gpu-run PREPENDS the nvidia/vulkan dirs and keeps this. Must stay clean
+    # (Nix store paths only) — do NOT include the Kasm-baked system path here.
+    export LD_LIBRARY_PATH="${PROFILE}/lib"
     echo "blender-launch: GPU allocated — handing off to nix-gpu-run (vglrun -d egl)" >&2
     exec /usr/local/bin/nix-gpu-run "${BIN}" "$@"
 fi

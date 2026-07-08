@@ -273,8 +273,12 @@ pkgs = ["nixpkgs#obs-studio"]
 
 [profiles.blender]
 # GPU app — needs the VirtualGL launcher gate for acceleration; renders
-# in software otherwise.
-pkgs = ["nixpkgs#blender"]
+# in software otherwise (blender/launch -> nix-gpu-run).
+# sdl3^lib: Blender dlopens libSDL3.so.0 (sdlew, joystick input) at startup but
+# it's NOT in blender's closure — without it Blender SIGABRTs at "Failed loading
+# SDL3 library". The lib output lands in /nix/var/nix/profiles/blender/lib, which
+# blender/launch puts on LD_LIBRARY_PATH for the dlopen.
+pkgs = ["nixpkgs#blender", "nixpkgs#sdl3^lib"]
 
 # ── Dev tools ─────────────────────────────────────────────────────────
 [profiles.insomnia]
