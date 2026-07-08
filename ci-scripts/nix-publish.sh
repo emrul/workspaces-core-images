@@ -83,11 +83,14 @@ for img in "${imgs[@]}"; do
   fi
 done
 
-# Optional: also publish the fat store-mount image (all profiles' Nix store in
-# shared layers). Registry entry is marked enabled:false — it's for pre-caching
-# the shared layers / runtime app-selection, not a runnable single-app workspace.
-# Enable with PUBLISH_FAT_STORE=1; image name is nix-store:<tag>.
-if [[ "${PUBLISH_FAT_STORE:-0}" == "1" ]]; then
+# Also publish the fat store-mount image (all profiles' Nix store in shared
+# layers). Registry entry is marked enabled:false — it's for pre-caching the
+# shared layers / runtime app-selection, not a runnable single-app workspace.
+# DEFAULT ON (PUBLISH_FAT_STORE=1): the fat store MUST be published from the same
+# build as the per-app images, or its store-partition layers drift and share
+# nothing with them on the registry (see design/nix-dedup-gap.md). Set
+# PUBLISH_FAT_STORE=0 to opt out. Image name is nix-store:<tag>.
+if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
   fat_local="$("${DOCKER}" images --format '{{.Repository}}:{{.Tag}}' \
     | grep -E "^localhost/nix-store-(amd64|arm64):dev$" | sort -u | head -1)"
   if [[ -n "${fat_local}" ]]; then
