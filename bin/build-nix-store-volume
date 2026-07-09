@@ -423,6 +423,14 @@ while IFS= read -r p; do
               "${STAGE_IN}/profiles.json")"
   [ -z "$p_ref" ] && p_ref="${DEFAULT_REF}"
   echo "  ($p uses ref $p_ref)" >&2
+  # Reset the profile each run (same rationale as _gpu above): when a profile's
+  # pkg set changes on the warm staging volume — swapping nixpkgs#steam for
+  # path:…#steam-vgl, an onlyoffice ref bump, etc. — `nix profile install` appends
+  # to the existing profile and dies with "An existing package already provides
+  # …" on any shared file. The profile is a cheap symlink tree over the persistent
+  # store (closures are cached), so rebuilding it fresh is safe and avoids the
+  # collision.
+  rm -f "${KASM_PROFILE_DIR}/$p" "${KASM_PROFILE_DIR}/$p"-*-link
   if collect_attrs ".profiles.\"$p\".pkgs[]" "$p_ref" \
        | xargs nix --extra-experimental-features 'nix-command flakes' \
            profile install --impure --profile "${KASM_PROFILE_DIR}/$p"; then
