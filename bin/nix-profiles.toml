@@ -343,5 +343,14 @@ pkgs = ["nixpkgs#superTuxKart"]
 [profiles.steam]
 # nixpkgs ships steam as an FHS-wrapped derivation (its own chroot env).
 # x86_64 only; needs GPU + i386 userspace, both handled by the wrapper.
-pkgs      = ["nixpkgs#steam"]
+#
+# We use a local steam.override (bin/nix-steam-overlay) instead of bare
+# `nixpkgs#steam`: steam's client is a 32-bit VGUI2 process that HARD-REQUIRES a
+# GLX visual, which headless Xvnc only provides via VirtualGL. The overlay pulls
+# VirtualGL (both arches) INTO steam's FHS and preloads the faker via the FHS
+# profile — the only place injection works (a host faker's libGL/glibc deps
+# aren't reachable from the nix launcher outside the FHS). Pinned to the same
+# nixpkgs rev as [nixpkgs].ref so the faker's glibc matches the FHS. Mounted at
+# /config/steam-overlay by bin/build-nix-store-volume. See [[nix-app-gpu-and-launch]].
+pkgs      = ["path:/config/steam-overlay#steam-vgl"]
 platforms = ["amd64"]
