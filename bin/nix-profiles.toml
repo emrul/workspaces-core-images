@@ -344,14 +344,14 @@ pkgs = ["nixpkgs#superTuxKart"]
 # nixpkgs ships steam as an FHS-wrapped derivation (its own chroot env).
 # x86_64 only; needs GPU + i386 userspace, both handled by the wrapper.
 #
-# NOTE: steam's client is a 32-bit VGUI2 process that needs a GLX visual, which
-# headless Xvnc only provides via VirtualGL — so the client crash-loops on
-# `glXChooseVisual` without GPU acceleration. A previous attempt to inject
-# VirtualGL into the FHS via a steam.override + global LD_PRELOAD in the FHS
-# profile (bin/nix-steam-overlay) HUNG steam's bootstrap: preloading libvglfaker/
-# libdlfaker into every process in steam's multi-process runtime (bash,
-# pressure-vessel, srt tools) is too blunt. steam-GPU needs a surgical approach
-# that vglruns ONLY the final ubuntu12_32/steam client — deferred R&D. See
-# design/nix-package-process.md and the nix-app-gpu-and-launch notes.
-pkgs      = ["nixpkgs#steam"]
+# steam's client is a 32-bit VGUI2 process that HARD-REQUIRES a GLX visual, which
+# headless Xvnc only provides via VirtualGL. bin/nix-steam-overlay puts VirtualGL
+# (vglrun + 32/64-bit faker) AND steam-run into steam's FHS; the launcher
+# (src/ubuntu/install/nix/steam/launch) runs `steam-run vglrun -d egl steam` so
+# the client renders through VGL while steam's bootstrap stays untouched. (A
+# global LD_PRELOAD in the FHS profile does NOT work — it segfaults/hangs the
+# bootstrap; vglrun is required.) Mounted at /config/steam-overlay by
+# bin/build-nix-store-volume; pinned to the same nixpkgs rev as [nixpkgs].ref so
+# the faker's glibc matches the FHS. See [[nix-app-gpu-and-launch]].
+pkgs      = ["path:/config/steam-overlay#steam-vgl"]
 platforms = ["amd64"]

@@ -875,6 +875,13 @@ inner_run_args=(
 # dir → not mounted (a [gpu] path: entry would then fail, which is intended).
 [[ -d "${SCRIPT_DIR}/nix-gpu-overlay" ]] && \
   inner_run_args+=( --volume "${SCRIPT_DIR}/nix-gpu-overlay:/config/gpu-overlay:ro" )
+# Mount the steam overlay flake (VirtualGL + steam-run in steam's FHS, so the
+# launcher can `steam-run vglrun steam` — see bin/nix-steam-overlay and
+# src/ubuntu/install/nix/steam/launch). Referenced by [profiles.steam] as
+# `path:/config/steam-overlay#steam-vgl`. Same nixpkgs pin as the base so the
+# faker's glibc matches the FHS. Optional: absent dir → not mounted.
+[[ -d "${SCRIPT_DIR}/nix-steam-overlay" ]] && \
+  inner_run_args+=( --volume "${SCRIPT_DIR}/nix-steam-overlay:/config/steam-overlay:ro" )
 inner_run_args+=( --entrypoint /bin/sh "${NIX_IMAGE_DEFAULT}" /inner-build.sh )
 
 "${CONTAINER_CLI}" "${inner_run_args[@]}"

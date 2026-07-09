@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -ex
-START_COMMAND="/usr/local/bin/nix-app-launch steam"
+# steam-launch adds the GPU path that nix-app-launch -> nix-launch can't: steam's
+# 32-bit VGUI2 client needs a GLX visual (headless Xvnc has none) so it must run
+# under VirtualGL. steam-launch runs steam under `vglrun` inside its FHS (see
+# src/ubuntu/install/nix/steam/launch + bin/nix-steam-overlay).
+START_COMMAND="/usr/local/bin/steam-launch"
 PGREP="steam"
 # we used to maximize steam, but the window titles show up as N/A, I can't distingush between the main window and the chat window.
 export MAXIMIZE="false"
