@@ -157,9 +157,68 @@ issues — preserve these (from PoC findings):
   container-init's `--systemd1-shim` no-op surface.
 - **EGL-only apps** (e.g. `wezterm-gui`): won't work until KasmVNC exposes EGL;
   ship the CLI variant only.
+- **FHS/bwrap apps that use OpenGL** (Steam, and any buildFHSEnv app that opens a
+  GLX/GL context): the FHS rebinds `/usr`, so it can't see the host's GL driver.
+  The driver reaches them the NixOS-standard way, via `/run/opengl-driver{,-32}`
+  — see the Steam worked example below.
 - **`.desktop` trust**: the activation layer must `gio set
   metadata::xfce-exe-checksum` the shims as the user before the WM enumerates
   them, or XFCE shows "untrusted launcher."
+
+## Headless GPU / GLX for FHS apps — the Steam worked example
+
+Getting Steam to run headless under KasmVNC took real digging; the mechanism and
+the pitfalls generalise to any FHS/bwrap app that touches OpenGL, so they're
+written down here rather than buried in the launcher.
+
+**How the GL driver reaches a nix FHS app.** nixpkgs GL/Vulkan apps (including the
+`steam` buildFHSEnv) resolve their driver from `/run/opengl-driver/lib` (64-bit) and
+`/run/opengl-driver-32/lib` (32-bit) — on NixOS `hardware.graphics` populates that;
+off NixOS it's what nixGL / nix-gl-host do. Our boot service
+`src/ubuntu/install/nix/scripts/nix-gpu-setup` (unit `nix-gpu-setup.service`, baked
+in `dockerfile-nix-ubuntu`) publishes it from the Kasm-injected host driver:
+64-bit NVIDIA when a GPU is allocated, plus 32-bit **mesa (software llvmpipe)**
+because the host has no 32-bit NVIDIA driver. It copies **real files** (`cp -Lf`),
+not symlinks — the FHS rebinds `/usr`, so host-path symlinks would dangle, whereas
+`/run` is bind-mounted through so real files there stay valid. The 32-bit block is
+guarded by `[ -d /usr/lib/i386-linux-gnu/dri ]`, so it only fires on images that
+installed i386 mesa (VGL images like Steam); 64-bit-only workspaces skip it.
+
+**Steam does NOT need a GPU or VirtualGL to launch.** Steam's top-level client is
+the legacy 32-bit VGUI2 process. It hard-requires a GLX visual at startup
+(`glXChooseVisual` → fatal assert if none), but a **software** visual (llvmpipe) is
+enough — exactly what stock apt steam uses on the same headless Xvnc. So the
+launcher (`src/ubuntu/install/nix/steam/launch`) runs **plain `steam`, no `vglrun`**.
+64-bit games still get real GPU acceleration the standard way: Steam's
+pressure-vessel imports `/run/opengl-driver` as its graphics provider. (An earlier
+approach that wrapped all of Steam in `vglrun` was a dead end — the VGL faker
+mismatches the 32-bit client's ELF class and can't enable OpenGL on the software
+backend. That whole saga was the wrong problem.)
+
+**The actual bug we fixed** (commit 53c7c8f). Publishing the 32-bit mesa libs was
+not enough: mesa's software megadriver (`libgallium`, the llvmpipe backend) needs
+out-of-tree deps — chiefly `libLLVM`, plus `libsensors`, `libxshmfence`, and
+libLLVM's own chain (`libstdc++`, `libedit`, `libffi`, `libtinfo`, `libxml2`,
+`libz`, `libzstd`). Without them the 32-bit driver can't `dlopen`, so the client
+still gets no visual and asserts. `nix-gpu-setup` now stages the megadriver's whole
+recursive `.so` closure into `/run/opengl-driver-32/lib` (which is on the FHS's
+`LD_LIBRARY_PATH`), **excluding the glibc family** — copying the base's glibc over
+the FHS's nixpkgs glibc mixes ABIs and crashes (`__nptl_change_stack_perm` / vdso).
+
+**Non-obvious debugging trap.** You cannot diagnose the missing deps with `ldd` run
+on the host: there every dep resolves via the system i386 path, so `ldd` reports
+"all resolved". Inside the FHS that system path is gone — run
+`nix-bwrap-run <steam-run> ldd /run/opengl-driver-32/lib/libgallium-*.so` to see the
+real `=> not found` list. That host-vs-FHS blind spot is why the fix stages the
+whole closure rather than diffing what `ldd` claims is missing.
+
+**Runtime cost / delay.** On first launch Steam downloads a ~500 MB client update
+(Valve ships the client out-of-band into `~/.local/share/Steam`). It runs the
+updater in windowless *console* mode, then self-restarts into the graphical UI — so
+the screen looks blank for ~1 minute before the login window appears. This is
+inherent Steam behaviour, unrelated to the GL fix. Mitigation: persist
+`~/.local/share/Steam` via Kasm profile-sync (scope to `ubuntu12_32/` + `package/`,
+exclude `steamapps/`) so the update happens once, not every session.
 
 ## Checklist for a new profile
 

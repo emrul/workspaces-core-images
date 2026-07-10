@@ -249,6 +249,13 @@ internal/desktop bundles where dedup pays off.
 - **i386 / multilib** (Steam, Wine, ZSNES): use `pkgsi686Linux` /
   `wineWowPackages`; Steam additionally needs its FHS env wrapper (nixpkgs
   provides `steam` as an FHS-wrapped derivation already).
+- **Steam specifically does NOT need a GPU or VirtualGL** — despite living in the
+  GPU/i386 buckets above. Its 32-bit VGUI2 client only needs a *software* GLX
+  visual (llvmpipe), like stock apt steam. The launcher runs plain `steam` (no
+  `vglrun`); 64-bit games get the GPU via pressure-vessel importing
+  `/run/opengl-driver`. The one requirement is that `nix-gpu-setup` stage the full
+  32-bit mesa software-driver closure (incl. `libLLVM`) into `/run/opengl-driver-32`
+  — see the Steam worked example in `design/nix/docs/packaging-apps.md`.
 - **arm64 gaps**: several vendor binaries are x86_64-only in nixpkgs
   (Zoom, OnlyOffice already flagged). Use the TOML `platforms = ["amd64"]`
   key to skip them on arm64 builds rather than failing.
