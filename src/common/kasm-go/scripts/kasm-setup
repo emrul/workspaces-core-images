@@ -34,7 +34,15 @@ fi
 
 # 2) Required runtime directories.
 install -d -m 0755 -o "$KASM_OS_USER" -g "$KASM_OS_GROUP" "$KASM_OS_HOME/.vnc" "$KASM_OS_HOME/.config" "$KASM_OS_HOME/Uploads" "$KASM_OS_HOME/Downloads" "$KASM_OS_HOME/Desktop" "$KASM_OS_HOME/PDF" 2>/dev/null || true
-install -d -m 0755 /var/run/pulse /var/log/journal 2>/dev/null || true
+# /var/run/pulse is PulseAudio's runtime dir (HOME= for the audio-out service,
+# which runs pulse as the session user). It MUST be owned by that user and be
+# 0700 — pulse refuses a runtime dir it doesn't own, and a root-owned dir also
+# blocks the session user's GUI apps (Chrome, Steam) from traversing to the
+# socket, so their audio silently never reaches the jsmpeg relay. (The old
+# vnc_startup.sh started pulse as the user, so the dir was user-owned; the
+# container-init port regressed this by creating it as root.)
+install -d -m 0700 -o "$KASM_OS_USER" -g "$KASM_OS_GROUP" /var/run/pulse 2>/dev/null || true
+install -d -m 0755 /var/log/journal 2>/dev/null || true
 install -d -m 1777 /tmp/.ICE-unix /tmp/.X11-unix 2>/dev/null || true
 
 # 2a) Default-profile sync. The bash chain's kasm_default_profile.sh
