@@ -70,6 +70,49 @@ Three checks keep the model from silently degrading:
 3. **Promote report** (`build-nix-store-volume`). On a full-catalog build, emits an
    actionable `PROMOTE CANDIDATES` block (skipped on subset builds, where
    prevalence is meaningless).
+4. **Disk pre-flight gate** (`dind-build.sh`). Before the (large) build, enforce
+   `DISK_MIN_GB` free on the store, escalating reclaim: standard GC → nuke the Nix
+   cache → **fail**. Prevents an `ENOSPC` mid-build (which corrupts the warm store)
+   and is the enforcement half of the runner disk budget below.
+
+## Runner requirements & disk budget
+
+The pipeline runs on a self-hosted `nix-builder` runner (shell executor,
+passwordless `sudo` for nerdctl, persistent `/srv/nix-build`). It is designed to
+**live within a fixed disk budget** rather than grow unbounded — three mechanisms
+keep it bounded, and the disk is sized so they rarely have to bite:
+
+| Consumer | Mechanism that bounds it | Steady size |
+|---|---|---|
+| Warm Nix build cache (`nix-build-stage-*`) | `NIX_STAGE_CAP_G` — GC resets it if exceeded | ≤ 150 GB |
+| Image working set (base + shared layers + ~45 per-app + fat store, **deduped**) | per-build prune of superseded `nix-*:dev` tags + dangling layers | ~80–100 GB |
+| Stale anonymous volumes (old registry staging) | per-build + GC volume prune | ~0 (≈0–35 GB between GCs) |
+| Build scratch / peak (crane staging, new layers before old pruned) | transient; reclaimed each run | ~40–60 GB peak |
+
+**Recommended dedicated runner spec:**
+
+| Resource | Spec | Rationale |
+|---|---|---|
+| **Disk** (`/srv/nix-build`, SSD) | **500 GB** | ~150 GB cache + ~100 GB image working set + ~60 GB build peak + **150 GB free floor** safety headroom. |
+| vCPU | **8** | `BUILD_PARALLEL=4` parallel Nix realizations, several compile from source. |
+| RAM | **32 GB** | 4 concurrent nix builds; some apps (electron/qt/LLVM) are memory-heavy. |
+| Build timeout | **4 h** | Full-catalog cold build; warm rebuilds are minutes. |
+
+**Pipeline knobs to set for the dedicated runner** (CI/CD variables):
+
+```
+DISK_MIN_GB      = 150   # pre-flight free-space floor (fail if unmet after GC)
+NIX_STAGE_CAP_G  = 150   # warm-cache ceiling (GC resets above this)
+BUILD_PARALLEL   = 4     # raise only if vCPU/RAM allow
+```
+
+> Current shared forge for reference: 465 GB total, ~75 GB free, store 299 GB
+> (overlay 192 GB incl. churn, Nix cache 73 GB, ~34 GB stale volumes). That's
+> **why** a 150 GB floor can't be met there today — the defaults ship at
+> `DISK_MIN_GB=100` so the shared box still builds; the dedicated runner raises it
+> to 150. If the working set ever legitimately can't fit the budget, the gate
+> **fails loudly** rather than silently corrupting the store — that's the signal
+> to grow the disk or trim the catalog.
 
 ## Change-gating outcomes
 

@@ -101,6 +101,35 @@ if [ "$(freeG)" -lt 80 ]; then
 fi
 echo "[driver] free after prune: $(freeG)G"
 
+# ── 1c. disk pre-flight gate — live within the runner's disk budget ────────
+# The catalog build is large; if it starts with too little headroom it ENOSPCs
+# mid-run (corrupting the warm store). Enforce a floor of DISK_MIN_GB free,
+# escalating reclaim before giving up:
+#   1. standard GC (stale vols + Nix-cache reset only if it exceeds NIX_STAGE_CAP_G)
+#   2. still short → nuke the Nix cache entirely (next build re-seeds, slow)
+#   3. still short → FAIL: the image working set alone exceeds the budget; a human
+#      must free space / grow the disk (or lower DISK_MIN_GB for a one-off).
+# This is the enforcement side of the runner disk budget — see docs/ci_cd_flow.md.
+DISK_MIN_GB="${DISK_MIN_GB:-120}"
+CAP_G="${NIX_STAGE_CAP_G:-150}"
+if [ "$(freeG)" -lt "${DISK_MIN_GB}" ]; then
+  echo "[driver] low disk $(freeG)G < ${DISK_MIN_GB}G floor — GC (Nix-cache cap ${CAP_G}G)"
+  NIX_STAGE_CAP_G="${CAP_G}" sh /work/ci-scripts/nix-gc.sh || true
+fi
+if [ "$(freeG)" -lt "${DISK_MIN_GB}" ]; then
+  echo "[driver] still low $(freeG)G < ${DISK_MIN_GB}G — nuking the Nix build cache (next build re-seeds)"
+  NIX_STAGE_CAP_G=0 sh /work/ci-scripts/nix-gc.sh || true
+fi
+free_final="$(freeG)"
+if [ "${free_final}" -lt "${DISK_MIN_GB}" ]; then
+  echo "[driver] FATAL: ${free_final}G free < ${DISK_MIN_GB}G floor, even after full GC + cache nuke."
+  echo "[driver]   The image working set alone exceeds the disk budget — grow the runner disk"
+  echo "[driver]   ($DIND_ROOT) or free space, then retry. One-off override: lower DISK_MIN_GB."
+  status "FAILED disk ${free_final}G<${DISK_MIN_GB}G $(date -u +%FT%TZ)"
+  exit 1
+fi
+echo "[driver] disk OK: ${free_final}G free (floor ${DISK_MIN_GB}G, cache cap ${CAP_G}G)"
+
 # ── 2. assemble args ──────────────────────────────────────────────────────
 # --keep-output preserves app-*.tar after the run so the checker can verify
 # per-app artifacts post-build (the script otherwise cleans them on exit).
