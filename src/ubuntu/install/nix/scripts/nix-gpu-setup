@@ -1,20 +1,25 @@
 #!/bin/sh
-# nix-gpu-setup — give the session user ownership of the allocated GPU device
-# nodes, at boot, as root.
+# nix-gpu-setup — at boot, as root: (1) give the session user ownership of the
+# allocated GPU device nodes, and (2) publish the host GPU driver at the
+# NixOS-standard location /run/opengl-driver{,-32} so nixpkgs GL apps — including
+# buildFHSEnv sandboxes like steam — find it the STANDARD way.
 #
-# Why this is needed (and why kasmweb/chrome doesn't need it): this fork's images
-# run container-init as PID 1, so the container's run-user is ROOT (USER 0 — see
-# the dockerfile NOTE). When the Kasm agent provisions a GPU it chowns
-# /dev/dri/{card,renderD*} to the container's run-user — root — not the
-# unprivileged session user (kasm-user / $KASM_OS_USER, uid 1000) that actually
-# runs the app. nix-gpu-run's `-O` ownership gate (the same gate kasmweb/chrome
-# and kasm-window-manager use) then fails for the app user, and Chrome falls back
-# to SwiftShader. Re-chowning the EGL/render nodes to the session user fixes that.
+# (1) Device-node ownership. This fork runs container-init as PID 1, so the
+# container run-user is ROOT (USER 0). The Kasm agent chowns the provisioned
+# /dev/dri/{card,renderD*} to that run-user (root), not the unprivileged session
+# user (uid 1000) that runs the app. nix-gpu-run's `-O` gate then fails and apps
+# fall back to software. Re-chown the nodes to the session user to fix that.
 #
-# Idempotent + safe: a no-op when no GPU is allocated (KASM_EGL_CARD/RENDERD unset
-# or the nodes don't exist). Changes only the owner (keeps the video/render group).
-# Runs After=kasm-setup (the OS user exists) and Before=window-manager (before the
-# desktop / custom_startup auto-launches the browser).
+# (2) /run/opengl-driver{,-32}. Every nixpkgs GL/Vulkan app resolves its driver
+# through /run/opengl-driver/lib (64-bit) and /run/opengl-driver-32/lib (32-bit) —
+# on NixOS `hardware.graphics` populates it; off NixOS that's what nixGL /
+# nix-gl-host do. nixpkgs' steam FHS is BUILT to read the driver + glvnd
+# egl_vendor.d from there (both arches). We publish it here from the Kasm-injected
+# host driver. CRUCIAL: copy REAL files (not symlinks to /usr/lib), because the
+# steam buildFHSEnv rebinds /usr — host-path symlinks would dangle inside the FHS,
+# whereas /run is bind-mounted through, so real files under /run stay valid. The
+# host has no 32-bit NVIDIA driver, so /run/opengl-driver-32 carries 32-bit mesa
+# (software) — enough to give a 32-bit GL client a visual under VirtualGL.
 set -u
 
 user="${KASM_OS_USER:-kasm-user}"
@@ -27,5 +32,61 @@ for dev in "${KASM_EGL_CARD:-}" "${KASM_RENDERD:-}"; do
         echo "nix-gpu-setup: could not chown ${dev} (continuing)" >&2
     fi
 done
+
+# copy_real <dest-lib-dir> <src-dir> <name-glob>...  — deref-copy matching libs
+copy_real() {
+    dst="$1"; src="$2"; shift 2
+    [ -d "${src}" ] || return 0
+    for pat in "$@"; do
+        for f in "${src}"/${pat}; do
+            [ -e "${f}" ] || continue
+            cp -Lf "${f}" "${dst}/$(basename "${f}")" 2>/dev/null || true
+        done
+    done
+}
+
+# ── /run/opengl-driver (64-bit): NVIDIA vendor driver when injected ──────────
+# Find the dir that holds the FULL vendor set (key off libnvidia-glcore, not the
+# /opt/nix-libs compat stub that ldconfig may sort first).
+nvsrc=""
+for d in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/lib64 /usr/local/nvidia/lib64; do
+    if ls "${d}"/libnvidia-glcore.so* >/dev/null 2>&1; then nvsrc="${d}"; break; fi
+done
+
+D=/run/opengl-driver
+if [ -n "${nvsrc}" ] && [ ! -e "${D}/lib/libEGL_nvidia.so.0" ]; then
+    mkdir -p "${D}/lib" "${D}/share/glvnd/egl_vendor.d" "${D}/share/vulkan/icd.d"
+    copy_real "${D}/lib" "${nvsrc}" \
+        'libGLX_nvidia.so*' 'libEGL_nvidia.so*' 'libGLESv2_nvidia.so*' \
+        'libGLX_indirect.so*' 'libnvidia-*.so*' 'libcuda.so*'
+    # glvnd EGL vendor JSON + Vulkan ICD (reference the libs by soname → found in
+    # ${D}/lib). Try the usual host locations.
+    for j in /usr/share/glvnd/egl_vendor.d/10_nvidia.json \
+             /usr/local/nvidia/share/glvnd/egl_vendor.d/10_nvidia.json; do
+        [ -e "${j}" ] && cp -Lf "${j}" "${D}/share/glvnd/egl_vendor.d/" 2>/dev/null && break
+    done
+    for j in /etc/vulkan/icd.d/nvidia_icd.json /usr/share/vulkan/icd.d/nvidia_icd.json; do
+        [ -e "${j}" ] && cp -Lf "${j}" "${D}/share/vulkan/icd.d/" 2>/dev/null && break
+    done
+    chmod -R a+rX "${D}" 2>/dev/null || true
+    echo "nix-gpu-setup: published NVIDIA driver at ${D} ($(ls "${D}/lib" 2>/dev/null | wc -l) libs)" >&2
+fi
+
+# ── /run/opengl-driver-32 (32-bit): mesa software (no 32-bit NVIDIA on host) ──
+# Gives a 32-bit GL client (e.g. steam's VGUI2) a mesa visual under VirtualGL.
+m32=/usr/lib/i386-linux-gnu
+D32=/run/opengl-driver-32
+if [ -d "${m32}/dri" ] && [ ! -e "${D32}/lib/libGLX_mesa.so.0" ]; then
+    mkdir -p "${D32}/lib/dri" "${D32}/share/glvnd/egl_vendor.d"
+    copy_real "${D32}/lib" "${m32}" \
+        'libEGL.so*' 'libEGL_mesa.so*' 'libGLX.so*' 'libGLX_mesa.so*' \
+        'libGLX_indirect.so*' 'libGLdispatch.so*' 'libGL.so*' 'libglapi.so*' \
+        'libgallium*.so*' 'libdrm*.so*' 'libgbm.so*'
+    copy_real "${D32}/lib/dri" "${m32}/dri" '*.so'
+    [ -e /usr/share/glvnd/egl_vendor.d/50_mesa.json ] && \
+        cp -Lf /usr/share/glvnd/egl_vendor.d/50_mesa.json "${D32}/share/glvnd/egl_vendor.d/" 2>/dev/null || true
+    chmod -R a+rX "${D32}" 2>/dev/null || true
+    echo "nix-gpu-setup: published 32-bit mesa at ${D32} ($(ls "${D32}/lib" 2>/dev/null | wc -l) libs)" >&2
+fi
 
 exit 0
