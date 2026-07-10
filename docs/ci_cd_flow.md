@@ -98,14 +98,24 @@ keep it bounded, and the disk is sized so they rarely have to bite:
 > ⚠️ Never use `builder prune -a`/`image prune -a`: they drop the cache/images the
 > tagged **base** relies on and cascade into deleting `nix-ubuntu` itself.
 
-**Recommended dedicated runner spec:**
+**Recommended dedicated runner spec** (right-sized from a measured clean full build — see below):
 
 | Resource | Spec | Rationale |
 |---|---|---|
-| **Disk** (`/srv/nix-build`, SSD) | **500 GB** | ~150 GB cache + ~100 GB image working set + ~60 GB build peak + **150 GB free floor** safety headroom. |
+| **Disk** (`/srv/nix-build`, SSD) | **400 GB** | Measured steady store ~180–200 GB (≤150 GB cache + ~80 GB deduped images) + ~60 GB build peak + a ~150 GB free floor. 400 GB leaves comfortable churn headroom between GCs. |
 | vCPU | **8** | `BUILD_PARALLEL=4` parallel Nix realizations, several compile from source. |
 | RAM | **32 GB** | 4 concurrent nix builds; some apps (electron/qt/LLVM) are memory-heavy. |
-| Build timeout | **4 h** | Full-catalog cold build; warm rebuilds are minutes. |
+| Build timeout | **4 h** | Cold full build measured ~25 min warm / ~1 h cold (cache re-seed); warm app-only rebuilds are minutes. |
+
+> **Measured on a clean full build (2026-07-10, forge):** cold catalog build
+> (`ok=35 skipped=12 failed=0`) consumed a peak of ~140 GB over the clean baseline
+> (Nix cache re-seed + fat store + 35 per-app images), leaving 126–211 GB free
+> throughout on the 465 GB box. Post-build store: overlay 151 GB (incl. ~70 GB of
+> that run's build cache, cleared by the next build's `builder prune -f`) + volumes
+> 109 GB. So even the shared 465 GB forge has ample room; **400 GB dedicated is
+> generous.** The one build that failed did so because an external `sudo rm -rf` of a
+> containerd task dir restarted the daemon mid-run — an argument for a *dedicated*
+> (uncontended) runner, not a bigger one.
 
 **Pipeline knobs to set for the dedicated runner** (CI/CD variables):
 
