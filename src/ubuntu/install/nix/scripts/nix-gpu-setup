@@ -19,7 +19,9 @@
 # steam buildFHSEnv rebinds /usr — host-path symlinks would dangle inside the FHS,
 # whereas /run is bind-mounted through, so real files under /run stay valid. The
 # host has no 32-bit NVIDIA driver, so /run/opengl-driver-32 carries 32-bit mesa
-# (software) — enough to give a 32-bit GL client a visual under VirtualGL.
+# (software llvmpipe) — enough to give a 32-bit GL client (e.g. steam's VGUI2
+# process) a working GLX visual directly, no VirtualGL required. The megadriver's
+# out-of-tree deps (libLLVM etc.) MUST come along or the driver can't load.
 set -u
 
 user="${KASM_OS_USER:-kasm-user}"
@@ -73,7 +75,9 @@ if [ -n "${nvsrc}" ] && [ ! -e "${D}/lib/libEGL_nvidia.so.0" ]; then
 fi
 
 # ── /run/opengl-driver-32 (32-bit): mesa software (no 32-bit NVIDIA on host) ──
-# Gives a 32-bit GL client (e.g. steam's VGUI2) a mesa visual under VirtualGL.
+# Gives a 32-bit GL client (e.g. steam's VGUI2) a software (llvmpipe) GLX visual
+# directly — no VirtualGL. Only fires where i386 mesa is installed (VGL images
+# like steam); the [ -d ${m32}/dri ] guard skips it for 64-bit-only workspaces.
 m32=/usr/lib/i386-linux-gnu
 D32=/run/opengl-driver-32
 if [ -d "${m32}/dri" ] && [ ! -e "${D32}/lib/libGLX_mesa.so.0" ]; then
@@ -85,6 +89,30 @@ if [ -d "${m32}/dri" ] && [ ! -e "${D32}/lib/libGLX_mesa.so.0" ]; then
     copy_real "${D32}/lib/dri" "${m32}/dri" '*.so'
     [ -e /usr/share/glvnd/egl_vendor.d/50_mesa.json ] && \
         cp -Lf /usr/share/glvnd/egl_vendor.d/50_mesa.json "${D32}/share/glvnd/egl_vendor.d/" 2>/dev/null || true
+    # The mesa software megadriver (llvmpipe) NEEDs libs that live OUTSIDE the
+    # mesa lib dir — libLLVM (llvmpipe's compiler backend) chief among them, plus
+    # libsensors, libxshmfence, and libLLVM's own chain. Without them the 32-bit
+    # driver can't dlopen, so a 32-bit GL client (steam's VGUI2 process) still
+    # gets NO GLX visual and fatal-asserts in glXChooseVisual.
+    #
+    # We stage the megadriver's whole recursive .so closure into D32/lib (which is
+    # on the steam FHS's LD_LIBRARY_PATH). NOTE we canNOT discover "what's missing"
+    # with ldd here: this script runs on the HOST, where every dep resolves via the
+    # system i386 path — but inside steam's FHS those system paths are gone, so
+    # anything not physically in D32/lib is missing there. Hence: copy the closure,
+    # don't diff it. EXCLUDE the glibc family — the FHS uses nixpkgs glibc, and
+    # shadowing it with the base's glibc mixes ABIs (→ __nptl_change_stack_perm /
+    # vdso crashes). Skip libs already staged (the mesa set copied above wins).
+    for src in $(ldd "${D32}/lib"/libgallium-*.so 2>/dev/null | awk '/=> \//{print $3}'); do
+        base=$(basename "${src}")
+        case "${base}" in
+            libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*|\
+            libresolv.so.*|libutil.so.*|libnsl.so.*|libanl.so.*|\
+            ld-linux*.so.*|libBrokenLocale.so.*) continue ;;
+        esac
+        [ -e "${D32}/lib/${base}" ] && continue
+        cp -Lf "${src}" "${D32}/lib/${base}" 2>/dev/null || true
+    done
     chmod -R a+rX "${D32}" 2>/dev/null || true
     echo "nix-gpu-setup: published 32-bit mesa at ${D32} ($(ls "${D32}/lib" 2>/dev/null | wc -l) libs)" >&2
 fi

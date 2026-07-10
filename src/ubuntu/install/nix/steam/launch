@@ -1,24 +1,27 @@
 #!/bin/sh
-# steam-launch — GPU steam via VirtualGL for headless KasmVNC.
+# steam-launch — headless-KasmVNC steam launcher for the nix FHS.
 #
 # Steam's top-level client is the legacy 32-bit VGUI2 process
 # (~/.local/share/Steam/ubuntu12_32/steam). It HARD-REQUIRES a GLX visual at
-# startup (glXChooseVisual -> fatal assert if none), and on KasmVNC's headless
-# Xvnc the only source of a GLX visual is VirtualGL. nix-launch's GPU path is
-# chromium-only, so steam needs this bespoke launcher.
+# startup: glXChooseVisual -> fatal assert if none. That does NOT need a GPU —
+# a *software* GLX visual is enough (this is what stock apt steam uses on the
+# same headless Xvnc). The visual comes from 32-bit mesa (llvmpipe) published at
+# /run/opengl-driver-32 by nix-gpu-setup — the NixOS-standard driver location
+# that nixpkgs' steam FHS reads natively. (nix-gpu-setup MUST stage the mesa
+# megadriver's out-of-tree deps — libLLVM etc. — or the 32-bit driver can't load
+# and glXChooseVisual asserts anyway.)
 #
-# How it works (see bin/nix-steam-overlay):
-#   - The steam profile carries VirtualGL (vglrun + the 32- AND 64-bit faker)
-#     INSIDE steam's FHS, plus `steam-run` (runs an arbitrary command in that
-#     FHS).
-#   - We run `steam-run vglrun -d egl steam`: enter the FHS and launch Valve's
-#     steam under REAL vglrun. vglrun (unlike a bare LD_PRELOAD, which segfaults
-#     the faker's constructor) sets up VGL's full env so the faker stays DORMANT
-#     in steam's multi-process bootstrap (bash, pressure-vessel, srt tools) and
-#     activates ONLY when the VGUI2 client calls glXChooseVisual — giving it a
-#     GPU-backed visual. `-d egl` picks the allocated GPU's EGL device.
-#   - nix-bwrap-run wraps the whole thing so steam-run's FHS gets a real
-#     /nix/store under the per-app /nix/store->/store symlink layout.
+# We do NOT wrap steam in vglrun: the client only wants a software visual, and
+# forcing the VGL faker across steam's whole multi-process bootstrap (bash,
+# pressure-vessel, srt tools, the 32-bit client, the 64-bit CEF helper) is
+# fragile (faker ELF-class mismatch on the 32-bit client, "[VGL] Could not
+# enable OpenGL API" on the software backend). Real GPU acceleration for 64-bit
+# games is delivered the standard way instead: pressure-vessel imports
+# /run/opengl-driver (64-bit NVIDIA, also published by nix-gpu-setup) as its
+# graphics provider.
+#
+#   - nix-bwrap-run wraps steam-run so its FHS gets a real /nix/store under the
+#     per-app /nix/store->/store symlink layout.
 #
 # custom_startup.sh runs this foreground in its respawn loop (PGREP=steam).
 set -u
@@ -42,15 +45,14 @@ fi
 
 # vdso trap: never leak Kasm's baked system LD_LIBRARY_PATH into the nix chain
 # (mixes system glibc into nix binaries → __vdso_gettimeofday / __nptl_change_
-# stack_perm). Same rationale as nix-launch. vglrun re-adds the right paths.
+# stack_perm). Same rationale as nix-launch.
 unset LD_LIBRARY_PATH
 
-# GPU allocated → run the client under VirtualGL for a real GLX visual.
-# No GPU → run steam plain (the VGUI2 client will lack GLX, but at least steam
-# bootstraps rather than us forcing a broken VGL path).
+# The 32-bit client always gets its software GLX visual from /run/opengl-driver-32;
+# if a GPU is allocated, 64-bit games additionally see NVIDIA via /run/opengl-driver.
 if nix-gpu-run --available; then
-    echo "steam-launch: GPU — steam under vglrun -d egl" >&2
-    exec nix-bwrap-run "${RUN}" vglrun -d egl steam "$@"
+    echo "steam-launch: GPU allocated — 64-bit games via /run/opengl-driver" >&2
+else
+    echo "steam-launch: no GPU — software rendering only" >&2
 fi
-echo "steam-launch: no GPU allocated — steam without VirtualGL" >&2
 exec nix-bwrap-run "${RUN}" steam "$@"
