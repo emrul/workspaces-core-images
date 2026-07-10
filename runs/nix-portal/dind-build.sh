@@ -58,6 +58,27 @@ if ! podman image exists localhost/nix-ubuntu:dev; then
 fi
 echo "[driver] base image OK: $(podman image inspect -f '{{.Id}}' localhost/nix-ubuntu:dev)"
 
+# ── 1a. base-freshness guard ──────────────────────────────────────────────
+# If this commit changed files baked INTO the base image (NIX_BASE_AFFECTED=1,
+# from change-gating) but the nix-ubuntu base in the store was NOT rebuilt for
+# this commit, building now would silently ship a STALE base (the classic
+# footgun: `base`/`publish-base` are manual and `build` doesn't depend on them).
+# Compare the base's kasm.base.builtsha label to this commit and fail with
+# instructions. Only enforced in CI (CI_COMMIT_SHA set); override ALLOW_STALE_BASE=1.
+if [ "${NIX_BASE_AFFECTED:-0}" = "1" ] && [ "${ALLOW_STALE_BASE:-0}" != "1" ] && [ -n "${CI_COMMIT_SHA:-}" ]; then
+  base_sha="$(podman image inspect -f '{{ index .Config.Labels "kasm.base.builtsha" }}' localhost/nix-ubuntu:dev 2>/dev/null || true)"
+  if [ "${base_sha}" != "${CI_COMMIT_SHA}" ]; then
+    echo "[driver] FATAL: base-affecting files changed in this commit, but the nix-ubuntu"
+    echo "[driver]   base in the store was built from '${base_sha:-<unstamped>}', not this"
+    echo "[driver]   commit '${CI_COMMIT_SHA}'. Building now would ship a STALE base."
+    echo "[driver]   → Run the 'base' job (then 'publish-base') for this commit first."
+    echo "[driver]   → Or set ALLOW_STALE_BASE=1 to override (you accept a stale base)."
+    status "FAILED stale-base $(date -u +%FT%TZ)"
+    exit 1
+  fi
+  echo "[driver] base-freshness OK: base built from this commit (${CI_COMMIT_SHA})"
+fi
+
 # ── 1b. reclaim churn before building (KEEP the Nix cache + base images) ────
 # The persistent podman store accumulates transient artifacts each run:
 # superseded localhost/nix-<app>:dev + nix-store:dev tags, dangling layers, and

@@ -485,29 +485,53 @@ while IFS= read -r p; do
 done < "${STAGE_IN}/selected.txt"
 
 # ── 7. auto-promote heuristic ──────────────────────────────────────────
-echo "[inner] auto-promote analysis (threshold ${THRESHOLD}%)" >&2
-total="$(wc -l < "${STAGE_IN}/selected.txt")"
-{
-  while IFS= read -r p; do
-    [ -z "$p" ] && continue
-    cat "${STAGE_IN}/closures/$p.txt"
-  done < "${STAGE_IN}/selected.txt"
-} | sort | uniq -c | while IFS= read -r line; do
-  # Pure POSIX field extraction — uniq -c output is "  <count> <path>"
-  # with leading whitespace. `set --` word-splits the line on IFS
-  # (default whitespace), so $1=count and $2=path with the leading
-  # blanks dropped.
-  # shellcheck disable=SC2086
-  set -- $line
-  count="${1:-}"
-  path="${2:-}"
-  [ -z "$path" ] && continue
-  pct=$(( count * 100 / total ))
-  if [ "$pct" -ge "$THRESHOLD" ] && \
-     ! grep -qxF "$path" "${STAGE_IN}/closures/combined_subtract.txt"; then
-    echo "  PROMOTE-CANDIDATE ${pct}% ($count/$total profiles): $path" >&2
+# A store path present in >= THRESHOLD% of profiles but NOT in [base]/[layers.*]
+# is DUPLICATED into every app's delta layer → registry bloat. This surfaces
+# such paths so an operator can promote them in bin/nix-profiles.toml (promotion
+# is deliberately manual). ONLY meaningful on a FULL-catalog build: on a subset,
+# prevalence is over the few selected profiles, so everything looks like ~100%.
+if [ -n "${ONLY_PROFILES:-}" ]; then
+  echo "[inner] auto-promote analysis SKIPPED (subset build: ${ONLY_PROFILES}) — run a full-catalog build for meaningful promotion candidates" >&2
+else
+  echo "[inner] auto-promote analysis (threshold ${THRESHOLD}%)" >&2
+  total="$(wc -l < "${STAGE_IN}/selected.txt")"
+  promo_report="${STAGE_IN}/promote-candidates.tsv"
+  : > "${promo_report}"
+  {
+    while IFS= read -r p; do
+      [ -z "$p" ] && continue
+      cat "${STAGE_IN}/closures/$p.txt"
+    done < "${STAGE_IN}/selected.txt"
+  } | sort | uniq -c | while IFS= read -r line; do
+    # Pure POSIX field extraction — uniq -c output is "  <count> <path>"
+    # with leading whitespace. `set --` word-splits the line on IFS
+    # (default whitespace), so $1=count and $2=path with the leading
+    # blanks dropped.
+    # shellcheck disable=SC2086
+    set -- $line
+    count="${1:-}"
+    path="${2:-}"
+    [ -z "$path" ] && continue
+    pct=$(( count * 100 / total ))
+    if [ "$pct" -ge "$THRESHOLD" ] && \
+       ! grep -qxF "$path" "${STAGE_IN}/closures/combined_subtract.txt"; then
+      printf '%s\t%s/%s\t%s\n' "${pct}" "${count}" "${total}" "${path}" >> "${promo_report}"
+    fi
+  done
+  # Actionable summary block (the per-line writes happened in a pipe subshell,
+  # so read the collected report back here).
+  n_promo="$(wc -l < "${promo_report}" 2>/dev/null | tr -d ' ')"
+  if [ "${n_promo:-0}" -gt 0 ]; then
+    echo "[inner] ==== PROMOTE CANDIDATES: ${n_promo} path(s) in >=${THRESHOLD}% of ${total} profiles, not shared ====" >&2
+    echo "[inner] each is duplicated per-app; consider adding to [base] or a [layers.*] in bin/nix-profiles.toml:" >&2
+    sort -rn "${promo_report}" | while IFS="$(printf '\t')" read -r pct frac path; do
+      echo "[inner]   ${pct}% (${frac})  ${path}" >&2
+    done
+    echo "[inner] ==== end promote candidates (report: ${promo_report}) ====" >&2
+  else
+    echo "[inner] auto-promote: no new candidates over ${THRESHOLD}% threshold" >&2
   fi
-done
+fi
 
 # ── 8. partition store across layer-staging dirs ──────────────────────
 echo "[inner] partitioning store across layers" >&2

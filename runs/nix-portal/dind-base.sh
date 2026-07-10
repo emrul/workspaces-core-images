@@ -25,8 +25,12 @@ podman build \
   -f dockerfile-kasm-core-minimal -t "${CORE}" .
 
 echo "[dind-base] building ${NIXU}"
+# Stamp the commit this base was built from (BASE_BUILT_SHA, passed by CI =
+# CI_COMMIT_SHA). The app-build's freshness guard (dind-build.sh) reads this
+# label and refuses to build on a base that predates a base-affecting commit.
 podman build \
   --build-arg BASE_IMAGE="${CORE}" \
+  --label "kasm.base.builtsha=${BASE_BUILT_SHA:-unknown}" \
   -f dockerfile-nix-ubuntu -t "${NIXU}" .
 
-echo "[dind-base] done: nix-ubuntu = $(podman image inspect -f '{{.Id}}' "${NIXU}")"
+echo "[dind-base] done: nix-ubuntu = $(podman image inspect -f '{{.Id}}' "${NIXU}") builtsha=${BASE_BUILT_SHA:-unknown}"

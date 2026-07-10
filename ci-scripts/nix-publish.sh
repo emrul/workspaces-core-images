@@ -69,6 +69,25 @@ mapfile -t imgs < <(
 [[ ${#imgs[@]} -gt 0 ]] || { echo "[nix-publish] no ${NIX_APP_REPO}-<app>:dev images found — nothing to publish" >&2; exit 1; }
 
 echo "[nix-publish] ${#imgs[@]} image(s) → ${REGISTRY_NS}/<kasm_name>:${KASM_TAG}"
+
+# Fat-store consistency guard (dedup safety). The fat store shares its base +
+# shared layers with the per-app images BY DIGEST — but only if both are pushed
+# from the SAME build. Push per-app images while the registry keeps an OLDER fat
+# store and the fat store's base/shared layers no longer match, so cross-image
+# dedup silently breaks (clients re-pull the whole base). So when
+# PUBLISH_FAT_STORE=1 (default), refuse to push ANYTHING unless this build's fat
+# store is present to push alongside. Set PUBLISH_FAT_STORE=0 to opt out.
+if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
+  fat_present="$("${DOCKER}" images --format '{{.Repository}}:{{.Tag}}' \
+    | grep -E "^localhost/nix-store-(amd64|arm64):dev$" | head -1 || true)"
+  if [[ -z "${fat_present}" ]]; then
+    echo "[nix-publish] FATAL: PUBLISH_FAT_STORE=1 but no localhost/nix-store-<arch>:dev from this build." >&2
+    echo "[nix-publish] Publishing per-app images without the matching fat store breaks registry layer dedup." >&2
+    echo "[nix-publish] Re-run 'build' (it emits the fat store), or set PUBLISH_FAT_STORE=0 to opt out." >&2
+    exit 1
+  fi
+fi
+
 pushed=0; failed=()
 for img in "${imgs[@]}"; do
   profile="${img#"${NIX_APP_REPO}"-}"; profile="${profile%:dev}"

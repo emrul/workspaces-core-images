@@ -21,7 +21,14 @@
 # conservatively builds everything).
 set -euo pipefail
 
-emit() { echo "NIX_PROFILES=$1"; }
+# BASE_AFFECTED tracks whether the commit changed files baked INTO the nix-ubuntu
+# base image (as opposed to build/assembly-only shared files). Emitted as a second
+# dotenv line so the build job can refuse to run on a stale base — see the
+# base-freshness guard in runs/nix-portal/dind-build.sh. Only set on a computable
+# diff; the "can't tell" early exits (schedule / new branch) leave it 0 so they
+# don't block routine whole-catalog rebuilds.
+BASE_AFFECTED=0
+emit() { echo "NIX_PROFILES=$1"; echo "NIX_BASE_AFFECTED=${BASE_AFFECTED}"; }
 
 if [ -n "${NIX_CHANGED_FILES+x}" ]; then
   # Caller supplied the file list explicitly (manual / non-CI path).
@@ -46,16 +53,21 @@ all=0
 while IFS= read -r f; do
   [ -n "${f}" ] || continue
   case "${f}" in
-    # Shared / base — anything that changes image content for every app.
-    bin/build-nix-store-volume|bin/nix-crane-assemble|bin/nix-profiles.toml|\
-    dockerfile-kasm-core-minimal|dockerfile-nix-ubuntu|dockerfile-nix-app-finish|\
-    runs/nix-portal/*|src/common/*|\
+    # Base-IMAGE inputs — baked into nix-ubuntu (the two base dockerfiles + the
+    # shared kasm-go/container-init tree + the nix activation scripts/units).
+    # Changing these needs a base rebuild, so → whole catalog AND base-affected.
+    dockerfile-kasm-core-minimal|dockerfile-nix-ubuntu|src/common/*|\
     src/ubuntu/install/nix/scripts/*|src/ubuntu/install/nix/units/*)
+      all=1; BASE_AFFECTED=1 ;;
+    # Build/assembly-only shared files — whole catalog, but the base image
+    # content is unchanged, so NOT base-affected.
+    bin/build-nix-store-volume|bin/nix-crane-assemble|bin/nix-profiles.toml|\
+    dockerfile-nix-app-finish|runs/nix-portal/*)
       all=1 ;;
     # Per-app wiring — src/ubuntu/install/nix/<app>/...
     src/ubuntu/install/nix/*/*)
       a="${f#src/ubuntu/install/nix/}"; a="${a%%/*}"
-      case "${a}" in scripts|units) all=1 ;; *) apps="${apps} ${a}" ;; esac ;;
+      case "${a}" in scripts|units) all=1; BASE_AFFECTED=1 ;; *) apps="${apps} ${a}" ;; esac ;;
     # Everything else (docs, .gitlab-ci.yml, other ci-scripts) — not image content.
     *) : ;;
   esac
