@@ -85,9 +85,18 @@ keep it bounded, and the disk is sized so they rarely have to bite:
 | Consumer | Mechanism that bounds it | Steady size |
 |---|---|---|
 | Warm Nix build cache (`nix-build-stage-*`) | `NIX_STAGE_CAP_G` — GC resets it if exceeded | ≤ 150 GB |
-| Image working set (base + shared layers + ~45 per-app + fat store, **deduped**) | per-build prune of superseded `nix-*:dev` tags + dangling layers | ~80–100 GB |
-| Stale anonymous volumes (old registry staging) | per-build + GC volume prune | ~0 (≈0–35 GB between GCs) |
+| Image working set (base + shared layers + ~45 per-app + fat store, **deduped**) | per-build prune of superseded `nix-*:dev` tags + dangling layers | **~34 GB measured** |
+| **Dangling build cache** (intermediate layers from `podman build`) | per-build + GC `podman builder prune -f` | ~0 (was the top offender — ~90 GB — until this was added) |
+| Stale anonymous volumes (old registry staging) | per-build + GC volume prune (targeted, keeps `nix-build-stage-*`) | ~0 (≈0–35 GB between GCs) |
 | Build scratch / peak (crane staging, new layers before old pruned) | transient; reclaimed each run | ~40–60 GB peak |
+
+> **Measured churn (forge, 2026-07-10):** a store showing 299 GB / 75 GB-free held
+> only ~34 GB of real images (51 active) — the rest was ~90 GB dangling build
+> cache, ~40 GB dangling image leaves, and ~75 GB reclaimable volumes. `image
+> prune -f` alone missed the build cache entirely; adding `builder prune -f` is what
+> closed the leak. **The runner was never too small — the GC was incomplete.**
+> ⚠️ Never use `builder prune -a`/`image prune -a`: they drop the cache/images the
+> tagged **base** relies on and cascade into deleting `nix-ubuntu` itself.
 
 **Recommended dedicated runner spec:**
 

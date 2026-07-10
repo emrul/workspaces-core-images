@@ -26,6 +26,13 @@ echo "[gc] free before: $(freeG)G"
 # 1. dangling image layers
 podman image prune -f >/dev/null 2>&1 || true
 
+# 1b. dangling BUILD CACHE — intermediate layers left by past `podman build`
+# runs (base + fat-store + per-app finish). This is the single biggest churn
+# source (measured ~89 G on the forge) and `image prune` does NOT touch it.
+# Use -f (dangling/unused only), NEVER -a: `builder prune -a` also drops the
+# cache backing live images and cascades into removing the tagged base images.
+podman builder prune -f >/dev/null 2>&1 || true
+
 # 2. superseded per-app / fat-store dev tags (keep the base images)
 podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
   | grep -E '^localhost/nix-' | grep -vE 'nix-ubuntu|nixbase' \

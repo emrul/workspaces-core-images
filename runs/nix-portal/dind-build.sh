@@ -88,6 +88,10 @@ fi
 freeG() { df -PBG /var/lib/containers 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4); print $4+0}'; }
 echo "[driver] free before prune: $(freeG)G"
 podman image prune -f >/dev/null 2>&1 || true
+# Dangling build cache — the biggest churn source (intermediate layers from past
+# `podman build` runs), which `image prune` misses. -f only (NEVER -a: that drops
+# live images' cache and cascades into removing the tagged base images).
+podman builder prune -f >/dev/null 2>&1 || true
 podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
   | grep -E '^localhost/nix-' | grep -vE 'nix-ubuntu|nixbase' \
   | sort -u | xargs -r -n1 podman rmi -f >/dev/null 2>&1 || true
