@@ -761,6 +761,17 @@ jq -n \
    }' > "${STAGE_IN}/layers/labels.json"
 echo "[inner] wrote labels.json (base ${BASE_REV:-<unresolved>}, $(jq '.apps|length' "${STAGE_IN}/layers/labels.json") apps)" >&2
 
+# jq-free sidecars for the OUTER crane-assemble (its podman/stable env has no
+# jq). labels.env is source-safe (single-quoted; nixpkgs refs/revs and jq's
+# compact JSON contain no single quotes); applabels.tsv is read with awk.
+{
+  printf "BASE_REF='%s'\n"     "${BASE_REF_ORIG}"
+  printf "BASE_REV='%s'\n"     "${BASE_REV}"
+  printf "PROFILE_REFS='%s'\n" "$(jq -c '.profileRefs // {}' "${STAGE_IN}/layers/labels.json")"
+} > "${STAGE_IN}/layers/labels.env"
+cp "${APPLABELS}" "${STAGE_IN}/layers/applabels.tsv" 2>/dev/null \
+  || : > "${STAGE_IN}/layers/applabels.tsv"
+
 # ── 10c. build-side report sidecars → /output (host-visible) ────────────
 # Surface labels.json and a closure diff vs the PREVIOUS build to the persistent
 # output dir, so the publish stage can fold them into nix-build-report.json.
