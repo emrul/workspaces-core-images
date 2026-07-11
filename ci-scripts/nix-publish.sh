@@ -90,14 +90,24 @@ classify() { # $1=prevSP $2=newSP → new|updated|unchanged
 # record <profile> <kasm> <dest> <status> <action> <rev> <ver> <newSP> <prevSP>
 record() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >> "${RESULTS}"; }
 
+_pkg_install() { # $1 = package; best-effort across the common managers
+  { command -v microdnf >/dev/null 2>&1 && microdnf install -y "$1" >/dev/null 2>&1; } \
+    || { command -v dnf  >/dev/null 2>&1 && dnf  install -y "$1" >/dev/null 2>&1; } \
+    || { command -v apk  >/dev/null 2>&1 && apk  add --no-cache "$1" >/dev/null 2>&1; } \
+    || { command -v apt-get >/dev/null 2>&1 && apt-get update >/dev/null 2>&1 && apt-get install -y "$1" >/dev/null 2>&1; }
+}
 ensure_jq() {
   command -v jq >/dev/null 2>&1 && return 0
   echo "[nix-publish] jq not found — attempting install" >&2
-  { command -v microdnf >/dev/null 2>&1 && microdnf install -y jq >/dev/null 2>&1; } \
-    || { command -v dnf  >/dev/null 2>&1 && dnf  install -y jq >/dev/null 2>&1; } \
-    || { command -v apk  >/dev/null 2>&1 && apk  add --no-cache jq >/dev/null 2>&1; } \
-    || { command -v apt-get >/dev/null 2>&1 && apt-get update >/dev/null 2>&1 && apt-get install -y jq >/dev/null 2>&1; }
-  command -v jq >/dev/null 2>&1
+  _pkg_install jq; command -v jq >/dev/null 2>&1
+}
+# skopeo reads the PREVIOUS published image's labels (registry truth, no layer
+# pull) so status can be updated/unchanged rather than always new. It is NOT in
+# quay.io/podman/stable, so install it; it shares podman's login/auth file.
+ensure_skopeo() {
+  command -v skopeo >/dev/null 2>&1 && return 0
+  echo "[nix-publish] skopeo not found — attempting install (needed for cross-run status)" >&2
+  _pkg_install skopeo; command -v skopeo >/dev/null 2>&1
 }
 
 # Markdown summary — no jq (metrics scraped from flat JSON with sed).
@@ -117,19 +127,15 @@ gen_md() {
     echo
     echo "| Image | Status | Version | Action |"
     echo "|-------|--------|---------|--------|"
-    while IFS=$'\t' read -r profile kn dest st action rev ver nsp psp; do
-      [[ -n "${profile}" ]] || continue
-      echo "| \`${kn}\` | ${st} | ${ver:-–} | ${action} |"
-    done < "${RESULTS}"
+    # awk (not `read`): TSV fields can be empty, and read's whitespace IFS would
+    # collapse an empty column and shift the rest (e.g. version→store-path).
+    # Cols: 1 profile 2 kasm 3 dest 4 status 5 action 6 rev 7 version 8 newSP 9 prevSP
+    awk -F'\t' 'NF{v=($7==""?"–":$7); printf "| `%s` | %s | %s | %s |\n", $2, $4, v, $5}' "${RESULTS}"
     if [[ -s "${REPORT_DIR}/closure-diffs.tsv" ]]; then
       echo; echo "## Changed closures (vs previous build)"
-      local NL=$'\n'
-      while IFS=$'\t' read -r app st psp nsp detail; do
-        [[ "${st}" == changed && -n "${detail}" ]] || continue
-        echo; echo "### ${app}"; echo '```'
-        printf '%s\n' "${detail//; /$NL}"
-        echo '```'
-      done < "${REPORT_DIR}/closure-diffs.tsv"
+      # Cols: 1 app 2 status 3 prevSP 4 newSP 5 detail ("; "-joined)
+      awk -F'\t' '$2=="changed" && $5!=""{gsub(/; /,"\n",$5); printf "\n### %s\n```\n%s\n```\n", $1, $5}' \
+        "${REPORT_DIR}/closure-diffs.tsv"
     fi
   } > "${md}"
   echo "[nix-publish] wrote ${md}"
@@ -191,6 +197,8 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
     exit 1
   fi
 fi
+
+ensure_skopeo || echo "[nix-publish] WARN skopeo unavailable — every image will show status=new" >&2
 
 pushed=0; failed=()
 for img in "${imgs[@]}"; do
