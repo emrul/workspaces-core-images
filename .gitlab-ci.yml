@@ -180,27 +180,33 @@ publish:
   script:
     - |
       if [ "${NIX_PROFILES:-}" = "__none__" ]; then echo "no image-relevant changes — skipping publish"; exit 0; fi
-      # Mount the persistent output dir (rw): nix-publish reads the build-side
-      # sidecars (labels.json, closure-diffs.*, metrics.json) written there by
-      # the build stage, and writes nix-build-report.{json,md} back into it.
+      # Mounts: the persistent output dir (rw) holds the build-side sidecars
+      # nix-publish reads (labels.json, closure-diffs.*, metrics.json) and where
+      # it writes the report; $CI_PROJECT_DIR is also mounted rw at /artifacts so
+      # the (root) container can drop the report there and chown it to the runner
+      # UID — GitLab then captures it and the next checkout can still clean it.
+      # (Runner sudo is scoped to nerdctl, so the copy MUST happen in-container.)
       bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/root/.cache/nix-build-output" \
         -v "$CI_PROJECT_DIR:/work:ro" \
+        -v "$CI_PROJECT_DIR:/artifacts" \
         -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" -e NIX_PROFILES="$NIX_PROFILES" \
         -e NIX_BASE_AFFECTED="$NIX_BASE_AFFECTED" -e CI_COMMIT_SHA="$CI_COMMIT_SHA" \
+        -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
         "$DIND_IMG" bash -c '
-          set -euo pipefail
-          echo "$REG_PASS" | podman login "$REG" -u "$REG_USER" --password-stdin
-          DOCKER=podman bash /work/ci-scripts/nix-publish.sh
+          set -uo pipefail
+          echo "$REG_PASS" | podman login "$REG" -u "$REG_USER" --password-stdin || exit 1
+          DOCKER=podman bash /work/ci-scripts/nix-publish.sh; rc=$?
+          # Always surface the report (even on partial push failure) before exiting.
+          for f in nix-build-report.json nix-build-report.md; do
+            cp "/root/.cache/nix-build-output/$f" "/artifacts/$f" 2>/dev/null || true
+          done
+          chown "${HOST_UID}:${HOST_GID}" /artifacts/nix-build-report.* 2>/dev/null || true
+          echo "===== nix-build-report.md ====="; cat /artifacts/nix-build-report.md 2>/dev/null || true
+          exit "$rc"
         '
-      # Lift the report out of the (root-owned) host output dir into the workspace
-      # so GitLab captures it as an artifact.
-      for f in nix-build-report.json nix-build-report.md; do
-        sudo cp "$DIND_ROOT/output/$f" "$CI_PROJECT_DIR/$f" 2>/dev/null || true
-      done
-      sudo chown "$(id -u):$(id -g)" "$CI_PROJECT_DIR"/nix-build-report.* 2>/dev/null || true
   artifacts:
     when: always
     expire_in: 90 days
