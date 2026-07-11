@@ -321,7 +321,63 @@ mv "${TMP_SEL}" "${STAGE_IN}/selected.txt"
 THRESHOLD="$(jq -r '.promote.threshold_percent // 80' "${STAGE_IN}/profiles.json")"
 DEFAULT_REF="$(jq -r '.nixpkgs.ref' "${STAGE_IN}/profiles.json")"
 
-echo "[inner] default ref:  ${DEFAULT_REF}" >&2
+# ── ref pinning + provenance ───────────────────────────────────────────
+# The config `ref` is a FLOATING branch (e.g. github:NixOS/nixpkgs/nixos-25.05).
+# For a reproducible, self-describing build we resolve every unique ref to its
+# concrete commit ONCE, up front, and install against the pinned commit — so
+# base and apps can't drift apart mid-build, and the exact rev is stamped onto
+# the image as an OCI label (see nix-crane-assemble). To reproduce a build
+# later, set the config ref to the recorded dev.kasm.nix.*-rev commit.
+#
+# Pinning changes the ref STRING, which would collide with a warm staging
+# volume's profiles (nix profile install appends → "already provides" errors);
+# every profile is therefore reset before install (reset_profile below).
+REFMAP="${STAGE_IN}/refmap.tsv"        # cache: <orig-ref>\t<rev>
+APPLABELS="${STAGE_IN}/applabels.tsv"  # per-app: name\tref\trev\tstorepath\tversion
+: > "${REFMAP}"
+: > "${APPLABELS}"
+
+# resolve_rev <ref> → concrete rev (github .locked.rev, else .locked.narHash).
+# Cached in REFMAP. Empty (offline / unresolvable) degrades gracefully.
+resolve_rev() {
+  _r="$1"
+  _cached="$(awk -F'\t' -v r="$_r" '$1==r{print $2; exit}' "${REFMAP}" 2>/dev/null || true)"
+  if [ -n "${_cached}" ]; then printf '%s' "${_cached}"; return 0; fi
+  _rev="$(nix --extra-experimental-features 'nix-command flakes' \
+            flake metadata "$_r" --json 2>/dev/null \
+          | jq -r '.locked.rev // .locked.narHash // ""' 2>/dev/null || true)"
+  printf '%s\t%s\n' "$_r" "${_rev}" >> "${REFMAP}"
+  printf '%s' "${_rev}"
+}
+
+# pin_ref <ref> → github:owner/repo/<rev> (concrete commit) when resolvable;
+# non-github refs (path: overlays, already-locked flakes) pass through unchanged
+# — their rev is still recorded for the label.
+pin_ref() {
+  _r="$1"; _rev="$(resolve_rev "$_r")"
+  case "$_r" in
+    github:*)
+      [ -n "${_rev}" ] \
+        && printf '%s' "$_r" | awk -F/ -v R="${_rev}" 'BEGIN{OFS="/"}{print $1,$2,R}' \
+        || printf '%s' "$_r" ;;
+    *) printf '%s' "$_r" ;;
+  esac
+}
+
+# reset_profile <name> — drop a warm profile symlink + its generation links so
+# a re-pinned install rebuilds it fresh instead of appending/colliding.
+reset_profile() {
+  rm -f "${KASM_PROFILE_DIR}/$1" "${KASM_PROFILE_DIR}/$1"-*-link
+}
+
+# Resolve + pin the base ref once; everything downstream uses the pinned form.
+BASE_REF_ORIG="${DEFAULT_REF}"
+BASE_REV="$(resolve_rev "${BASE_REF_ORIG}")"
+DEFAULT_REF="$(pin_ref "${BASE_REF_ORIG}")"
+
+echo "[inner] base ref:     ${BASE_REF_ORIG}" >&2
+echo "[inner] base rev:     ${BASE_REV:-<unresolved>}" >&2
+echo "[inner] pinned ref:   ${DEFAULT_REF}" >&2
 echo "[inner] target arch:  ${TARGET_ARCH}" >&2
 echo "[inner] profiles:     $(tr '\n' ' ' < "${STAGE_IN}/selected.txt")" >&2
 
@@ -353,10 +409,14 @@ collect_attrs() {
 }
 
 # ── 3. bootstrap profile (bundled nix CLI) ─────────────────────────────
+# Reset first: the pinned ref string changes when the base branch advances, so
+# a warm bootstrap/_base from a prior run must be rebuilt fresh (see pinning).
+reset_profile bootstrap
 nix_install "${KASM_PROFILE_DIR}/bootstrap" \
             "$(rewrite_attr "nixpkgs#nix" "${DEFAULT_REF}")"
 
 # ── 4. _base profile ───────────────────────────────────────────────────
+reset_profile _base
 collect_attrs '.base.pkgs[]' "${DEFAULT_REF}" \
   | xargs nix --extra-experimental-features 'nix-command flakes' \
       profile install --impure --profile "${KASM_PROFILE_DIR}/_base"
@@ -375,7 +435,7 @@ if jq -e '.gpu.pkgs | length > 0' "${STAGE_IN}/profiles.json" >/dev/null 2>&1; t
   # path:…#virtualgl-min both provide bin/vglrun, so `nix profile install` errors
   # with "existing package already provides …". The profile is a cheap symlink
   # tree over the persistent store, so rebuild it fresh.
-  rm -f "${KASM_PROFILE_DIR}/_gpu" "${KASM_PROFILE_DIR}/_gpu"-*-link
+  reset_profile _gpu
   collect_attrs '.gpu.pkgs[]' "${DEFAULT_REF}" \
     | xargs nix --extra-experimental-features 'nix-command flakes' \
         profile install --impure --profile "${KASM_PROFILE_DIR}/_gpu"
@@ -395,8 +455,9 @@ if jq -e '(.layers // {}) | length > 0' "${STAGE_IN}/profiles.json" >/dev/null 2
     [ -z "$lname" ] && continue
     l_ref="$(jq -r --arg l "$lname" '.layers[$l].ref // empty' \
                 "${STAGE_IN}/profiles.json")"
-    [ -z "$l_ref" ] && l_ref="${DEFAULT_REF}"
+    if [ -z "$l_ref" ]; then l_ref="${DEFAULT_REF}"; else l_ref="$(pin_ref "$l_ref")"; fi
     echo "  (layer ${lname} uses ref ${l_ref})" >&2
+    reset_profile "_layer-${lname}"
     collect_attrs ".layers.\"$lname\".pkgs[]" "$l_ref" \
       | xargs nix --extra-experimental-features 'nix-command flakes' \
           profile install --impure \
@@ -419,10 +480,12 @@ fi
 : > "${STAGE_IN}/failed.txt"
 while IFS= read -r p; do
   [ -z "$p" ] && continue
-  p_ref="$(jq -r --arg p "$p" '.profiles[$p].ref // empty' \
+  p_ref_orig="$(jq -r --arg p "$p" '.profiles[$p].ref // empty' \
               "${STAGE_IN}/profiles.json")"
-  [ -z "$p_ref" ] && p_ref="${DEFAULT_REF}"
-  echo "  ($p uses ref $p_ref)" >&2
+  [ -z "$p_ref_orig" ] && p_ref_orig="${BASE_REF_ORIG}"
+  p_rev="$(resolve_rev "$p_ref_orig")"
+  p_ref="$(pin_ref "$p_ref_orig")"      # install against the concrete commit
+  echo "  ($p uses ref $p_ref_orig @ ${p_rev:-<unresolved>})" >&2
   # Reset the profile each run (same rationale as _gpu above): when a profile's
   # pkg set changes on the warm staging volume — swapping nixpkgs#steam for
   # path:…#steam-vgl, an onlyoffice ref bump, etc. — `nix profile install` appends
@@ -430,12 +493,26 @@ while IFS= read -r p; do
   # …" on any shared file. The profile is a cheap symlink tree over the persistent
   # store (closures are cached), so rebuilding it fresh is safe and avoids the
   # collision.
-  rm -f "${KASM_PROFILE_DIR}/$p" "${KASM_PROFILE_DIR}/$p"-*-link
+  reset_profile "$p"
   if collect_attrs ".profiles.\"$p\".pkgs[]" "$p_ref" \
        | xargs nix --extra-experimental-features 'nix-command flakes' \
            profile install --impure --profile "${KASM_PROFILE_DIR}/$p"; then
     ln -sfn "${KASM_PROFILE_DIR}/$p" "${KASM_GCROOT_DIR}/$p"
     echo "$p" >> "${STAGE_IN}/built.txt"
+    # Provenance for the per-app image label: the profile's realized store path
+    # is content-addressed over the WHOLE app closure (changes iff anything in
+    # the app changes); version is best-effort from the profile's first pkg.
+    p_sp="$(readlink -f "${KASM_PROFILE_DIR}/$p" 2>/dev/null || true)"
+    p_first="$(jq -r --arg p "$p" '.profiles[$p].pkgs[0] // empty' \
+                 "${STAGE_IN}/profiles.json")"
+    p_ver=""
+    case "$p_first" in
+      nixpkgs#*) p_ver="$(nix --extra-experimental-features 'nix-command flakes' \
+                            eval --raw "$(rewrite_attr "$p_first" "$p_ref").version" \
+                            2>/dev/null || true)" ;;
+    esac
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+      "$p" "$p_ref_orig" "$p_rev" "$p_sp" "$p_ver" >> "${APPLABELS}"
   else
     echo "[inner] WARN profile install FAILED: $p — skipping (catalog continues)" >&2
     echo "$p" >> "${STAGE_IN}/failed.txt"
@@ -658,6 +735,79 @@ jq '
   done < "${STAGE_IN}/selected.txt"
   echo "COPY meta/var /var"
 } > "${STAGE_IN}/layers/Dockerfile"
+
+# ── 10b. provenance manifest → labels.json ─────────────────────────────
+# Consumed by nix-crane-assemble to stamp OCI labels onto the fat store and
+# every per-app image. apps: only profiles that actually built (APPLABELS).
+# profileRefs: apps whose ref differs from base (the decoupled-cadence set).
+apps_json="$(jq -R -s '
+    split("\n") | map(select(length > 0) | split("\t"))
+    | map({key: .[0], value: {
+        ref: .[1], rev: .[2], storePath: .[3], version: (.[4] // "")
+      }}) | from_entries
+  ' "${APPLABELS}")"
+jq -n \
+  --arg baseRef "${BASE_REF_ORIG}" \
+  --arg baseRev "${BASE_REV}" \
+  --arg arch    "${TARGET_ARCH}" \
+  --argjson apps "${apps_json}" \
+  '{
+     base: {ref: $baseRef, rev: $baseRev, arch: $arch},
+     apps: $apps,
+     profileRefs: ($apps | to_entries
+        | map(select(.value.ref != $baseRef))
+        | map({key: .key, value: {ref: .value.ref, rev: .value.rev}})
+        | from_entries)
+   }' > "${STAGE_IN}/layers/labels.json"
+echo "[inner] wrote labels.json (base ${BASE_REV:-<unresolved>}, $(jq '.apps|length' "${STAGE_IN}/layers/labels.json") apps)" >&2
+
+# ── 10c. build-side report sidecars → /output (host-visible) ────────────
+# Surface labels.json and a closure diff vs the PREVIOUS build to the persistent
+# output dir, so the publish stage can fold them into nix-build-report.json.
+# Fully isolated (subshell + set +e): a diff hiccup must never fail the build.
+( set +e
+  [ -d "${OUTPUT_IN}" ] || exit 0
+  cp "${STAGE_IN}/layers/labels.json" "${OUTPUT_IN}/labels.json" 2>/dev/null
+
+  PREV="${OUTPUT_IN}/labels.prev.json"
+  # Flat TSV (app\tstatus\tprev\tnew\tdetail) — the publish stage reads this with
+  # awk (no jq), plus the JSON form below for jq consumers.
+  TMP="${OUTPUT_IN}/closure-diffs.tsv"; : > "${TMP}"
+  TAB="$(printf '\t')"
+  if [ -f "${PREV}" ]; then
+    jq -r '.apps | to_entries[] | "\(.key)\t\(.value.storePath)"' \
+        "${OUTPUT_IN}/labels.json" 2>/dev/null \
+    | while IFS="${TAB}" read -r app newsp; do
+        [ -n "${newsp}" ] || continue
+        prevsp="$(jq -r --arg a "$app" '.apps[$a].storePath // ""' "${PREV}" 2>/dev/null)"
+        if   [ -z "${prevsp}" ];        then st="new";       detail=""
+        elif [ "${prevsp}" = "${newsp}" ]; then st="unchanged"; detail=""
+        elif nix --extra-experimental-features 'nix-command flakes' \
+                 path-info "${prevsp}" >/dev/null 2>&1; then
+          st="changed"
+          # diff-closures lists per-package version/size deltas — the "which
+          # packages changed" answer. Flatten to one line ("; "-joined) for TSV/
+          # JSON transport: strip tabs (they are the TSV column separator) and
+          # per-line indent, then join with awk (paste -d cycles a char list).
+          detail="$(nix --extra-experimental-features 'nix-command flakes' \
+                      store diff-closures "${prevsp}" "${newsp}" 2>/dev/null \
+                    | tr '\t' ' ' | sed 's/^[[:space:]]*//' \
+                    | awk 'NR>1{printf "; "}{printf "%s",$0}END{if(NR)print ""}')"
+        else
+          st="changed"; detail="prev closure not in store — diff skipped"
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\n' "$app" "$st" "$prevsp" "$newsp" "$detail" >> "${TMP}"
+      done
+  fi
+  jq -R -s '
+      split("\n") | map(select(length > 0) | split("\t"))
+      | map({key: .[0], value: {
+          status: .[1], prevStorePath: .[2], newStorePath: .[3], detail: (.[4] // "")
+        }}) | from_entries
+    ' "${TMP}" > "${OUTPUT_IN}/closure-diffs.json" 2>/dev/null
+  cp "${OUTPUT_IN}/labels.json" "${PREV}" 2>/dev/null   # rotate for next run
+  echo "[inner] wrote closure-diffs.json + rotated labels.prev.json" >&2
+) || true
 
 # ── 11. (no in-container image build) ─────────────────────────────────
 # The fat-store Dockerfile is staged at ${STAGE_IN}/layers/Dockerfile. The

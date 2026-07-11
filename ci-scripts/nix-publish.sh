@@ -57,6 +57,110 @@ kasm_name_for() {
 
 run() { if [[ "${DRY_RUN}" == 1 ]]; then echo "  DRY: $*"; else "$@"; fi; }
 
+# ── build-run report ─────────────────────────────────────────────────────────
+# Emits nix-build-report.{json,md} classifying each image new|updated|unchanged
+# |failed|skipped, by comparing THIS build's dev.kasm.nix.store-path label (on
+# the local image) to the currently-published image's same label (read from the
+# registry with no layer pull). Folds in the build-side sidecars written to
+# REPORT_DIR by the build stage (labels.json, closure-diffs.tsv, metrics.json).
+REPORT_DIR="${REPORT_DIR:-/root/.cache/nix-build-output}"
+RESULTS="${REPORT_DIR}/publish-results.tsv"        # profile\tkasm\tdest\tstatus\taction\trev\tver\tnewSP\tprevSP
+mkdir -p "${REPORT_DIR}" 2>/dev/null || true
+# Fall back to a temp dir if the output mount isn't writable (standalone runs),
+# so a report-dir hiccup can never abort the publish under set -e.
+if ! : > "${RESULTS}" 2>/dev/null; then
+  REPORT_DIR="$(mktemp -d 2>/dev/null || echo /tmp)"
+  RESULTS="${REPORT_DIR}/publish-results.tsv"; : > "${RESULTS}"
+  echo "[nix-publish] output dir not writable — report → ${REPORT_DIR}" >&2
+fi
+
+# Read one label off a LOCAL image (podman/docker present) or a REMOTE ref
+# (skopeo; absent → empty, handled gracefully). Go templates → no jq needed.
+local_label()  { "${DOCKER}" image inspect --format "{{ index .Config.Labels \"$2\" }}" "$1" 2>/dev/null || true; }
+remote_label() { command -v skopeo >/dev/null 2>&1 && skopeo inspect --format "{{ index .Labels \"$2\" }}" "docker://$1" 2>/dev/null || true; }
+
+# Classify by comparing published (prev) store-path to this build's (new).
+classify() { # $1=prevSP $2=newSP → new|updated|unchanged
+  if   [[ -z "$1" ]];      then echo new
+  elif [[ "$1" == "$2" ]]; then echo unchanged
+  else                          echo updated
+  fi
+}
+
+# record <profile> <kasm> <dest> <status> <action> <rev> <ver> <newSP> <prevSP>
+record() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >> "${RESULTS}"; }
+
+ensure_jq() {
+  command -v jq >/dev/null 2>&1 && return 0
+  echo "[nix-publish] jq not found — attempting install" >&2
+  { command -v microdnf >/dev/null 2>&1 && microdnf install -y jq >/dev/null 2>&1; } \
+    || { command -v dnf  >/dev/null 2>&1 && dnf  install -y jq >/dev/null 2>&1; } \
+    || { command -v apk  >/dev/null 2>&1 && apk  add --no-cache jq >/dev/null 2>&1; } \
+    || { command -v apt-get >/dev/null 2>&1 && apt-get update >/dev/null 2>&1 && apt-get install -y jq >/dev/null 2>&1; }
+  command -v jq >/dev/null 2>&1
+}
+
+# Markdown summary — no jq (metrics scraped from flat JSON with sed).
+gen_md() {
+  local md="${REPORT_DIR}/nix-build-report.md" m="${REPORT_DIR}/metrics.json"
+  local dur="?" dc="?"
+  if [[ -f "${m}" ]]; then
+    dur="$(sed -n 's/.*"durationSec": *\([0-9-]*\).*/\1/p' "${m}" | head -1)"
+    dc="$( sed -n 's/.*"diskConsumedG": *\([0-9-]*\).*/\1/p' "${m}" | head -1)"
+  fi
+  {
+    echo "# Nix build report"
+    echo
+    echo "- commit: \`${CI_COMMIT_SHA:-unknown}\`"
+    echo "- scope: \`${NIX_PROFILES:-<all>}\`  · base-affected: \`${NIX_BASE_AFFECTED:-?}\`"
+    echo "- build: ${dur:-?}s · disk consumed ${dc:-?} G"
+    echo
+    echo "| Image | Status | Version | Action |"
+    echo "|-------|--------|---------|--------|"
+    while IFS=$'\t' read -r profile kn dest st action rev ver nsp psp; do
+      [[ -n "${profile}" ]] || continue
+      echo "| \`${kn}\` | ${st} | ${ver:-–} | ${action} |"
+    done < "${RESULTS}"
+    if [[ -s "${REPORT_DIR}/closure-diffs.tsv" ]]; then
+      echo; echo "## Changed closures (vs previous build)"
+      local NL=$'\n'
+      while IFS=$'\t' read -r app st psp nsp detail; do
+        [[ "${st}" == changed && -n "${detail}" ]] || continue
+        echo; echo "### ${app}"; echo '```'
+        printf '%s\n' "${detail//; /$NL}"
+        echo '```'
+      done < "${REPORT_DIR}/closure-diffs.tsv"
+    fi
+  } > "${md}"
+  echo "[nix-publish] wrote ${md}"
+}
+
+# Structured JSON — merges publish results + build sidecars (needs jq).
+gen_json() {
+  ensure_jq || { echo "[nix-publish] WARN jq unavailable — JSON report skipped (md written)" >&2; return 0; }
+  local json="${REPORT_DIR}/nix-build-report.json"
+  local diffs="${REPORT_DIR}/closure-diffs.json"; [[ -f "${diffs}" ]]   || echo '{}' > "${diffs}"
+  local metrics="${REPORT_DIR}/metrics.json";     [[ -f "${metrics}" ]] || echo '{}' > "${metrics}"
+  local labels="${REPORT_DIR}/labels.json";       [[ -f "${labels}" ]]  || echo '{}' > "${labels}"
+  jq -n \
+    --slurpfile diff "${diffs}" --slurpfile metrics "${metrics}" --slurpfile labels "${labels}" \
+    --arg gitSha "${CI_COMMIT_SHA:-unknown}" --arg scope "${NIX_PROFILES:-}" \
+    --arg baseAffected "${NIX_BASE_AFFECTED:-}" \
+    --rawfile results "${RESULTS}" \
+    '($diff[0]//{}) as $D | ($labels[0]//{}) as $L |
+     ($results | split("\n") | map(select(length>0)|split("\t"))
+       | map({profile:.[0], kasmName:.[1], dest:.[2], status:.[3], action:.[4],
+              rev:.[5], version:.[6], storePath:.[7], prevStorePath:.[8],
+              changedPackages: ($D[.[0]].detail // null)})) as $imgs |
+     {run:{gitSha:$gitSha, baseRef:($L.base.ref//null), baseRev:($L.base.rev//null),
+           scope:$scope, baseAffected:$baseAffected, metrics:($metrics[0]//{})},
+      images:$imgs,
+      summary:($imgs|group_by(.status)|map({key:.[0].status,value:length})|from_entries)}' \
+    > "${json}" && echo "[nix-publish] wrote ${json}"
+}
+
+generate_report() { gen_md; gen_json; }
+
 # All per-app images from the build: localhost/nix-<profile>:dev, excluding the
 # base (nix-ubuntu) and the fat store (nix-store*).
 mapfile -t imgs < <(
@@ -91,15 +195,27 @@ fi
 pushed=0; failed=()
 for img in "${imgs[@]}"; do
   profile="${img#"${NIX_APP_REPO}"-}"; profile="${profile%:dev}"
-  in_filter "${profile}" || { echo "[nix-publish] ${profile}: skip (not in NIX_PROFILES)"; continue; }
   kn="$(kasm_name_for "${profile}")"
   dest="${REGISTRY_NS}/${kn}:${KASM_TAG}"
-  echo "[nix-publish] ${profile} → ${dest}"
-  if run "${DOCKER}" tag "${img}" "${dest}" && run "${DOCKER}" push "${dest}"; then
-    pushed=$((pushed+1))
-  else
-    echo "[nix-publish] WARN push failed: ${profile}" >&2; failed+=("${profile}")
+  # Provenance from THIS build's local image (labels stamped by nix-crane-assemble).
+  new_sp="$(local_label "${img}" dev.kasm.nix.store-path)"
+  new_rev="$(local_label "${img}" dev.kasm.nix.rev)"
+  new_ver="$(local_label "${img}" org.opencontainers.image.version)"
+  if ! in_filter "${profile}"; then
+    echo "[nix-publish] ${profile}: skip (not in NIX_PROFILES)"
+    record "${profile}" "${kn}" "${dest}" skipped skipped "${new_rev}" "${new_ver}" "${new_sp}" ""
+    continue
   fi
+  # Compare against the currently-published image BEFORE we overwrite it.
+  prev_sp="$(remote_label "${dest}" dev.kasm.nix.store-path)"
+  status_="$(classify "${prev_sp}" "${new_sp}")"
+  echo "[nix-publish] ${profile} → ${dest}  [${status_}]"
+  if run "${DOCKER}" tag "${img}" "${dest}" && run "${DOCKER}" push "${dest}"; then
+    pushed=$((pushed+1)); action=pushed
+  else
+    echo "[nix-publish] WARN push failed: ${profile}" >&2; failed+=("${profile}"); action=failed; status_=failed
+  fi
+  record "${profile}" "${kn}" "${dest}" "${status_}" "${action}" "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}"
 done
 
 # Also publish the fat store-mount image (all profiles' Nix store in shared
@@ -114,16 +230,25 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
     | grep -E "^localhost/nix-store-(amd64|arm64):dev$" | sort -u | head -1)"
   if [[ -n "${fat_local}" ]]; then
     fat_dest="${REGISTRY_NS}/nix-store:${KASM_TAG}"
-    echo "[nix-publish] fat store: ${fat_local} → ${fat_dest}"
+    # Classify the fat store on its base-rev: "updated" = the base nixpkgs
+    # commit moved (a world-rebuild); "unchanged" = base layers still dedupe.
+    fnew="$(local_label "${fat_local}" dev.kasm.nix.base-rev)"
+    fprev="$(remote_label "${fat_dest}" dev.kasm.nix.base-rev)"
+    fstat="$(classify "${fprev}" "${fnew}")"
+    echo "[nix-publish] fat store: ${fat_local} → ${fat_dest}  [base ${fstat}]"
     if run "${DOCKER}" tag "${fat_local}" "${fat_dest}" && run "${DOCKER}" push "${fat_dest}"; then
-      pushed=$((pushed+1))
+      pushed=$((pushed+1)); faction=pushed
     else
-      echo "[nix-publish] WARN fat store push failed" >&2; failed+=("nix-store")
+      echo "[nix-publish] WARN fat store push failed" >&2; failed+=("nix-store"); faction=failed; fstat=failed
     fi
+    record "nix-store" "nix-store" "${fat_dest}" "${fstat}" "${faction}" "${fnew}" "" "${fnew}" "${fprev}"
   else
     echo "[nix-publish] PUBLISH_FAT_STORE=1 but no localhost/nix-store-<arch>:dev found" >&2
   fi
 fi
+
+# Consolidated build-run report (never fails the publish result).
+generate_report || echo "[nix-publish] WARN report generation failed" >&2
 
 echo "[nix-publish] done: pushed=${pushed} failed=${#failed[@]} ${failed[*]:-}"
 [[ ${#failed[@]} -eq 0 ]]

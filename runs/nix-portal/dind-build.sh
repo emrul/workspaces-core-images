@@ -147,10 +147,37 @@ if [ -n "${PROFILES:-}" ]; then
 fi
 [ -n "${PUSH:-}" ] && args+=(--push "$PUSH")
 
-# ── 3. run the real build ─────────────────────────────────────────────────
-status "RUNNING build $(date -u +%FT%TZ)"
+# ── 3. run the real build (bracketed for the disk/timing report) ───────────
+# freeG() is free GB on /var/lib/containers; consumed = before - after (a
+# GC mid-build can make this negative → net reclaim, which is fine to report).
+disk_before="$(freeG)"
+podman system df 2>/dev/null > "$OUT/podman-df-before.txt" || true
+t_start="$(date +%s 2>/dev/null || echo 0)"
+started_at="$(date -u +%FT%TZ)"
+
+status "RUNNING build ${started_at}"
 echo "[driver] exec: bin/build-nix-store-volume ${args[*]}"
 bash bin/build-nix-store-volume "${args[@]}"
+
+t_end="$(date +%s 2>/dev/null || echo 0)"
+disk_after="$(freeG)"
+podman system df 2>/dev/null > "$OUT/podman-df-after.txt" || true
+# metrics.json — folded into nix-build-report.json by the publish stage. Written
+# with printf (no jq): the DIND image is not guaranteed to ship jq, and every
+# value here is a controlled number or timestamp.
+dur=$(( t_end - t_start )); consumed=$(( disk_before - disk_after ))
+{
+  printf '{\n'
+  printf '  "startedAt": "%s",\n'      "${started_at}"
+  printf '  "endedAt": "%s",\n'        "$(date -u +%FT%TZ)"
+  printf '  "durationSec": %s,\n'      "${dur}"
+  printf '  "diskFreeBeforeG": %s,\n'  "${disk_before:-0}"
+  printf '  "diskFreeAfterG": %s,\n'   "${disk_after:-0}"
+  printf '  "diskConsumedG": %s,\n'    "${consumed}"
+  printf '  "profiles": "%s"\n'        "${PROFILES:-<all>}"
+  printf '}\n'
+} > "$OUT/metrics.json" 2>/dev/null || echo "[driver] WARN could not write metrics.json" >&2
+echo "[driver] metrics: ${dur}s, disk consumed ${consumed}G (free ${disk_before}G→${disk_after}G)"
 
 # ── 4. final summary ──────────────────────────────────────────────────────
 # Count runnable nix-<app> images in the store (the refactor builds straight

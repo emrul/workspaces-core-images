@@ -38,6 +38,18 @@ REG_LOCAL="127.0.0.1:5000"
 NIXSRC="${REPO_ROOT}/src/ubuntu/install/nix"
 BLOBS="${STAGING}/.blobs"; mkdir -p "${BLOBS}"
 
+# ── provenance for OCI labels ────────────────────────────────────────────────
+# labels.json is written by the inner build (base ref/rev, per-app ref/rev/
+# store-path/version, profileRefs). git SHA + build timestamp are host-side.
+# Labels live in the image CONFIG, not layer blobs — stamping them does not
+# change any store layer's digest, so cross-image blob dedup is preserved.
+LABELS_JSON="${STAGING}/labels.json"
+GIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)"
+BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+BASE_REF="$(jq -r '.base.ref // ""'  "${LABELS_JSON}" 2>/dev/null || echo "")"
+BASE_REV="$(jq -r '.base.rev // ""'  "${LABELS_JSON}" 2>/dev/null || echo "")"
+PROFILE_REFS="$(jq -c '.profileRefs // {}' "${LABELS_JSON}" 2>/dev/null || echo '{}')"
+
 log(){ printf '[crane-assemble] %s\n' "$*" >&2; }
 fail(){ printf '[crane-assemble] ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -112,6 +124,14 @@ for d in "${STAGING}"/profile-*; do [[ -d "${d}/store" ]] || continue; n="$(base
 det_tar meta var meta && fat_args+=( -f "${BLOBS}/meta.tar" )
 fat_ref="${REG_LOCAL}/nix-store:${APP_TAG}"
 "${CRANE}" append --insecure --oci-empty-base "${fat_args[@]}" -t "${fat_ref}"
+# Stamp reproducibility/provenance labels (config-only; blobs unchanged).
+"${CRANE}" mutate --insecure "${fat_ref}" -t "${fat_ref}" \
+  --label "dev.kasm.nix.base-ref=${BASE_REF}" \
+  --label "dev.kasm.nix.base-rev=${BASE_REV}" \
+  --label "dev.kasm.nix.profile-refs=${PROFILE_REFS}" \
+  --label "dev.kasm.nix.build-arch=${ARCH}" \
+  --label "dev.kasm.nix.built-at=${BUILT_AT}" \
+  --label "org.opencontainers.image.revision=${GIT_SHA}"
 "${CONTAINER_CLI}" pull --tls-verify=false "${fat_ref}" >/dev/null
 "${CONTAINER_CLI}" tag "${fat_ref}" "${FAT_TAG}"
 log "fat store ready: ${FAT_TAG}"
@@ -138,8 +158,23 @@ assemble_app() {
     a_args+=( -f "${BLOBS}/symlink.tar" )
     stage_wiring_tar "${p}" && a_args+=( -f "${BLOBS}/wiring-${p}.tar" ) || { printf 'wiring\n' > "${RESULTS}/${p}.fail"; return 0; }
     local app_ref="${REG_LOCAL}/nix-${p}:${APP_TAG}" final="${APP_REPO}-${p}:${APP_TAG}"
+    # Per-app provenance labels (config-only; store layers still dedupe by digest).
+    local lbl_ref lbl_rev lbl_sp lbl_ver
+    lbl_ref="$(jq -r --arg p "$p" '.apps[$p].ref       // ""' "${LABELS_JSON}" 2>/dev/null || echo "")"
+    lbl_rev="$(jq -r --arg p "$p" '.apps[$p].rev       // ""' "${LABELS_JSON}" 2>/dev/null || echo "")"
+    lbl_sp="$(jq  -r --arg p "$p" '.apps[$p].storePath // ""' "${LABELS_JSON}" 2>/dev/null || echo "")"
+    lbl_ver="$(jq -r --arg p "$p" '.apps[$p].version   // ""' "${LABELS_JSON}" 2>/dev/null || echo "")"
+    local mut=( --env "NIX_APP_PROFILES=${p}"
+                --label "dev.kasm.nix.app=${p}"
+                --label "dev.kasm.nix.ref=${lbl_ref}"
+                --label "dev.kasm.nix.rev=${lbl_rev}"
+                --label "dev.kasm.nix.store-path=${lbl_sp}"
+                --label "dev.kasm.nix.base-rev=${BASE_REV}"
+                --label "dev.kasm.nix.built-at=${BUILT_AT}"
+                --label "org.opencontainers.image.revision=${GIT_SHA}" )
+    [[ -n "${lbl_ver}" ]] && mut+=( --label "org.opencontainers.image.version=${lbl_ver}" )
     "${CRANE}" append --insecure -b "${base_ref}" "${a_args[@]}" -t "${app_ref}" \
-      && "${CRANE}" mutate --insecure "${app_ref}" --env "NIX_APP_PROFILES=${p}" -t "${app_ref}" \
+      && "${CRANE}" mutate --insecure "${app_ref}" "${mut[@]}" -t "${app_ref}" \
       || { printf 'assemble\n' > "${RESULTS}/${p}.fail"; return 0; }
     "${CONTAINER_CLI}" pull --tls-verify=false "${app_ref}" >/dev/null \
       && "${CONTAINER_CLI}" tag "${app_ref}" "${final}" \

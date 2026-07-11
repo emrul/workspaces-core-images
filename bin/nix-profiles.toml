@@ -12,10 +12,15 @@
 # NB: this is the FLOATING nixos-25.05 branch. bin/nix-gpu-overlay/flake.lock is
 # pinned to a specific rev (currently the branch HEAD, d407951447…) so its trimmed
 # VirtualGL deps dedup with the build. When the branch advances, bump the overlay
-# lock to match (else virtualgl-min ships a second glibc). Pinning this ref for
-# full reproducibility is a known follow-up — it needs profile-reset logic in
-# build-nix-store-volume (changing the ref string collides with the warm staging
-# volume's profiles). See design/nix-dedup-gap.md.
+# lock to match (else virtualgl-min ships a second glibc).
+#
+# Reproducibility: this floating ref is the INPUT. Each build resolves it to a
+# concrete commit ONCE, installs every profile against that pinned commit (so
+# base and apps can't drift apart mid-build), and stamps the rev onto the image
+# as an OCI label (dev.kasm.nix.base-rev; per-app dev.kasm.nix.rev + store-path).
+# To reproduce or roll back a build, set this ref to the recorded commit hash.
+# The per-run pin needs every profile reset before install — build-nix-store-volume
+# does this (reset_profile). See design/nix-dedup-gap.md and nix-crane-assemble.
 ref = "github:NixOS/nixpkgs/nixos-25.05"
 
 # Packages that go in the base OCI layer. The build script also includes

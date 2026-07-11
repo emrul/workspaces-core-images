@@ -147,6 +147,138 @@ BUILD_PARALLEL   = 4     # raise only if vCPU/RAM allow
 
 A manual/trigger `NIX_PROFILES` variable overrides the computed value.
 
+## Build-run report
+
+Every `publish` run emits a structured report as a **90-day job artifact** —
+`nix-build-report.json` (machine-readable) and `nix-build-report.md` (rendered
+in the MR/pipeline view). It answers *"what changed and what got updated"* by
+comparing **this build's `dev.kasm.nix.store-path` label** (on the freshly built
+local image) against the **currently-published image's** same label, read from
+the registry with `skopeo` (no layer pull). Those labels are stamped onto every
+image by `nix-crane-assemble` (see `design/nix-package-process.md` §Provenance).
+
+### Status classification
+
+| `status` | meaning |
+|---|---|
+| `new` | no such image published yet (also every image on the first run after labels land) |
+| `updated` | store-path differs → content changed; clients re-pull that image's delta |
+| `unchanged` | identical store-path → dedup no-op; no client re-pull |
+| `skipped` | outside `NIX_PROFILES` scope this run (not built/pushed) |
+| `failed` | tag/push failed |
+
+The `nix-store` row classifies the **fat store on its `base-rev`** (not a
+store-path): `updated` there means the base nixpkgs commit moved — a
+world-rebuild where every layer re-emits and all clients re-pull the base.
+
+### Schema — `nix-build-report.json`
+
+```jsonc
+{
+  "run": {
+    "gitSha":       "abc123…",            // CI_COMMIT_SHA of this pipeline
+    "baseRef":      "github:NixOS/nixpkgs/nixos-25.05",  // floating input ref
+    "baseRev":      "d40795…",            // concrete commit it resolved to (pin/repro token)
+    "scope":        "chrome vscode",      // NIX_PROFILES ("" = whole catalog)
+    "baseAffected": "0",                  // NIX_BASE_AFFECTED (1 = base inputs changed)
+    "metrics": {                          // from dind-build.sh (build stage)
+      "startedAt": "2026-07-11T10:00:00Z",
+      "endedAt":   "2026-07-11T10:42:00Z",
+      "durationSec": 2520,
+      "diskFreeBeforeG": 300,
+      "diskFreeAfterG":  250,
+      "diskConsumedG":   50,              // before − after; NEGATIVE if a GC ran mid-build
+      "profiles": "chrome vscode"
+    }
+  },
+  "images": [
+    {
+      "profile":        "chrome",         // nix-profiles.toml profile key
+      "kasmName":       "chrome",         // published name (kasm_name override or profile)
+      "dest":           "…/chrome:nix",   // full pushed ref
+      "status":         "updated",        // see table above
+      "action":         "pushed",         // pushed | skipped | failed
+      "rev":            "aaaa1111",       // nixpkgs commit THIS app built against
+      "version":        "128.0.1",        // best-effort app version (may be "")
+      "storePath":      "/nix/store/NEW-…-profile",   // this build's closure identity
+      "prevStorePath":  "/nix/store/OLD-…-profile",   // published image's ("" if none)
+      "changedPackages": "chromium: 127.0 -> 128.0; +libwebp 1.4"  // null unless changed
+    }
+    // … one object per per-app image, plus the "nix-store" fat-store row
+  ],
+  "summary": { "updated": 1, "unchanged": 2, "skipped": 1 }  // counts by status
+}
+```
+
+`changedPackages` is a flattened `nix store diff-closures` (previous build →
+this build) — the exact package version/size deltas.
+
+### Example — `nix-build-report.md`
+
+```md
+# Nix build report
+
+- commit: `abc123`
+- scope: `chrome vscode`  · base-affected: `0`
+- build: 2520s · disk consumed 50 G
+
+| Image        | Status    | Version | Action  |
+|--------------|-----------|---------|---------|
+| `chrome`     | updated   | 128.0.1 | pushed  |
+| `vs-code`    | unchanged | 1.90    | pushed  |
+| `nix-store`  | unchanged | base999 | pushed  |
+
+## Changed closures (vs previous build)
+### chrome
+    chromium: 127.0 -> 128.0
+    +libwebp 1.4
+```
+
+### How it's populated
+
+The report is assembled in the **publish** stage but fed by sidecars the
+**build** stage leaves in the persistent output dir (`$DIND_ROOT/output`, which
+survives between jobs because both run on the one `nix-builder` runner):
+
+| Sidecar | Written by | Tooling | Contents |
+|---|---|---|---|
+| `labels.json` | `build-nix-store-volume` (inner) | jq (in the nix container) | base ref/rev + per-app ref/rev/store-path/version |
+| `closure-diffs.{json,tsv}` | `build-nix-store-volume` (inner) | jq + `nix store diff-closures` | per-app diff vs the **previous build on this box** (`labels.prev.json` is rotated each run) |
+| `metrics.json`, `podman-df-{before,after}.txt` | `dind-build.sh` | `printf` / `df` / `podman system df` | duration + disk before/after |
+| `publish-results.tsv` | `nix-publish.sh` | `podman`/`skopeo` label reads (Go templates) | per-image registry classification + push action |
+
+`nix-publish.sh` then merges all of the above → `nix-build-report.{json,md}`.
+The `.md` path is **`jq`-free** (values scraped with `sed`/`awk`); the `.json`
+path uses `jq`, which `nix-publish.sh` installs best-effort if the publish image
+lacks it. The publish job finally `sudo cp`s both files from the root-owned
+output dir into `$CI_PROJECT_DIR` so GitLab captures them as artifacts.
+
+### Caveats
+
+- **First run after this lands:** published images predate the labels, so every
+  image reports `new` (nothing to diff against). Correct from the second run on.
+- **Two different "changed" signals.** The per-image `status` is **registry
+  truth** ("did the published image's content change"). `changedPackages` is
+  **box history** ("what changed vs the last build on this runner") and is
+  best-effort: if the previous build's closure was GC'd from the warm store, the
+  detail reads `prev closure not in store — diff skipped` while `status` still
+  shows `changed`. They can differ (e.g. publish was skipped, or the box was
+  wiped) — trust `status` for release decisions.
+- **`skopeo` dependency.** Prev-label reads use `skopeo` (present in
+  `quay.io/podman/stable`). If absent, prev-lookup returns empty → items
+  classify `new` that run (functional, but `unchanged` can't be detected).
+- **`diskConsumedG` can be negative** when a mid-build GC reclaims more than the
+  build consumed — that's a net reclaim, not an error.
+- **Same-runner assumption.** The build→publish sidecar handoff relies on both
+  jobs sharing `$DIND_ROOT/output`. Re-running *only* `publish` reuses the last
+  build's sidecars (stale metrics/diffs) but still does a **live** registry
+  classification.
+
+Reproducibility ties in via the labels: `run.baseRev` + each image's `rev` are
+the exact nixpkgs commits built against — set `[nixpkgs].ref` (or a profile's
+`ref`) to a recorded rev to reproduce or roll back (see
+`design/nix-package-process.md` §Provenance).
+
 ## Control flow
 
 ```mermaid

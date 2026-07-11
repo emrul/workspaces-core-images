@@ -657,6 +657,42 @@ chromium-related deps while linking against the base ref's
 glibc/libX11. That's a substantial design escalation (per-profile Nix
 expression authoring) and is parked as phase 2.
 
+### Provenance labels — knowing what shipped and what changed
+
+Because `[nixpkgs].ref` is a floating branch, "which nixpkgs commit did this
+image actually build against?" is not answerable from the config alone. The
+build closes that gap: it resolves each ref to a concrete commit once, installs
+every profile against the pinned commit (base and apps can't drift apart
+mid-build), and stamps the result onto the image as OCI labels
+(`bin/nix-crane-assemble`):
+
+| Label | On | Meaning |
+|-------|----|---------|
+| `dev.kasm.nix.base-ref` | fat store | the floating input ref (e.g. `…/nixos-25.05`) |
+| `dev.kasm.nix.base-rev` | fat store, per-app | concrete base commit built against |
+| `dev.kasm.nix.profile-refs` | fat store | JSON of apps whose ref overrides base |
+| `dev.kasm.nix.app` / `.ref` / `.rev` | per-app | the app + its ref and resolved commit |
+| `dev.kasm.nix.store-path` | per-app | realized profile path — content-addressed over the whole app closure |
+| `org.opencontainers.image.version` | per-app | app version (best-effort) |
+| `org.opencontainers.image.revision` | both | this repo's git SHA |
+| `dev.kasm.nix.built-at` | both | build timestamp (non-reproducible; ops only) |
+
+This makes the everyday questions cheap, without pulling the image:
+
+```bash
+# What nixpkgs commit / Chrome version did the published image ship?
+skopeo inspect docker://<registry>/nix-chrome:latest \
+  | jq '.Labels | {rev:."dev.kasm.nix.rev", ver:."org.opencontainers.image.version"}'
+
+# Did anything actually change between two builds? Compare store-path labels:
+#   same store-path  → identical closure, no rebuild, no client re-pull
+#   different        → the app (or a dep) changed; this is your "which apps changed"
+```
+
+To **reproduce or roll back**, set `[nixpkgs].ref` (or the profile's `ref`) to
+the recorded `*-rev` commit and rebuild — the pinned commit yields the same
+store paths.
+
 ## CI integration
 
 Add a row to `ci-scripts/template-vars.yaml` under `multiImages`:
@@ -764,8 +800,11 @@ in `docs/core-nix-ubuntu/README.md` but not automated in the initial PR.
    script (session-bus-independent path).
 
 2. **Pinned nixpkgs revision is a single point of staleness.** Bumping
-   `[nixpkgs].ref` rebuilds every layer. Cadence policy is documented
-   above and in the user-facing readme.
+   `[nixpkgs].ref` (or the floating branch advancing under it) rebuilds
+   every layer. Cadence policy is documented above and in the user-facing
+   readme; each build's resolved commit is recorded on the image as
+   `dev.kasm.nix.base-rev` (see *Provenance labels*) so drift is auditable
+   after the fact rather than invisible.
 
 3. **Cross-arch builds via qemu are slow** (10×+ overhead for
    Chromium-class closures). The script supports `--arch arm64` on an
