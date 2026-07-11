@@ -217,6 +217,16 @@ for img in "${imgs[@]}"; do
   # Compare against the currently-published image BEFORE we overwrite it.
   prev_sp="$(remote_label "${dest}" dev.kasm.nix.store-path)"
   status_="$(classify "${prev_sp}" "${new_sp}")"
+  # Unchanged = identical store-path already published. Re-pushing would only
+  # churn the manifest + provenance labels (every layer already dedups), so skip
+  # it. Changed/new apps still push below, and the fat store ALWAYS pushes (it
+  # carries every app's store, so its content changes whenever any app does —
+  # gating it on status would reopen the dedup gap; see design/nix-dedup-gap.md).
+  if [[ "${status_}" == "unchanged" ]]; then
+    echo "[nix-publish] ${profile} → ${dest}  [unchanged] — already published, skip push"
+    record "${profile}" "${kn}" "${dest}" unchanged skipped "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}"
+    continue
+  fi
   echo "[nix-publish] ${profile} → ${dest}  [${status_}]"
   if run "${DOCKER}" tag "${img}" "${dest}" && run "${DOCKER}" push "${dest}"; then
     pushed=$((pushed+1)); action=pushed

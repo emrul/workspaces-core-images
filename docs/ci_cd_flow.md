@@ -171,6 +171,18 @@ The `nix-store` row classifies the **fat store on its `base-rev`** (not a
 store-path): `updated` there means the base nixpkgs commit moved — a
 world-rebuild where every layer re-emits and all clients re-pull the base.
 
+**Push policy (`action` column).** `status` is the content comparison; `action`
+is what publish actually did:
+- `new` / `updated` per-app image → **pushed**.
+- `unchanged` per-app image → **skipped** (identical store-path already
+  published; re-pushing would only churn the manifest + provenance labels since
+  every layer dedups). A consequence: an unchanged image's `revision` / built-at
+  labels stay at the build that last actually changed it — usually what you want.
+- The **fat store always pushes** (`action=pushed`) even when its `base-rev` is
+  `unchanged`: it carries every app's store partition, so its content changes
+  whenever *any* app does, and skipping it would reopen the registry dedup gap
+  (`PUBLISH_FAT_STORE=1`; see `design/nix-dedup-gap.md`).
+
 ### Schema — `nix-build-report.json`
 
 ```jsonc
