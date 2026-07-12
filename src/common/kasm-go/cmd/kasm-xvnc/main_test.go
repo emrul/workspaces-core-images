@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -216,5 +218,47 @@ func TestEnvMap(t *testing.T) {
 	}
 	if got["KEY"] != "val=with=equals" {
 		t.Errorf("multi-equals split wrong: %q", got["KEY"])
+	}
+}
+
+func TestOverlayIdentity(t *testing.T) {
+	snap := filepath.Join(t.TempDir(), "os-user.env")
+	content := "# identity snapshot\n" +
+		"KASM_OS_USER=alice\n" +
+		"KASM_OS_HOME=/home/alice\n" +
+		"  KASM_OS_UID = 1234 \n" + // whitespace around key/value tolerated
+		"\n" + // blank line skipped
+		"NOT_KASM=evil\n" + // non-KASM_OS_ key ignored
+		"malformed-no-equals\n"
+	if err := os.WriteFile(snap, []byte(content), 0o644); err != nil {
+		t.Fatalf("write snapshot: %v", err)
+	}
+
+	// Ambient env is overridden by the snapshot (snapshot is trusted).
+	env := map[string]string{"KASM_OS_USER": "attacker", "DISPLAY": ":1"}
+	overlayIdentity(env, snap)
+
+	if env["KASM_OS_USER"] != "alice" {
+		t.Errorf("snapshot should override ambient KASM_OS_USER, got %q", env["KASM_OS_USER"])
+	}
+	if env["KASM_OS_HOME"] != "/home/alice" {
+		t.Errorf("KASM_OS_HOME = %q", env["KASM_OS_HOME"])
+	}
+	if env["KASM_OS_UID"] != "1234" {
+		t.Errorf("KASM_OS_UID should be trimmed to 1234, got %q", env["KASM_OS_UID"])
+	}
+	if _, ok := env["NOT_KASM"]; ok {
+		t.Errorf("non-KASM_OS_ key must not be imported")
+	}
+	if env["DISPLAY"] != ":1" {
+		t.Errorf("unrelated ambient keys must be preserved, DISPLAY = %q", env["DISPLAY"])
+	}
+}
+
+func TestOverlayIdentityMissingFileIsNoop(t *testing.T) {
+	env := map[string]string{"KASM_OS_USER": "bob"}
+	overlayIdentity(env, filepath.Join(t.TempDir(), "does-not-exist.env"))
+	if env["KASM_OS_USER"] != "bob" {
+		t.Errorf("missing snapshot must leave env untouched, got %q", env["KASM_OS_USER"])
 	}
 }

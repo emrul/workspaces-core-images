@@ -5,6 +5,12 @@
 # implements it today is itself one of the units we're decomposing.
 set -eu
 
+# Prefer the root-owned identity snapshot kasm-setup writes at boot
+# (effective post-rename KASM_OS_* values) over the ambient env — it's
+# the authoritative source and a session user can't tamper with it.
+# Safe to source: root-owned, in a non-user-writable dir, strict
+# KEY=VALUE. Falls back to env + default when the file is absent.
+[ -r /run/kasm/os-user.env ] && . /run/kasm/os-user.env
 KASM_OS_HOME=${KASM_OS_HOME:-/home/kasm-user}
 
 if [ -z "${KASM_PROFILE_LDR:-}" ]; then

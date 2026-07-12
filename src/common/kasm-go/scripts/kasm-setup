@@ -32,6 +32,31 @@ if [ "$KASM_OS_USER" != kasm-user ] || [ "$KASM_OS_UID" != 1000 ] \
     /usr/local/bin/kasm-os-user-rename
 fi
 
+# 1a) Authoritative identity snapshot. The five vars above are now the
+# *effective* container identity: defaults applied, KASM_OS_HOME derived,
+# and any rename already carried out. kasm-setup runs as root, once, at
+# boot — before the interactive user can log in — so this is the moment
+# to pin identity. Persist it to a root-owned file so downstream
+# consumers read a single source of truth instead of each re-deriving
+# ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}} from an ambient env
+# that a session user could have rewritten in their own process.
+#
+# What makes it authoritative is root ownership + a non-user-writable
+# parent dir, NOT the mode (0644 does not restrict writes). The values
+# are not secret (user/uid/gid/group/home), so world-readable is
+# deliberate: the unprivileged feature services need to read it. Lives
+# under /run (tmpfs, per-boot runtime state) since it describes this
+# session's resolved identity, not image config.
+install -d -m 0755 /run/kasm
+cat > /run/kasm/os-user.env <<EOF
+KASM_OS_USER=$KASM_OS_USER
+KASM_OS_UID=$KASM_OS_UID
+KASM_OS_GID=$KASM_OS_GID
+KASM_OS_GROUP=$KASM_OS_GROUP
+KASM_OS_HOME=$KASM_OS_HOME
+EOF
+chmod 0644 /run/kasm/os-user.env
+
 # 2) Required runtime directories.
 install -d -m 0755 -o "$KASM_OS_USER" -g "$KASM_OS_GROUP" "$KASM_OS_HOME/.vnc" "$KASM_OS_HOME/.config" "$KASM_OS_HOME/Uploads" "$KASM_OS_HOME/Downloads" "$KASM_OS_HOME/Desktop" "$KASM_OS_HOME/PDF" 2>/dev/null || true
 # /var/run/pulse is PulseAudio's runtime dir (HOME= for the audio-out service,

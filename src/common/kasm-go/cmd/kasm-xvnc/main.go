@@ -40,6 +40,14 @@ import (
 
 const xvncBinary = "/usr/bin/Xvnc"
 
+// identitySnapshotPath is the root-owned identity snapshot that
+// kasm-setup writes at boot, holding the effective post-rename
+// KASM_OS_* values. It is the authoritative source for the container
+// user's identity: a session process can rewrite its own KASM_OS_* env
+// but not this root-owned file, so its values take precedence over the
+// ambient env. Absent/unreadable file is a no-op.
+const identitySnapshotPath = "/run/kasm/os-user.env"
+
 // frameTookPrefix is the leading text of an Xvnc per-frame debug print
 // ("TOTAL FRAME TOOK: %d\n") that's compiled into the KasmVNC binary
 // at /usr/bin/Xvnc — it bypasses the `-Log` framework and goes straight
@@ -51,7 +59,9 @@ const xvncBinary = "/usr/bin/Xvnc"
 const frameTookPrefix = "TOTAL FRAME TOOK: "
 
 func main() {
-	args, env, err := buildXvncArgs(envMap(os.Environ()), runtime.GOARCH, statExists, hostname)
+	envm := envMap(os.Environ())
+	overlayIdentity(envm, identitySnapshotPath)
+	args, env, err := buildXvncArgs(envm, runtime.GOARCH, statExists, hostname)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kasm-xvnc: %v\n", err)
 		os.Exit(64)
@@ -147,6 +157,36 @@ func envMap(env []string) map[string]string {
 	return out
 }
 
+// overlayIdentity merges KASM_OS_* assignments from the snapshot file at
+// path into env, overriding any ambient values (the file is the trusted
+// source; see identitySnapshotPath). A missing or unreadable file is a
+// no-op, so buildXvncArgs falls back to env + defaults exactly as
+// before. Only KASM_OS_* keys are honoured — anything else in the file
+// is ignored so a malformed snapshot can't inject unrelated Xvnc env.
+func overlayIdentity(env map[string]string, path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		i := strings.IndexByte(line, '=')
+		if i <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:i])
+		if !strings.HasPrefix(key, "KASM_OS_") {
+			continue
+		}
+		env[key] = strings.TrimSpace(line[i+1:])
+	}
+}
+
 func statExists(path string) bool { _, err := os.Stat(path); return err == nil }
 func hostname() string            { h, _ := os.Hostname(); return h }
 
@@ -170,7 +210,11 @@ func buildXvncArgs(env map[string]string, arch string, fileExists func(string) b
 	}
 	// Resolution order matches the unit-file expansion contract:
 	// KASM_OS_HOME wins, else /home/$KASM_OS_USER, else $HOME, else
-	// /home/kasm-user. The middle step matters when the operator sets
+	// /home/kasm-user. When the boot snapshot exists, overlayIdentity has
+	// already populated KASM_OS_HOME/KASM_OS_USER here, so the first
+	// branch normally wins; the fallbacks only matter pre-snapshot (e.g.
+	// a downstream image that runs Xvnc without kasm-setup). The middle
+	// step matters when the operator sets
 	// only KASM_OS_USER — kasm-os-user-rename moved the home dir to
 	// /home/$KASM_OS_USER but the dockerfile baked HOME=/home/kasm-user
 	// into PID 1's env, so falling through to env["HOME"] would chdir
