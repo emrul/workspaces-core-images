@@ -144,16 +144,19 @@
 <div class="wrap">
   <header class="rep">
     <p class="eyebrow">Nix workspace catalog · content-addressed assembly</p>
-    <h1>One base, 35 apps, 83% less to store</h1>
+    <h1>One base, 35 apps — 83% less to store, kilobytes each to add</h1>
     <p class="thesis">Every per-app image is <b>crane-appended onto a shared base</b> and shares its
-      Nix-store layers by digest. Across the 35 published app images that collapses a
-      <b>82.4 GB</b> naive footprint down to <b>13.7 GB</b> actually stored — the same bytes are
-      kept and pulled once, not 35 times.</p>
+      Nix-store layers by digest. Pulled cold, the 35 published app images collapse an
+      <b>82.4 GB</b> naive footprint down to <b>13.7 GB</b> actually stored. And because that
+      13.7 GB is essentially the <b>fat store</b>, a content-addressed host that already holds it
+      adds any further app for only its <b>wiring layer — 2.5–4 KB</b>: the multi-hundred-MB Nix
+      payload is already present.</p>
     <div class="meta">
       <span>registry.gitlab.com/…/kasm-nix</span>
       <span>tag :nix</span>
       <span>35 app images</span>
       <span>compressed (pull) bytes</span>
+      <span>containerd snapshotter</span>
       <span>2026-07-08</span>
     </div>
   </header>
@@ -163,7 +166,7 @@
       <div class="tile">
         <div class="k">Deduped footprint</div>
         <div class="v">13.7<span class="u">GB</span></div>
-        <div class="sub">what the registry &amp; host store</div>
+        <div class="sub">cold pull of all 35 · ≈ the fat store</div>
       </div>
       <div class="tile">
         <div class="k">If every app standalone</div>
@@ -171,14 +174,14 @@
         <div class="sub">Σ full image sizes</div>
       </div>
       <div class="tile hero">
-        <div class="k">Saved by dedup</div>
+        <div class="k">Saved by cross-image dedup</div>
         <div class="v">83.4<span class="u">%</span></div>
         <div class="sub">68.7 GB not stored</div>
       </div>
-      <div class="tile">
-        <div class="k">Shared base</div>
-        <div class="v">1.71<span class="u">GB</span></div>
-        <div class="sub">carried by all 35 apps</div>
+      <div class="tile hero">
+        <div class="k">All 35 apps, with fat store</div>
+        <div class="v">94<span class="u">KB</span></div>
+        <div class="sub">wiring only · ≈2.6 KB median each</div>
       </div>
     </div>
   </section>
@@ -223,14 +226,47 @@
     </div>
   </section>
 
+  <section aria-label="with the fat store">
+    <h2>With the fat store: an app is just its wiring</h2>
+    <div class="panel">
+      <p style="margin:0 0 14px;font-size:14.5px;color:var(--ink-2)">
+        The <b style="color:var(--ink)">fat store</b> (<code style="font-family:var(--mono);font-size:13px">nix-store:nix</code>)
+        is published from the <b style="color:var(--ink)">same build</b> as the app images, so its Nix-store
+        blobs are byte-identical to theirs. A host that already holds it re-uses those blobs
+        <b style="color:var(--ink)">by digest</b> — so pulling any app transfers only that app's tiny wiring layer.
+        Each app's <b style="color:var(--ink)">99.999%</b> — the hundreds of MB of Nix payload — is already there.
+      </p>
+      <div class="comp-bar" role="img" style="margin-bottom:4px"
+        aria-label="Of a typical app's incremental cost, essentially all is the Nix store payload already held by the fat store; the wiring pulled per app is a few kilobytes.">
+        <div class="comp-seg" style="width:99.98%;background:var(--shared)"></div>
+        <div class="comp-seg" style="width:0.02%;background:var(--unique);min-width:3px"></div>
+      </div>
+      <div class="legend">
+        <div class="lg"><span class="sw" style="background:var(--shared)"></span>
+          <span class="nm">Already in the fat store</span><span class="dt">11.62 GB of app payloads · pulled once</span></div>
+        <div class="lg"><span class="sw" style="background:var(--unique)"></span>
+          <span class="nm">Wiring pulled per app</span><span class="dt">2.5–4.2 KB each · 94 KB for all 35</span></div>
+      </div>
+      <div class="callout">
+        <span class="dot">▸</span>
+        <span><b>Needs a content-addressed image store.</b> The blob re-use lands on Docker ≥ 28 with
+          the containerd snapshotter (or containerd/CRI directly), which keys layers by digest — not
+          the classic <code style="color:var(--ink)">overlay2</code> driver, which keys by chain. The
+          OS/desktop base (shared with <code style="color:var(--ink)">kasm-core-ubuntu</code>) is pulled
+          once per host in either case. See <code style="color:var(--ink)">docs/docker-setup.md</code>.</span>
+      </div>
+    </div>
+  </section>
+
   <section aria-label="per-app unique size">
     <div class="toolbar">
       <h2 style="margin:0">Per-app cost</h2>
       <div style="display:flex;align-items:center;gap:12px">
-        <span class="hint" id="hint">unique layers only — the true incremental cost per app</span>
+        <span class="hint" id="hint">unique layers only — the incremental cost of a cold pull</span>
         <div class="seg" role="group" aria-label="metric">
           <button id="btn-uniq" aria-pressed="true">Unique</button>
           <button id="btn-full" aria-pressed="false">Full image</button>
+          <button id="btn-wire" aria-pressed="false">With fat store</button>
         </div>
       </div>
     </div>
@@ -244,6 +280,12 @@
     <code>nix-ubuntu</code> base image plus the common bootstrap store partition). <b>Naive total</b>
     counts every image at full size. Per-app <b>full</b> ≈ base + its shared + its unique; the ~2 GB
     floor every app shows is that shared base travelling in each manifest (stored once on disk).
+    <b>With fat store</b> = each app's layers minus the ones the fat store already holds; per-app it is
+    the store-<code>→</code>symlink, appmeta and wiring layers (2.5–4.2 KB). This assumes the fat store
+    was published from the same build (<code>PUBLISH_FAT_STORE=1</code>, so its store blobs are
+    byte-identical — crane compresses a given tar deterministically, base-independently) and a
+    content-addressed client (Docker ≥ 28 containerd snapshotter, or containerd/CRI). See
+    <code>design/nix-dedup-gap.md</code> and <code>docs/docker-setup.md</code>.
     Captured 2026-07-08 from <code>labs-sandbox/kasm-nix</code> pipeline #20.
   </footer>
 </div>
@@ -251,46 +293,49 @@
 <div id="tip" role="status" aria-live="off"></div>
 
 <script>
+  // `wiring` = per-app layers NOT in the fat store (symlink + appmeta + wiring);
+  // `unique - wiring` is the app's Nix store payload, which the fat store holds.
   const DATA = [
-    {app:"only-office",unique:868261669,full:2577586155,n:10},
-    {app:"edge",unique:828509207,full:2612639965,n:11},
-    {app:"super-tux-kart",unique:715371164,full:2809952220,n:12},
-    {app:"brave",unique:689023165,full:2473153923,n:11},
-    {app:"firefox",unique:684705032,full:2394029518,n:10},
-    {app:"chromium",unique:681674865,full:2390999351,n:10},
-    {app:"chrome",unique:668611781,full:2377936267,n:10},
-    {app:"libre-office",unique:639433561,full:2734014617,n:12},
-    {app:"vivaldi",unique:605904383,full:2390035141,n:11},
-    {app:"blender",unique:603365355,full:2697946411,n:12},
-    {app:"retroarch",unique:525975422,full:2620556478,n:12},
-    {app:"zoom",unique:514871980,full:2609453036,n:12},
-    {app:"insomnia",unique:340256360,full:2434837416,n:12},
-    {app:"angelfish",unique:334651040,full:2429232096,n:12},
-    {app:"steam",unique:307884925,full:2402465981,n:12},
-    {app:"inkscape",unique:222471646,full:2317052702,n:12},
-    {app:"signal",unique:217732615,full:2312313671,n:12},
-    {app:"tor-browser",unique:213092241,full:2307673297,n:12},
-    {app:"thunderbird",unique:202188508,full:2296769564,n:12},
-    {app:"teams",unique:200493237,full:2295074293,n:12},
-    {app:"vlc",unique:195452180,full:2290033236,n:12},
-    {app:"gimp",unique:180840577,full:2275421633,n:12},
-    {app:"vs-code",unique:167792124,full:2262373180,n:12},
-    {app:"slack",unique:148612215,full:2243193271,n:12},
-    {app:"audacity",unique:147879299,full:2242460355,n:12},
-    {app:"postman",unique:144328748,full:2238909804,n:12},
-    {app:"discord",unique:114199217,full:2208780273,n:12},
-    {app:"filezilla",unique:107762360,full:2202343416,n:12},
-    {app:"remmina",unique:97385750,full:2191966806,n:12},
-    {app:"sublime-text",unique:96996521,full:2116771305,n:11},
-    {app:"deluge",unique:60863093,full:2155444149,n:12},
-    {app:"pinta",unique:45776746,full:2140357802,n:12},
-    {app:"qbittorrent",unique:22583718,full:2117164774,n:12},
-    {app:"minetest",unique:17403824,full:2111984880,n:12},
-    {app:"obsidian",unique:8911247,full:2103492303,n:12},
+    {app:"only-office",unique:868261669,full:2577586155,wiring:4228,n:10},
+    {app:"edge",unique:828509207,full:2612639965,wiring:2604,n:11},
+    {app:"super-tux-kart",unique:715371164,full:2809952220,wiring:2728,n:12},
+    {app:"brave",unique:689023165,full:2473153923,wiring:2606,n:11},
+    {app:"firefox",unique:684705032,full:2394029518,wiring:2722,n:10},
+    {app:"chromium",unique:681674865,full:2390999351,wiring:2607,n:10},
+    {app:"chrome",unique:668611781,full:2377936267,wiring:3687,n:10},
+    {app:"libre-office",unique:639433561,full:2734014617,wiring:2633,n:12},
+    {app:"vivaldi",unique:605904383,full:2390035141,wiring:2608,n:11},
+    {app:"blender",unique:603365355,full:2697946411,wiring:3429,n:12},
+    {app:"retroarch",unique:525975422,full:2620556478,wiring:2609,n:12},
+    {app:"zoom",unique:514871980,full:2609453036,wiring:2582,n:12},
+    {app:"insomnia",unique:340256360,full:2434837416,wiring:2596,n:12},
+    {app:"angelfish",unique:334651040,full:2429232096,wiring:4209,n:12},
+    {app:"steam",unique:307884925,full:2402465981,wiring:2645,n:12},
+    {app:"inkscape",unique:222471646,full:2317052702,wiring:2590,n:12},
+    {app:"signal",unique:217732615,full:2312313671,wiring:2607,n:12},
+    {app:"tor-browser",unique:213092241,full:2307673297,wiring:2632,n:12},
+    {app:"thunderbird",unique:202188508,full:2296769564,wiring:2601,n:12},
+    {app:"teams",unique:200493237,full:2295074293,wiring:2594,n:12},
+    {app:"vlc",unique:195452180,full:2290033236,wiring:2614,n:12},
+    {app:"gimp",unique:180840577,full:2275421633,wiring:2599,n:12},
+    {app:"vs-code",unique:167792124,full:2262373180,wiring:2607,n:12},
+    {app:"slack",unique:148612215,full:2243193271,wiring:2596,n:12},
+    {app:"audacity",unique:147879299,full:2242460355,wiring:2589,n:12},
+    {app:"postman",unique:144328748,full:2238909804,wiring:2591,n:12},
+    {app:"discord",unique:114199217,full:2208780273,wiring:2600,n:12},
+    {app:"filezilla",unique:107762360,full:2202343416,wiring:2589,n:12},
+    {app:"remmina",unique:97385750,full:2191966806,wiring:2708,n:12},
+    {app:"sublime-text",unique:96996521,full:2116771305,wiring:2601,n:11},
+    {app:"deluge",unique:60863093,full:2155444149,wiring:2591,n:12},
+    {app:"pinta",unique:45776746,full:2140357802,wiring:2585,n:12},
+    {app:"qbittorrent",unique:22583718,full:2117164774,wiring:2594,n:12},
+    {app:"minetest",unique:17403824,full:2111984880,wiring:2611,n:12},
+    {app:"obsidian",unique:8911247,full:2103492303,wiring:2589,n:12},
   ];
   const BASE_GB = 1.71;
   const fmtMB = b => (b/1e6).toFixed(b<1e8?1:0);
   const fmtGB = b => (b/1e9).toFixed(2);
+  const fmtKB = b => (b/1024).toFixed(1);
   const chart = document.getElementById("chart");
   const tip = document.getElementById("tip");
   const hint = document.getElementById("hint");
@@ -305,13 +350,16 @@
       const row = document.createElement("div");
       row.className = "row" + (i<3 ? " big":"");
       row.tabIndex = 0;
-      const val = metric==="unique" ? fmtMB(r.unique)+" MB" : fmtGB(r.full)+" GB";
+      const val = metric==="unique" ? fmtMB(r.unique)+" MB"
+                : metric==="full"   ? fmtGB(r.full)+" GB"
+                :                     fmtKB(r.wiring)+" KB";
       row.innerHTML =
         '<div class="lbl">'+r.app+'</div>'+
         '<div class="track"><div class="bar" style="width:0"></div>'+
         '<div class="val">'+val+'</div></div>';
       chart.appendChild(row);
       const bar = row.querySelector(".bar");
+      if(metric==="wiring") bar.style.background = "var(--unique)";
       requestAnimationFrame(()=>{ bar.style.width = pct+"%"; });
       const show = e=>{
         const uPct = (r.unique/r.full*100).toFixed(1);
@@ -319,6 +367,8 @@
           '<div class="tt">'+r.app+'</div>'+
           '<div class="tr"><span class="tk">unique</span><span>'+fmtMB(r.unique)+' MB</span></div>'+
           '<div class="tr"><span class="tk">full image</span><span>'+fmtGB(r.full)+' GB</span></div>'+
+          '<div class="tr"><span class="tk">with fat store</span><span>'+fmtKB(r.wiring)+' KB</span></div>'+
+          '<div class="tr"><span class="tk">already in store</span><span>'+fmtMB(r.unique-r.wiring)+' MB</span></div>'+
           '<div class="tr"><span class="tk">layers</span><span>'+r.n+'</span></div>'+
           '<div class="tr"><span class="tk">shared / base</span><span>'+(100-uPct).toFixed(1)+'%</span></div>';
         tip.style.opacity = "1";
@@ -338,13 +388,17 @@
     metric = m;
     document.getElementById("btn-uniq").setAttribute("aria-pressed", m==="unique");
     document.getElementById("btn-full").setAttribute("aria-pressed", m==="full");
+    document.getElementById("btn-wire").setAttribute("aria-pressed", m==="wiring");
     hint.textContent = m==="unique"
-      ? "unique layers only — the true incremental cost per app"
-      : "full pulled image — the ~2 GB floor is the shared base in every manifest";
+      ? "unique layers only — the incremental cost of a cold pull"
+      : m==="full"
+      ? "full pulled image — the ~2 GB floor is the shared base in every manifest"
+      : "wiring only (KB) — the incremental pull once the host holds the fat store";
     render();
   }
   document.getElementById("btn-uniq").onclick=()=>setMetric("unique");
   document.getElementById("btn-full").onclick=()=>setMetric("full");
+  document.getElementById("btn-wire").onclick=()=>setMetric("wiring");
   render();
 </script>
 </body>

@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>container-init — boot, memory &amp; density report</title>
+<style>
+  :root{
+    --bg:#eef1f5; --panel:#ffffff; --surface:#fcfcfb;
+    --ink:#131a22; --ink-2:#48535f; --muted:#79838f; --line:#e3e8ee; --line-2:#eef1f5;
+    --accent:#2a78d6; --accent-soft:#d7e6fa;
+    --base:#2a78d6; --shared:#1baf7a; --unique:#eda100; --good:#0ca30c;
+    --shadow:0 1px 2px rgba(16,29,48,.05), 0 6px 22px rgba(16,29,48,.06);
+    --mono:ui-monospace,"SF Mono","Cascadia Code","Roboto Mono",Menlo,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#12161b; --panel:#1b2128; --surface:#1a1f26;
+    --ink:#f1f4f8; --ink-2:#c2c9d2; --muted:#8b95a2; --line:#2a323c; --line-2:#222932;
+    --accent:#3987e5; --accent-soft:#17324f; --base:#3987e5; --shared:#199e70; --unique:#c98500; --good:#20b520;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+  }}
+  :root[data-theme="dark"]{
+    --bg:#12161b; --panel:#1b2128; --surface:#1a1f26;
+    --ink:#f1f4f8; --ink-2:#c2c9d2; --muted:#8b95a2; --line:#2a323c; --line-2:#222932;
+    --accent:#3987e5; --accent-soft:#17324f; --base:#3987e5; --shared:#199e70; --unique:#c98500; --good:#20b520;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+  }
+  :root[data-theme="light"]{
+    --bg:#eef1f5; --panel:#ffffff; --ink:#131a22; --ink-2:#48535f; --muted:#79838f; --line:#e3e8ee; --line-2:#eef1f5;
+    --accent:#2a78d6; --accent-soft:#d7e6fa; --base:#2a78d6; --shared:#1baf7a; --unique:#eda100; --good:#0ca30c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:920px;margin:0 auto;padding:48px 24px 72px}
+  header.rep{border-bottom:1px solid var(--line);padding-bottom:26px;margin-bottom:30px}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600;margin:0 0 12px}
+  h1{font-size:clamp(26px,3.6vw,38px);line-height:1.08;letter-spacing:-.02em;margin:0 0 12px;text-wrap:balance;font-weight:680}
+  .thesis{font-size:16.5px;color:var(--ink-2);max-width:64ch;margin:0}
+  .thesis b{color:var(--ink);font-weight:640}
+  .meta{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px 18px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  h2{font-size:12.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2);font-weight:640;margin:0 0 14px;font-family:var(--sans)}
+  section{margin-top:38px}
+  .lead{font-size:14px;color:var(--ink-2);margin:0 0 14px;max-width:64ch}
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  @media(max-width:720px){.tiles{grid-template-columns:repeat(2,1fr)}}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 18px 16px;box-shadow:var(--shadow)}
+  .tile .k{font-size:12px;color:var(--muted);font-weight:560;margin-bottom:10px}
+  .tile .v{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:28px;font-weight:600;letter-spacing:-.01em;line-height:1}
+  .tile .u{font-size:14px;color:var(--ink-2);font-weight:500;margin-left:3px}
+  .tile .sub{font-size:12px;color:var(--muted);margin-top:8px;font-family:var(--mono)}
+  .tile.hero .v{color:var(--good)}
+  .tile.hero{border-color:color-mix(in srgb,var(--good) 40%,var(--line))}
+  .tile.warn .v{color:var(--unique)}
+  .tile.warn{border-color:color-mix(in srgb,var(--unique) 40%,var(--line))}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:22px}
+  .callout{margin-top:14px;font-size:13.5px;color:var(--ink-2);display:flex;gap:10px;align-items:flex-start;background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 28%,var(--line));padding:11px 14px;border-radius:9px}
+  .callout.amber{background:color-mix(in srgb,var(--unique) 14%,var(--panel));border-color:color-mix(in srgb,var(--unique) 34%,var(--line))}
+  .callout b{color:var(--ink)}
+  .callout .dot{color:var(--accent);font-weight:700;line-height:1.4}
+  .callout.amber .dot{color:var(--unique)}
+  .mrow{display:grid;grid-template-columns:104px 1fr;gap:14px;align-items:center;padding:11px 0;border-top:1px solid var(--line-2)}
+  .mrow:first-child{border-top:0}
+  .mrow .lbl{text-align:right;font-size:13px;color:var(--ink);font-weight:600}
+  .duo{display:flex;flex-direction:column;gap:7px}
+  .barline{display:flex;align-items:center;gap:9px}
+  .tagv{width:34px;font-size:10px;font-family:var(--mono);color:var(--muted);text-align:right;flex:none;text-transform:uppercase;letter-spacing:.05em}
+  .bar2{height:16px;border-radius:0 4px 4px 0;min-width:3px}
+  .bar2.stock{background:var(--base)}
+  .bar2.nix{background:var(--good)}
+  .barval{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:11.5px;color:var(--ink-2);white-space:nowrap}
+  .barval .dim{color:var(--muted)}
+  .delta{font-family:var(--mono);font-weight:700;font-size:11px}
+  .delta.good{color:var(--good)}
+  .delta.bad{color:var(--unique)}
+  .stack{display:inline-flex;height:16px;border-radius:0 4px 4px 0;overflow:hidden;flex:none}
+  .seg{height:100%}
+  .seg.anon{background:var(--base)}
+  .seg.cache{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--base) 42%,transparent) 0 5px,transparent 5px 7px)}
+  .seg.anon.nx{background:var(--good)}
+  .seg.cache.nx{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--good) 42%,transparent) 0 5px,transparent 5px 7px)}
+  .legend{display:flex;flex-wrap:wrap;gap:12px 20px;margin-top:16px}
+  .lg{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2)}
+  .sw{width:12px;height:12px;border-radius:3px;flex:none}
+  .charts{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:720px){.charts{grid-template-columns:1fr}}
+  .chart-fig{margin:0}
+  .chart-fig figcaption{font-size:12px;color:var(--ink-2);font-weight:600;margin-bottom:6px}
+  svg{width:100%;height:auto;display:block}
+  .grid{stroke:var(--line);stroke-width:1}
+  .ytick,.xtick{fill:var(--muted);font-family:var(--mono);font-size:9px;text-anchor:middle}
+  .ytick{text-anchor:end}
+  .axlab{fill:var(--muted);font-size:9px;text-anchor:middle;font-family:var(--sans)}
+  .ln{fill:none;stroke-width:2.2}
+  .ln.stock{stroke:var(--base)}
+  .ln.nix{stroke:var(--good)}
+  .dt-stock{fill:var(--base)}
+  .dt-nix{fill:var(--good)}
+  .d-tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:16px}
+  .pt{width:100%;border-collapse:collapse;margin-top:18px;font-size:12.5px}
+  .pt th,.pt td{padding:7px 10px;text-align:right;border-top:1px solid var(--line-2);font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-2);white-space:nowrap}
+  .pt th{color:var(--muted);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;border-top:0}
+  .pt td:first-child,.pt th:first-child{text-align:left;font-family:var(--sans);color:var(--ink);font-weight:600}
+  footer.rep{margin-top:44px;border-top:1px solid var(--line);padding-top:18px;font-size:12px;color:var(--muted);line-height:1.7}
+  footer.rep code,footer.rep b{color:var(--ink-2)}
+  footer.rep b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="rep">
+    <p class="eyebrow">container-init runtime · nix workspaces vs stock Kasm</p>
+    <h1>Faster to a desktop, lighter to run, denser on the box</h1>
+    <p class="thesis">The same three apps, launched from <b>stock Kasm images</b> (bash boot, Debian
+      packages) and from <b>nix images</b> (the Go <code>container-init</code> PID&nbsp;1 supervisor,
+      Nix store). Measured standalone on the .140 host. Nix reaches a reachable desktop
+      <b>~41% sooner</b>, tears down <b>~40% faster</b>, holds a smaller working set, and packs
+      <b>321 Chrome sessions per 100&nbsp;GB vs 214</b> — a real <b>+50%</b>.
+      The one cost it pays is <b>CPU at boot</b>, and we show that too.</p>
+    <div class="meta">
+      <span>mlserver-ubuntu (.140)</span><span>docker 29 · cgroup v2</span>
+      <span>standalone containers</span><span>N=5 · median</span>
+      <span>software render</span><span>2026-07-09</span>
+    </div>
+  </header>
+
+  <section aria-label="headline">
+    <div class="tiles">
+      <div class="tile hero"><div class="k">Time to reachable desktop</div><div class="v">1.6<span class="u">s</span></div><div class="sub">was 2.7s · -42%</div></div>
+      <div class="tile hero"><div class="k">Chrome sessions / 100 GB</div><div class="v">321</div><div class="sub">was 214 · +50% density</div></div>
+      <div class="tile hero"><div class="k">Clean shutdown</div><div class="v">0.79<span class="u">s</span></div><div class="sub">was 1.37s · -42%</div></div>
+      <div class="tile warn"><div class="k">Boot CPU cost</div><div class="v">+4.7<span class="u">CPU·s</span></div><div class="sub">per launch · the trade-off</div></div>
+    </div>
+  </section>
+
+  <section aria-label="time to ready">
+    <h2>Time to a reachable desktop</h2>
+    <p class="lead">Wall-clock from <code>docker run</code> until the container's KasmVNC port (6901) accepts a
+      connection — what a user waits on before the session paints. Median of 5 cold launches.</p>
+    <div class="panel">
+      <div class="mrow">
+        <div class="lbl">Chrome</div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span><span class="bar2 stock" style="width:94.1%"></span><span class="barval">2.58s</span></div>
+          <div class="barline"><span class="tagv">nix</span><span class="bar2 nix" style="width:57.7%"></span><span class="barval">1.58s <span class="delta good">-39%</span></span></div>
+        </div>
+      </div>
+      <div class="mrow">
+        <div class="lbl">VS Code</div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span><span class="bar2 stock" style="width:100.0%"></span><span class="barval">2.74s</span></div>
+          <div class="barline"><span class="tagv">nix</span><span class="bar2 nix" style="width:56.5%"></span><span class="barval">1.55s <span class="delta good">-44%</span></span></div>
+        </div>
+      </div>
+      <div class="mrow">
+        <div class="lbl">LibreOffice</div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span><span class="bar2 stock" style="width:98.7%"></span><span class="barval">2.70s</span></div>
+          <div class="barline"><span class="tagv">nix</span><span class="bar2 nix" style="width:58.1%"></span><span class="barval">1.59s <span class="delta good">-41%</span></span></div>
+        </div>
+      </div>
+      <div class="callout"><span class="dot">▍</span><div><b>container-init boots concurrently.</b> The Go supervisor resolves the unit
+        dependency graph and starts independent services in parallel with eager socket binds, where the
+        bash chain ran them in sequence. Across all three apps nix is reachable in ~1.6&nbsp;s vs ~2.7&nbsp;s.
+        The app's own main process appears at roughly the same moment in both (a parallel boot event, not a later one).</div></div>
+    </div>
+  </section>
+
+  <section aria-label="memory">
+    <h2>Memory footprint (settled, app open)</h2>
+    <p class="lead">Solid = <b>anon</b> (private working set — must stay resident, the real density floor).
+      Hatched = <b>file/page cache</b> (largely reclaimable). Their sum is <code>memory.current</code>; peak is the boot high-water mark.</p>
+    <div class="panel">
+      <div class="mrow">
+        <div class="lbl">Chrome<span class="delta good" style="display:block;font-weight:600;margin-top:3px">-23% anon</span></div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span>
+            <span class="stack">
+              <span class="seg anon" style="width:34.0%"></span><span class="seg cache" style="width:36.1%"></span>
+            </span>
+            <span class="barval">446<span class="dim">+474</span> MiB <span class="dim">· peak 1011</span></span>
+          </div>
+          <div class="barline"><span class="tagv">nix</span>
+            <span class="stack">
+              <span class="seg anon nx" style="width:26.0%"></span><span class="seg cache nx" style="width:16.6%"></span>
+            </span>
+            <span class="barval">342<span class="dim">+218</span> MiB <span class="dim">· peak 657</span></span>
+          </div></div>
+      </div>
+      <div class="mrow">
+        <div class="lbl">VS Code<span class="delta good" style="display:block;font-weight:600;margin-top:3px">-17% anon</span></div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span>
+            <span class="stack">
+              <span class="seg anon" style="width:63.4%"></span><span class="seg cache" style="width:32.6%"></span>
+            </span>
+            <span class="barval">833<span class="dim">+428</span> MiB <span class="dim">· peak 1348</span></span>
+          </div>
+          <div class="barline"><span class="tagv">nix</span>
+            <span class="stack">
+              <span class="seg anon nx" style="width:52.6%"></span><span class="seg cache nx" style="width:12.9%"></span>
+            </span>
+            <span class="barval">691<span class="dim">+170</span> MiB <span class="dim">· peak 934</span></span>
+          </div></div>
+      </div>
+      <div class="mrow">
+        <div class="lbl">LibreOffice<span class="delta good" style="display:block;font-weight:600;margin-top:3px">-7% anon</span></div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span>
+            <span class="stack">
+              <span class="seg anon" style="width:20.7%"></span><span class="seg cache" style="width:29.9%"></span>
+            </span>
+            <span class="barval">272<span class="dim">+392</span> MiB <span class="dim">· peak 703</span></span>
+          </div>
+          <div class="barline"><span class="tagv">nix</span>
+            <span class="stack">
+              <span class="seg anon nx" style="width:19.2%"></span><span class="seg cache nx" style="width:16.1%"></span>
+            </span>
+            <span class="barval">252<span class="dim">+211</span> MiB <span class="dim">· peak 616</span></span>
+          </div></div>
+      </div>
+      <div class="legend">
+        <span class="lg"><span class="sw" style="background:var(--base)"></span>anon · working set</span>
+        <span class="lg"><span class="sw" style="background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--base) 55%,transparent) 0 4px,transparent 4px 6px)"></span>file · page cache (reclaimable)</span>
+        <span class="lg"><span class="sw" style="background:var(--good)"></span>nix anon</span>
+      </div>
+      <div class="callout"><span class="dot">▍</span><div>Nix trims the <b>anon working set 7–23%</b> and page cache <b>46–60%</b>.
+        The cache gap is reclaimable and shrinks further at density (shared store/library pages cache once across
+        co-located sessions), so the number that actually bounds packing is the anon floor — and that is lower for nix.</div></div>
+    </div>
+  </section>
+
+  <section aria-label="cpu trade-off">
+    <h2>The trade-off: CPU to reach ready</h2>
+    <p class="lead">Cumulative container CPU consumed (cgroup <code>cpu.stat</code>) at the instant the app process is up.
+      This is the one metric where nix costs more.</p>
+    <div class="panel">
+      <div class="mrow">
+        <div class="lbl">Chrome</div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span><span class="bar2 stock" style="width:28.6%"></span><span class="barval">2.00s</span></div>
+          <div class="barline"><span class="tagv">nix</span><span class="bar2 nix" style="width:100.0%"></span><span class="barval">7.00s <span class="delta bad">+250%</span></span></div>
+        </div>
+      </div>
+      <div class="mrow">
+        <div class="lbl">VS Code</div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span><span class="bar2 stock" style="width:42.9%"></span><span class="barval">3.00s</span></div>
+          <div class="barline"><span class="tagv">nix</span><span class="bar2 nix" style="width:85.7%"></span><span class="barval">6.00s <span class="delta bad">+100%</span></span></div>
+        </div>
+      </div>
+      <div class="mrow">
+        <div class="lbl">LibreOffice</div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span><span class="bar2 stock" style="width:28.6%"></span><span class="barval">2.00s</span></div>
+          <div class="barline"><span class="tagv">nix</span><span class="bar2 nix" style="width:85.7%"></span><span class="barval">6.00s <span class="delta bad">+200%</span></span></div>
+        </div>
+      </div>
+      <div class="callout amber"><span class="dot">▍</span><div><b>Nix burns ~3–5 extra CPU-seconds per launch.</b> It held steady across warm
+        runs (p95≈median), so it is structural, not cold-cache: container-init fans boot work out across cores in parallel,
+        and Nix's store-based dynamic linking (many <code>/nix/store</code> paths, long RPATHs) is heavier than stock's
+        consolidated <code>/usr/lib</code>. It buys the faster wall-clock start — but at a login storm it is real CPU spend.</div></div>
+    </div>
+  </section>
+
+  <section aria-label="density">
+    <h2>Density at scale</h2>
+    <p class="lead">Concurrent sessions ramped 1&rarr;8 on the shared host. Y is the fleet's <b>binding resident</b>
+      memory — the sum of each container's <code>docker stats</code> memory (<code>memory.current</code> minus reclaimable
+      inactive cache), which counts shared pages once. Lower line = more sessions fit.</p>
+    <div class="panel">
+      <div class="charts">
+    <figure class="chart-fig">
+      <figcaption>8× Chrome — same-app fleet</figcaption>
+      <svg viewBox="0 0 340 200" role="img" aria-label="8× Chrome — same-app fleet: fleet resident memory vs concurrent sessions, stock vs nix">
+        <line x1="40" y1="170.0" x2="328" y2="170.0" class="grid"/><text x="34" y="173.0" class="ytick">0</text><line x1="40" y1="132.6" x2="328" y2="132.6" class="grid"/><text x="34" y="135.6" class="ytick">1G</text><line x1="40" y1="95.2" x2="328" y2="95.2" class="grid"/><text x="34" y="98.2" class="ytick">2G</text><line x1="40" y1="57.9" x2="328" y2="57.9" class="grid"/><text x="34" y="60.9" class="ytick">3G</text>
+        <polyline points="40.0,150.6 81.1,131.7 122.3,113.9 163.4,96.4 204.6,96.4 245.7,62.3 286.9,45.4 328.0,28.6" class="ln stock"/>
+        <polyline points="40.0,154.4 81.1,139.6 122.3,125.6 163.4,112.0 204.6,112.1 245.7,84.9 286.9,85.7 328.0,72.9" class="ln nix"/>
+        <circle cx="40.0" cy="150.6" r="2.6" class="dt-stock"/><circle cx="81.1" cy="131.7" r="2.6" class="dt-stock"/><circle cx="122.3" cy="113.9" r="2.6" class="dt-stock"/><circle cx="163.4" cy="96.4" r="2.6" class="dt-stock"/><circle cx="204.6" cy="96.4" r="2.6" class="dt-stock"/><circle cx="245.7" cy="62.3" r="2.6" class="dt-stock"/><circle cx="286.9" cy="45.4" r="2.6" class="dt-stock"/><circle cx="328.0" cy="28.6" r="2.6" class="dt-stock"/><circle cx="40.0" cy="154.4" r="2.6" class="dt-nix"/><circle cx="81.1" cy="139.6" r="2.6" class="dt-nix"/><circle cx="122.3" cy="125.6" r="2.6" class="dt-nix"/><circle cx="163.4" cy="112.0" r="2.6" class="dt-nix"/><circle cx="204.6" cy="112.1" r="2.6" class="dt-nix"/><circle cx="245.7" cy="84.9" r="2.6" class="dt-nix"/><circle cx="286.9" cy="85.7" r="2.6" class="dt-nix"/><circle cx="328.0" cy="72.9" r="2.6" class="dt-nix"/>
+        <text x="40.0" y="184.0" class="xtick">1</text><text x="81.1" y="184.0" class="xtick">2</text><text x="122.3" y="184.0" class="xtick">3</text><text x="163.4" y="184.0" class="xtick">4</text><text x="204.6" y="184.0" class="xtick">5</text><text x="245.7" y="184.0" class="xtick">6</text><text x="286.9" y="184.0" class="xtick">7</text><text x="328.0" y="184.0" class="xtick">8</text>
+        <text x="170" y="198" class="axlab">concurrent sessions</text>
+      </svg>
+    </figure>
+    <figure class="chart-fig">
+      <figcaption>Chrome / VS Code / LibreOffice mix</figcaption>
+      <svg viewBox="0 0 340 200" role="img" aria-label="Chrome / VS Code / LibreOffice mix: fleet resident memory vs concurrent sessions, stock vs nix">
+        <line x1="40" y1="170.0" x2="328" y2="170.0" class="grid"/><text x="34" y="173.0" class="ytick">0</text><line x1="40" y1="132.6" x2="328" y2="132.6" class="grid"/><text x="34" y="135.6" class="ytick">1G</text><line x1="40" y1="95.2" x2="328" y2="95.2" class="grid"/><text x="34" y="98.2" class="ytick">2G</text><line x1="40" y1="57.9" x2="328" y2="57.9" class="grid"/><text x="34" y="60.9" class="ytick">3G</text>
+        <polyline points="40.0,150.5 81.1,118.5 122.3,107.9 163.4,92.9 204.6,64.7 245.7,54.9 286.9,42.7 328.0,29.0" class="ln stock"/>
+        <polyline points="40.0,154.5 81.1,129.3 122.3,117.0 163.4,104.6 204.6,78.9 245.7,90.1 286.9,82.7 328.0,46.5" class="ln nix"/>
+        <circle cx="40.0" cy="150.5" r="2.6" class="dt-stock"/><circle cx="81.1" cy="118.5" r="2.6" class="dt-stock"/><circle cx="122.3" cy="107.9" r="2.6" class="dt-stock"/><circle cx="163.4" cy="92.9" r="2.6" class="dt-stock"/><circle cx="204.6" cy="64.7" r="2.6" class="dt-stock"/><circle cx="245.7" cy="54.9" r="2.6" class="dt-stock"/><circle cx="286.9" cy="42.7" r="2.6" class="dt-stock"/><circle cx="328.0" cy="29.0" r="2.6" class="dt-stock"/><circle cx="40.0" cy="154.5" r="2.6" class="dt-nix"/><circle cx="81.1" cy="129.3" r="2.6" class="dt-nix"/><circle cx="122.3" cy="117.0" r="2.6" class="dt-nix"/><circle cx="163.4" cy="104.6" r="2.6" class="dt-nix"/><circle cx="204.6" cy="78.9" r="2.6" class="dt-nix"/><circle cx="245.7" cy="90.1" r="2.6" class="dt-nix"/><circle cx="286.9" cy="82.7" r="2.6" class="dt-nix"/><circle cx="328.0" cy="46.5" r="2.6" class="dt-nix"/>
+        <text x="40.0" y="184.0" class="xtick">1</text><text x="81.1" y="184.0" class="xtick">2</text><text x="122.3" y="184.0" class="xtick">3</text><text x="163.4" y="184.0" class="xtick">4</text><text x="204.6" y="184.0" class="xtick">5</text><text x="245.7" y="184.0" class="xtick">6</text><text x="286.9" y="184.0" class="xtick">7</text><text x="328.0" y="184.0" class="xtick">8</text>
+        <text x="170" y="198" class="axlab">concurrent sessions</text>
+      </svg>
+    </figure></div>
+      <div class="d-tiles">
+        <div class="tile"><div class="k">Chrome — marginal per session</div><div class="v">319<span class="u">MiB</span></div><div class="sub">stock 478 MiB · -33%</div></div>
+        <div class="tile hero"><div class="k">…so per 100 GB of RAM</div><div class="v">321<span class="u">sessions</span></div><div class="sub">stock 214 · +50%</div></div>
+      </div>
+      <div class="legend">
+        <span class="lg"><span class="sw" style="background:var(--base)"></span>stock</span>
+        <span class="lg"><span class="sw" style="background:var(--good)"></span>nix</span>
+      </div>
+      <div class="callout"><span class="dot">▍</span><div>The density win is <b>largest for same-app fleets (+50% Chrome, 321 vs 214)</b> and
+        smaller for a mixed set (+13%, 242 vs 215). The binding resident set is dominated by
+        <b>anon</b>, which is private and can't be shared between sessions — so density tracks per-session working set, not
+        cross-app cache sharing. Curves carry ±a few hundred MiB of noise from the active/inactive cache boundary and other host tenants.</div></div>
+    </div>
+  </section>
+
+  <section aria-label="teardown and process footprint">
+    <h2>Clean shutdown &amp; process footprint</h2>
+    <p class="lead">Shutdown = wall time from SIGTERM to container exit (<code>docker stop -t 30</code>).
+      container-init forwards SIGTERM to all children in reverse-dependency order and reaps them; the bash
+      boot leaned on trap handlers and fixed sleeps.</p>
+    <div class="panel">
+      <div class="mrow">
+        <div class="lbl">Chrome</div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span><span class="bar2 stock" style="width:94.7%"></span><span class="barval">1.37s</span></div>
+          <div class="barline"><span class="tagv">nix</span><span class="bar2 nix" style="width:54.7%"></span><span class="barval">0.79s <span class="delta good">-42%</span></span></div>
+        </div>
+      </div>
+      <div class="mrow">
+        <div class="lbl">VS Code</div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span><span class="bar2 stock" style="width:79.6%"></span><span class="barval">1.15s</span></div>
+          <div class="barline"><span class="tagv">nix</span><span class="bar2 nix" style="width:55.0%"></span><span class="barval">0.80s <span class="delta good">-31%</span></span></div>
+        </div>
+      </div>
+      <div class="mrow">
+        <div class="lbl">LibreOffice</div>
+        <div class="duo">
+          <div class="barline"><span class="tagv">stock</span><span class="bar2 stock" style="width:100.0%"></span><span class="barval">1.45s</span></div>
+          <div class="barline"><span class="tagv">nix</span><span class="bar2 nix" style="width:51.7%"></span><span class="barval">0.75s <span class="delta good">-48%</span></span></div>
+        </div>
+      </div>
+      <div class="callout"><span class="dot">▍</span><div><b>Nix tears down ~31–48% faster</b> — sub-second vs 1.2–1.5&nbsp;s.
+        Steady-state process and thread counts are roughly even: the supervisor adds no process overhead (a few fewer
+        processes than the bash stack); thread counts track the app itself, not the boot path.</div></div>
+      <table class='pt'><tr><th>App</th><th>procs stock</th><th>procs nix</th><th>threads stock</th><th>threads nix</th></tr><tr><td>Chrome</td><td>60</td><td>56 <span class='delta good'>-7%</span></td><td>285</td><td>275 <span class='delta good'>-4%</span></td></tr><tr><td>VS Code</td><td>57</td><td>54 <span class='delta good'>-5%</span></td><td>295</td><td>320 <span class='delta bad'>+8%</span></td></tr><tr><td>LibreOffice</td><td>49</td><td>46 <span class='delta good'>-6%</span></td><td>117</td><td>162 <span class='delta bad'>+38%</span></td></tr></table>
+    </div>
+  </section>
+
+  <footer class="rep">
+    <b>Setup.</b> Host <code>mlserver-ubuntu</code> (192.168.1.140), docker 29 over the Mac <code>linbox</code> context,
+    cgroup v2. Each app launched as a <b>standalone container</b> (<code>docker run</code>, VNC_PW set, <code>--shm-size=1g</code>;
+    nix adds <code>seccomp=chrome.json</code> + <code>apparmor=unconfined</code>) — the Kasm-platform launch path was not used
+    (the nix nginx-reload provision blocker), which also isolates the container from agent/proxy overhead. Both variants ran the
+    <b>software render path</b>; no GPU passthrough. <b>Stock</b> = <code>kasmweb/&lt;app&gt;:1.19.0-rolling-weekly</code> (bash boot).
+    <b>Nix</b> = <code>labs-sandbox/kasm-nix/&lt;app&gt;:nix</code> (<code>container-init</code> PID 1). <br>
+    <b>Timing.</b> VNC-ready = Mac&rarr;LAN TCP connect to the published port (client clock). App-ready = app main process present,
+    measured on the .140 clock from container <code>StartedAt</code>. Both are launch-concurrent boot events. N=5, median reported;
+    p95 tracked ≈ median throughout. <b>Memory</b> read from the container cgroup after a 20&nbsp;s settle. <b>CPU-to-ready</b> =
+    <code>cpu.stat usage_usec</code> at app-ready. <b>Shutdown</b> = wall time of <code>docker stop -t 30</code> (SIGTERM&rarr;exit).
+    <b>Density</b> ramped 1&rarr;8 concurrent, 10&nbsp;s settle each, fleet = Σ <code>docker stats</code> memory over the run's
+    containers only (host floor guard 20&nbsp;GB). <br>
+    <b>Caveats.</b> The box also ran the Kasm stack and other builds, so host <code>MemAvailable</code> is noisy — hence the
+    cgroup-sum metric. "App-ready" is process-present, not window-painted. Single connection; no client-side rendering load simulated.
+    Generated from <code>runs</code> harness · captured 2026-07-09.
+  </footer>
+</div>
+</body>
+</html>

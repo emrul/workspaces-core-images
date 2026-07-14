@@ -2,3 +2,7 @@ target
 .idea
 *.iml
 *.log
+
+# Editor swap files
+*.swp
+*.swo
