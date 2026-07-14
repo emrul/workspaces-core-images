@@ -1,0 +1,10 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>kasm density — idle</title>
+<style>body{font-family:sans-serif;margin:3rem;color:#222}</style>
+<h1>Kasm Chrome density benchmark — idle workload</h1>
+<p>Deterministic near-idle page. No JS, no network, no timers. Each session renders
+exactly this DOM so the per-session working set reflects the browser baseline
+(one renderer, start page) rather than page content.</p>
+<p>Arm A (baseline) vs Arm B (safe trio: <code>--enable-low-end-device-mode</code>
++ <code>--renderer-process-limit</code>) is the only variable.</p>

@@ -1,0 +1,46 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>kasm density — heavy tab</title>
+<style>
+  body{font-family:sans-serif;margin:1.5rem;color:#1a1a1a}
+  .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin-top:1rem}
+  .cell{height:22px;border-radius:3px;background:linear-gradient(90deg,#2a78d6,#1baf7a)}
+  canvas{border:1px solid #ccc;margin-top:1rem}
+</style>
+<h1>Heavy tab</h1>
+<p id="stat">allocating…</p>
+<canvas id="c" width="480" height="240"></canvas>
+<div class="grid" id="g"></div>
+<script>
+// Deterministic, FIXED working set (no growth, no network, no timers after load).
+// ~32 MiB typed array + a large-but-bounded DOM + one static canvas paint.
+// Goal: a realistic per-renderer footprint that is identical every run, so the
+// ONLY variable between arms is Chrome's process/heap flags.
+(function(){
+  var N = 4 * 1024 * 1024;               // 4M float64 = 32 MiB, retained
+  var buf = new Float64Array(N);
+  for (var i=0;i<N;i++) buf[i] = Math.sin(i*0.001);
+  window.__retain = buf;                 // keep it resident
+
+  var g = document.getElementById('g');
+  var frag = document.createDocumentFragment();
+  for (var j=0;j<3000;j++){              // 3000 DOM nodes, fixed
+    var d = document.createElement('div');
+    d.className = 'cell';
+    d.style.opacity = (0.3 + (j%7)/10).toFixed(2);
+    frag.appendChild(d);
+  }
+  g.appendChild(frag);
+
+  var ctx = document.getElementById('c').getContext('2d');
+  for (var x=0;x<480;x++){
+    var y = 120 + 100*Math.sin(x*0.05);
+    ctx.fillStyle = 'hsl('+(x%360)+',70%,55%)';
+    ctx.fillRect(x, y, 2, 240-y);
+  }
+
+  var sum=0; for (var k=0;k<N;k+=997) sum+=buf[k];
+  document.getElementById('stat').textContent =
+    'retained 32 MiB typed array + 3000 DOM nodes; checksum '+sum.toFixed(2);
+})();
+</script>
