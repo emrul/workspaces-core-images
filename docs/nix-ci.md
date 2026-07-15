@@ -13,7 +13,8 @@ happens inside `quay.io/podman/stable` against a persistent podman store.
 | Stage | Job | Does |
 |---|---|---|
 | `prepare` | `prepare` | `ci-scripts/nix-changed-profiles.sh` computes `NIX_PROFILES` from the commit diff (change-gating) and exports it as a dotenv artifact. |
-| `base` | `base` | **manual / `allow_failure`** — `runs/nix-portal/dind-base.sh` builds core-minimal + nix-ubuntu into the store. Play it when the base dockerfiles / core tree change; normal runs reuse the warm base. |
+| `prepare` | `base-check` | Decides which distro bases need rebuilding → `NIX_BASES_REBUILD` (dotenv): union of base inputs changed in the diff (`NIX_BASES_AFFECTED`) and upstream source-image digest staleness (`ci-scripts/nix-base-check.sh`, run in DIND on publishing pipelines). |
+| `base` | `base` | Auto — rebuilds the stale/affected distro bases (`ci-scripts/nix-base-build.sh`), core + `nix-<distro>` for each, **parallel across distros** (`BUILD_PARALLEL`), stamping each with its source-image digest. Skips fast when all bases are fresh. Force with the `BASE_DISTROS` variable. |
 | `build` | `build` | `runs/nix-portal/dind-build.sh` → `build-nix-store-volume --emit-app-images` → fat store + one `localhost/nix-<profile>:dev` per GUI app (per-app builds parallelised, `BUILD_PARALLEL`). |
 | `publish` | `publish` | inside the store: `podman login` the registry, then `ci-scripts/nix-publish.sh` tags each to its kasm name and pushes to `$REGISTRY_NS` (scoped to `NIX_PROFILES`). |
 
@@ -109,8 +110,11 @@ Published image = `<REGISTRY_NS>/<kasm_name>:<KASM_TAG>`.
 
 - **Automatic**: push to the default branch (`kasm-nix`) → `build` then `publish`.
 - **Subset**: set CI/CD variable `NIX_PROFILES="onlyoffice vscode"` (space list).
-- **Manual base refresh**: play the `base` job (or run a `web` pipeline) after
-  changing the base dockerfiles / core install tree.
+- **Base rebuilds are automatic**: `base-check` → `base` rebuild a distro base
+  when its inputs change (`src/common`, `src/<distro>`, the base dockerfiles) or
+  its upstream source image (`ubuntu:24.04`, `fedora:42`, `alpine:3.21`) moves;
+  `publish-base` then auto-publishes the rebuilt ones. Force a specific set with
+  the `BASE_DISTROS="ubuntu fedora alpine"` variable on a `web` pipeline.
 - **Local publish dry-run** of the mapping:
   ```sh
   REGISTRY_NS=registry.example/kasm-nix DRY_RUN=1 DOCKER=podman bash ci-scripts/nix-publish.sh

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # nix-publish-base.sh — tag the Nix *base/core* images built by the `base`
-# pipeline stage (runs/nix-portal/dind-base.sh) to their Kasm-convention names
+# pipeline stage (ci-scripts/nix-base-build.sh) to their Kasm-convention names
 # and push them to the target registry namespace.
 #
 # These are the base images app/desktop workspaces build FROM or mount, NOT the
@@ -29,7 +29,7 @@ FILTER="${NIX_BASES:-}"
 
 # ── base image map: local build tag  →  published kasm-core repo name ────────
 # One line per base. Add alpine/fedora/etc. here once their nix-base dockerfiles
-# exist (dockerfile-nix-<distro> + src/<distro>/install/nix + a dind-base build).
+# exist (dockerfile-nix-<distro> + src/<distro>/install/nix + a nix-base-build).
 # The minimal core is the stripped base nix-<distro> builds FROM; publishing it
 # is optional (build-time dep) but useful for reuse/reproducibility.
 BASES="

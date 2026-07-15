@@ -28,7 +28,17 @@ set -euo pipefail
 # diff; the "can't tell" early exits (schedule / new branch) leave it 0 so they
 # don't block routine whole-catalog rebuilds.
 BASE_AFFECTED=0
-emit() { echo "NIX_PROFILES=$1"; echo "NIX_BASE_AFFECTED=${BASE_AFFECTED}"; }
+# BASES_AFFECTED: which distro bases' INPUTS changed in this diff (space list of
+# ubuntu|fedora|alpine). Unioned with nix-base-check.sh's upstream-digest staleness
+# by the base-check job → NIX_BASES_REBUILD. NIX_BASE_AFFECTED stays ubuntu-only
+# (the app base) for the dind-build.sh freshness guard.
+BASES_AFFECTED=""
+norm() { printf '%s\n' $1 | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//'; }
+emit() {
+  echo "NIX_PROFILES=$1"
+  echo "NIX_BASE_AFFECTED=${BASE_AFFECTED}"
+  echo "NIX_BASES_AFFECTED=$(norm "${BASES_AFFECTED}")"
+}
 
 if [ -n "${NIX_CHANGED_FILES+x}" ]; then
   # Caller supplied the file list explicitly (manual / non-CI path).
@@ -53,21 +63,28 @@ all=0
 while IFS= read -r f; do
   [ -n "${f}" ] || continue
   case "${f}" in
-    # Base-IMAGE inputs — baked into nix-ubuntu (the two base dockerfiles + the
-    # shared kasm-go/container-init tree + the nix activation scripts/units).
-    # Changing these needs a base rebuild, so → whole catalog AND base-affected.
-    dockerfile-kasm-core-minimal|dockerfile-nix-ubuntu|src/common/*|\
-    src/ubuntu/install/nix/scripts/*|src/ubuntu/install/nix/units/*)
-      all=1; BASE_AFFECTED=1 ;;
+    # Shared base inputs (src/common tree + shared nix activation scripts/units)
+    # feed EVERY distro core/nix base. ubuntu is the app base → apps rebuild +
+    # freshness guard. Matched before the general src/ubuntu/* case below.
+    src/common/*|src/ubuntu/install/nix/scripts/*|src/ubuntu/install/nix/units/*)
+      all=1; BASE_AFFECTED=1; BASES_AFFECTED="${BASES_AFFECTED} ubuntu fedora alpine" ;;
+    # ubuntu base dockerfiles → ubuntu base + apps rebuild.
+    dockerfile-kasm-core-minimal|dockerfile-nix-ubuntu)
+      all=1; BASE_AFFECTED=1; BASES_AFFECTED="${BASES_AFFECTED} ubuntu" ;;
+    # fedora / alpine base inputs → ONLY that distro's base (apps are ubuntu-based,
+    # so no app rebuild / no ubuntu freshness-guard trip).
+    dockerfile-kasm-core-fedora|dockerfile-nix-fedora|src/fedora/*|src/fedora42/*)
+      BASES_AFFECTED="${BASES_AFFECTED} fedora" ;;
+    dockerfile-kasm-core-alpine|dockerfile-nix-alpine|src/alpine/*)
+      BASES_AFFECTED="${BASES_AFFECTED} alpine" ;;
     # Build/assembly-only shared files — whole catalog, but the base image
     # content is unchanged, so NOT base-affected.
     bin/build-nix-store-volume|bin/nix-crane-assemble|bin/nix-profiles.toml|\
     dockerfile-nix-app-finish|runs/nix-portal/*)
       all=1 ;;
-    # Per-app wiring — src/ubuntu/install/nix/<app>/...
+    # Per-app wiring — src/ubuntu/install/nix/<app>/... (scripts|units handled above)
     src/ubuntu/install/nix/*/*)
-      a="${f#src/ubuntu/install/nix/}"; a="${a%%/*}"
-      case "${a}" in scripts|units) all=1; BASE_AFFECTED=1 ;; *) apps="${apps} ${a}" ;; esac ;;
+      a="${f#src/ubuntu/install/nix/}"; a="${a%%/*}"; apps="${apps} ${a}" ;;
     # Self-hosted overlay (bin/nix-kasm-overlay). Shared machinery affects every
     # overlay-backed app → whole catalog; a per-app dir (pin.json/package.nix)
     # rebuilds only that app (dir name == profile name). The updater/manifest/docs
@@ -77,6 +94,12 @@ while IFS= read -r f; do
       all=1 ;;
     bin/nix-kasm-overlay/pkgs/*/*)
       a="${f#bin/nix-kasm-overlay/pkgs/}"; a="${a%%/*}"; apps="${apps} ${a}" ;;
+    # Any OTHER src/ubuntu path (fonts, xfce, kasm_vnc, audio, printer, …) is
+    # baked into the nix-ubuntu base via dockerfile-kasm-core-minimal, so it needs
+    # an ubuntu base rebuild + app rebuild. Comes AFTER the nix/<app> case above so
+    # per-app wiring stays app-scoped.
+    src/ubuntu/*)
+      all=1; BASE_AFFECTED=1; BASES_AFFECTED="${BASES_AFFECTED} ubuntu" ;;
     # Everything else (docs, .gitlab-ci.yml, other ci-scripts, the updater,
     # overlay manifest/README) — not image content.
     *) : ;;

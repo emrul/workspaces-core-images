@@ -8,21 +8,22 @@ honest. This is the operator's map — for the packaging model itself see
 ## The pipeline at a glance
 
 ```
-prepare ─▶ (base, base-fedora, base-alpine)* ─▶ build ─▶ publish
-                                              └▶ publish-base*
-              * = manual jobs
+prepare ─(base-check)─▶ base ─▶ build ─▶ publish
+                                     └▶ publish-base
 ```
 
 | Stage | Trigger | What it does |
 |-------|---------|--------------|
-| **prepare** | every run | Change-gating: diff the commit → `NIX_PROFILES` + `NIX_BASE_AFFECTED` (dotenv). |
-| **base** / base-fedora / base-alpine | **manual** | Build `core-minimal` + `nix-<distro>` into the persistent store; stamp `kasm.base.builtsha`. |
+| **prepare** | every run | Change-gating: diff → `NIX_PROFILES` + `NIX_BASE_AFFECTED` + `NIX_BASES_AFFECTED` (dotenv). `base-check` (same stage) unions that with upstream source-image digest staleness → `NIX_BASES_REBUILD`. |
+| **base** | auto (skips when fresh) | Rebuild the stale/affected distro bases (`nix-base-build.sh`): `core` + `nix-<distro>`, **parallel across distros** (`BUILD_PARALLEL`), stamping `kasm.base.builtsha` + the source-image digest. `build` waits on it. Force with `BASE_DISTROS`. |
 | **build** | auto (unless `__none__`) | `build-nix-store-volume --emit-app-images` against the warm store → fat store + per-app images. |
 | **publish** | auto on default branch / web / schedule | Tag per-app images to their kasm names + push (scoped) **and** push the fat store. |
-| **publish-base** | **manual** | Push the base images (`kasm-core-<distro>:nix`). |
+| **publish-base** | auto on default / web / schedule (scoped to rebuilt distros) | Push the rebuilt base images (`kasm-core-<distro>:nix`), keeping them in sync with what per-app images layer on. Skips when no base changed. |
 
-Two things are **deliberately manual**: rebuilding the OS/base image and
-publishing it. Everything else is automatic and gated by the commit diff.
+Everything is automatic and gated by the commit diff (and, for bases, by the
+upstream source-image digest). Base rebuilds and their publish are scoped to the
+distro(s) that actually changed; force a base rebuild with the `BASE_DISTROS`
+variable on a `web` pipeline.
 
 ## What's cached (nothing is "rebuilt from scratch")
 
@@ -57,11 +58,11 @@ yet shared) for an operator to promote; nothing auto-promotes.
 
 Three checks keep the model from silently degrading:
 
-1. **Base-freshness guard** (`dind-build.sh`). `base`/`publish-base` are manual and
-   `build` doesn't depend on them, so a base-affecting change could rebuild the
-   whole catalog on a **stale base**. The guard fails the build when
-   `NIX_BASE_AFFECTED=1` and the base image's `kasm.base.builtsha` ≠ the current
-   commit. Override: `ALLOW_STALE_BASE=1`.
+1. **Base-freshness guard** (`dind-build.sh`) — now a backstop. `base` auto-rebuilds
+   the affected/stale distro bases and `build` `needs: base`, so the ubuntu app base
+   is normally fresh. The guard still fails the build when `NIX_BASE_AFFECTED=1` and
+   the base image's `kasm.base.builtsha` ≠ the current commit (e.g. if `base` was
+   skipped or its rebuild didn't cover ubuntu). Override: `ALLOW_STALE_BASE=1`.
 2. **Fat-store consistency guard** (`nix-publish.sh`). Per-app images and the fat
    store share base/shared layers by digest only if pushed from the **same build**.
    With `PUBLISH_FAT_STORE=1` (default) publish refuses to push anything unless
@@ -318,7 +319,7 @@ flowchart TD
 
     subgraph build["build"]
       fresh{"BASE_AFFECTED = 1<br/>AND base.builtsha != commit ?"}
-      fresh -->|"yes, and not ALLOW_STALE_BASE"| fstale["FAIL: stale base<br/>run base + publish-base"]
+      fresh -->|"yes, and not ALLOW_STALE_BASE"| fstale["FAIL: stale base<br/>(base auto-rebuilds; else ALLOW_STALE_BASE=1)"]
       fresh -->|"no / overridden"| warm["reuse warm Nix store<br/>+ nix-ubuntu base image"]
       warm --> part["partition: base + shared layers<br/>+ per-profile deltas (from TOML)"]
       part --> pro{"full-catalog build?"}
@@ -342,9 +343,13 @@ flowchart TD
   that app rebuilds + publishes.
 - **Bumped a nixpkgs pin** (`bin/nix-profiles.toml`) → whole catalog rebuilds on
   the existing base (no base rebuild needed); publish pushes all.
-- **Changed a base-image input** (`src/common/*`, `dockerfile-nix-ubuntu`, nix
-  scripts/units) → run **`base`** then **`publish-base`** for this commit, *then*
-  let `build`/`publish` run. Skipping the base rebuild now **fails fast** with
-  instructions (or set `ALLOW_STALE_BASE=1` to knowingly proceed).
+- **Changed a base-image input** (`src/common/*`, `src/<distro>/*`, the base
+  dockerfiles, nix scripts/units) → `base-check` flags the affected distro(s),
+  `base` auto-rebuilds them, `build` waits, and `publish-base` publishes them —
+  no manual step. (The freshness guard remains as a backstop; `ALLOW_STALE_BASE=1`
+  overrides it if ever needed.)
+- **Upstream source image moved** (`ubuntu:24.04` / `fedora:42` / `alpine:3.21`) →
+  on a publishing pipeline (schedule/web/default) `base-check`'s digest compare
+  flags it stale → same auto rebuild + publish path.
 - **Docs / CI-only change** → `build`/`publish` no-op (`__none__`).
 - **GC** → a scheduled pipeline with `NIX_GC=1` runs only the `gc` job.
