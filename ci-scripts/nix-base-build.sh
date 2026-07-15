@@ -11,9 +11,11 @@
 #   BASE_DISTROS    space list to build (default: all). e.g. "ubuntu fedora"
 #   BUILD_PARALLEL  max concurrent distro builds (default 3) — same knob the
 #                   per-app build uses.
-#   BASE_BUILD_ATTEMPTS  retries per distro on transient failure (default 3) —
-#                   parallel builds contend on distro package mirrors, so an
-#                   index fetch can hit a transient CDN error; a retry clears it.
+#   BASE_BUILD_ATTEMPTS  SERIAL retry attempts (default 2) for a distro that failed
+#                   the parallel pass — parallel builds contend on distro package
+#                   mirrors (alpine's apk is the usual victim; dl-cdn rate-limits
+#                   under concurrent load), and a serial rebuild afterwards clears
+#                   it. Build proceeds in two passes: parallel, then serial retry.
 #   BASE_BUILT_SHA  commit sha, stamped as kasm.base.builtsha (the app-build
 #                   freshness guard in dind-build.sh reads it).
 set -euo pipefail
@@ -71,32 +73,36 @@ EOF
 # job fails if any distro failed.
 sem() { while [ "$(jobs -rp | wc -l)" -ge "${PAR}" ]; do wait -n 2>/dev/null || break; done; }
 
-echo "[base] building: ${WANT}  (parallel=${PAR})"
-ATTEMPTS="${BASE_BUILD_ATTEMPTS:-3}"
+# Pass 1 — build all requested distros in PARALLEL (the fast path).
+echo "[base] pass 1 (parallel=${PAR}): ${WANT}"
 for d in ${WANT}; do
   sem
-  # Retry each distro build: base builds pull from distro package mirrors
-  # (apt/dnf/apk), and building distros in PARALLEL contends on those mirrors,
-  # making transient index-fetch failures ("temporary error (try again later)")
-  # likely — which cascade into bogus "no such package" errors for packages that
-  # do exist. A retry (podman's layer cache resumes from the failed step, with a
-  # fresh index fetch) clears the transient case; a genuine failure exhausts the
-  # attempts and records a non-zero rc. set +e so the real exit code is recorded.
-  (
-    set +e
-    rc=1
-    for attempt in $(seq 1 "${ATTEMPTS}"); do
-      build_one "$d"; rc=$?
-      [ "${rc}" = 0 ] && break
-      if [ "${attempt}" -lt "${ATTEMPTS}" ]; then
-        echo "[base:${d}] attempt ${attempt}/${ATTEMPTS} failed (rc=${rc}) — transient? retrying in 15s" >&2
-        sleep 15
-      fi
-    done
-    echo "${rc}" > "/tmp/base-${d}.rc"
-  ) >"/tmp/base-${d}.log" 2>&1 &
+  # set +e so a failed build_one still records its real exit code.
+  ( set +e; build_one "$d"; echo $? > "/tmp/base-${d}.rc" ) >"/tmp/base-${d}.log" 2>&1 &
 done
 wait
+
+# Pass 2 — SERIAL retry of anything that failed. Root cause of parallel-only
+# failures: building distros concurrently contends on their package mirrors, and
+# alpine's apk (re-fetching main+community+edge indexes on every `apk add
+# --no-cache`) gets rate-limited by dl-cdn under that load → transient
+# "temporary error" → bogus "no such package". Once the parallel batch is done
+# the contention is gone, so a serial rebuild succeeds (verified: alpine builds
+# cleanly on its own). A genuinely-broken build still fails here. Serial retries
+# append to the same per-distro log.
+ATTEMPTS="${BASE_BUILD_ATTEMPTS:-2}"
+for d in ${WANT}; do
+  [ "$(cat "/tmp/base-${d}.rc" 2>/dev/null || echo 1)" = 0 ] && continue
+  echo "[base:${d}] pass-1 failed — serial retry (mirror contention now cleared)" >&2
+  for attempt in $(seq 1 "${ATTEMPTS}"); do
+    ( set +e; build_one "$d"; echo $? > "/tmp/base-${d}.rc" ) >>"/tmp/base-${d}.log" 2>&1
+    if [ "$(cat "/tmp/base-${d}.rc" 2>/dev/null || echo 1)" = 0 ]; then
+      echo "[base:${d}] serial retry ${attempt} succeeded" >&2; break
+    fi
+    echo "[base:${d}] serial retry ${attempt}/${ATTEMPTS} failed" >&2
+    [ "${attempt}" -lt "${ATTEMPTS}" ] && sleep 10
+  done
+done
 
 # A secondary distro's failure must NOT block the ubuntu app pipeline. Fail the
 # job only when a CRITICAL distro (default: ubuntu, the app base) failed; other
