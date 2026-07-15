@@ -212,22 +212,31 @@ iterates the manifest filtered by `cadence`.
 
 ## Cadence: schedules
 
-Create two GitLab pipeline schedules (Settings → CI/CD → Schedules), alongside
-the existing GC schedule, each just a schedule variable:
+One GitLab pipeline schedule (Settings → CI/CD → Schedules) does both cadences,
+because they naturally coincide: `0 6,18 * * *` UTC, variable
+`NIX_UPDATE=twice-daily`, **no `NIX_PROFILES`** (so it builds the whole catalog).
+Each run:
 
-1. **Chrome / fast-cadence** — every 12h, variable `NIX_UPDATE=twice-daily`.
-   The `nix-update` job refreshes `cadence=twice-daily` pins (Chrome), exports
-   the bumped `pin.json` as an artifact that `build` consumes, and ships it in
-   the same pipeline. The twice-daily schedule sets `NIX_PROFILES=chrome`, so
-   the run is surgical: when Chrome released, the pin bumps and chrome rebuilds
-   + publishes; when it hasn't, `NIX_EVAL_GATE` (on by default) skips the
-   reinstall and it's a near-noop. ~12h behind Google's stable.
-2. **Browser ref-class advance** — weekly, variable `NIX_UPDATE=weekly` (or just
-   an empty scheduled run). Re-resolves the floating `nixos-unstable` ref; the
-   eval-gate's input key includes the resolved rev, so all browsers on that ref
-   rebuild together (shared glibc, deduped) while base-pinned apps stay warm.
+- `nix-update` refreshes `cadence=twice-daily` pins (Chrome) and hands the bumped
+  `pin.json` to `build` via artifact.
+- `build` re-resolves every profile's ref, so the floating `nixos-unstable` ref
+  advances when its channel moved. `NIX_EVAL_GATE` (on by default) keeps every
+  profile whose input key is unchanged **warm** (no reinstall), so the run only
+  does real work for what actually changed: Chrome when Google released, and the
+  whole `nixos-unstable` set together when that channel advanced (kept on one
+  rev → one glibc). Base-pinned apps stay warm.
+- `publish` push-skips unchanged images; the fat store re-globs all persistent
+  `profile-*` partitions so it stays complete and picks up whatever moved.
 
-Both are ordinary `schedule`-source pipelines (no `NIX_GC`). The `nix-update`
+Why whole-catalog rather than scoping to the browsers: re-resolving
+`nixos-unstable` bumps the shared glibc of **every** unstable-pinned profile
+(browsers + chromium + onlyoffice + the AI CLIs), so they must rebuild *together*
+or the fat store ends up with two unstable glibcs. The `nixos-unstable` channel
+only advances every few days, so most twice-daily runs are eval-gate no-ops;
+the per-run overhead is just image re-assembly (~38s/app at parallel=4, manifest
+ops over already-tarred partitions), not a rebuild.
+
+The schedule is an ordinary `schedule`-source pipeline (no `NIX_GC`). The `nix-update`
 job's audit commit + push (repo reflects what shipped) needs a masked CI
 variable **`NIX_UPDATE_TOKEN`** = a project access token with `write_repository`
 and a role allowed to push the target branch (Maintainer, since `kasm-nix` is
