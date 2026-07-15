@@ -1,0 +1,112 @@
+# kasm-app — AppArmor profile for HARDENED SINGLE-APP workspaces.
+#
+# Use case: a locked-down single-purpose image (e.g. Chrome for Remote
+# Browser Isolation). The user should ONLY be able to use that one app —
+# no terminal, no file manager (that restriction is enforced by the desktop
+# config, not here). This profile's job is the same host-escape hardening
+# as kasm-desktop, PLUS a tighter network posture suited to an app that has
+# no reason to do anything but talk HTTP(S).
+#
+# This is for apps whose sandbox needs only user namespaces (Chrome,
+# Chromium, Edge, Electron). FHS / bubblewrap apps (OnlyOffice, Steam) that
+# ALSO need mount use kasm-app-bwrap instead.
+#
+# See docs/apparmor-how-to.md.
+#
+#   Load on host:  sudo apparmor_parser -r -W src/common/apparmor/kasm-app
+#   Apply:         run_config security_opt: ["apparmor=kasm-app"]
+#
+# VERSION NOTE: `abi <abi/4.0>` and `userns,` need AppArmor >= 4.0
+# (Ubuntu 24.04+). On older hosts delete those two lines and use the host
+# sysctl instead (see the how-to). Load in complain mode first.
+
+abi <abi/4.0>,
+
+#include <tunables/global>
+
+profile kasm-app flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # --- Baseline grants (same shape as kasm-desktop) ---
+  capability,
+  file,
+  signal (send,receive) peer=kasm-app,
+  signal (receive) peer=unconfined,
+  userns,
+  ptrace (trace,read,tracedby,readby) peer=kasm-app,
+
+  # --- Network: allow only what a browser needs, deny the rest ---------
+  # tcp/udp/unix/netlink cover HTTP(S), DNS, local sockets and the desktop
+  # stack. Raw and packet sockets (sniffing, spoofing, custom L2/L3 frames)
+  # have no place in an RBI browser, so they are denied.
+  network inet  stream,
+  network inet  dgram,
+  network inet6 stream,
+  network inet6 dgram,
+  network unix,
+  network netlink,
+  deny network raw,
+  deny network packet,
+
+  # =====================================================================
+  # HOST-ESCAPE HARDENING (identical to kasm-desktop; deny beats allow).
+  # =====================================================================
+  deny mount,
+  deny umount,
+  deny pivot_root,
+
+  deny capability sys_module,
+  deny capability sys_rawio,
+  deny capability sys_boot,
+  deny capability sys_time,
+  deny capability sys_admin,
+  deny capability mac_admin,
+  deny capability mac_override,
+
+  deny /sys/firmware/**        rwklx,
+  deny /sys/kernel/security/** rwklx,
+  deny @{PROC}/sysrq-trigger   rwklx,
+  deny @{PROC}/kcore           rwklx,
+  deny /dev/mem                rwklx,
+  deny /dev/kmem               rwklx,
+  deny /dev/port               rwklx,
+
+  deny @{PROC}/* w,
+  deny @{PROC}/sys/[^k]** w,
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,
+
+  deny /sys/[^f]*/**    wklx,
+  deny /sys/f[^s]*/**   wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+
+  # =====================================================================
+  # OPTIONAL: write-lockdown (read-broad / write-narrow).
+  #
+  # For maximum RBI hardening you can forbid the app from writing anywhere
+  # except the handful of runtime paths the Kasm stack actually uses, so a
+  # compromised renderer cannot tamper with binaries or drop persistence.
+  #
+  # This is COMMENTED OUT because the exact write set is image-specific and
+  # WILL break boot if it is wrong. To adopt it: replace the broad `file,`
+  # grant above with `deny /** w,` + the allow-list below, then run the
+  # image in COMPLAIN mode and add any path that shows up as an
+  # `apparmor="ALLOWED" ... requested_mask` denial. Only flip to enforce
+  # once a full session is clean. See the how-to's "authoring" section.
+  #
+  #   deny /** w,
+  #   owner /home/**            rwk,   # session profile & browser data
+  #   /tmp/**                   rwk,   # X sockets, pulse, container-init trace
+  #   /dev/shm/**               rwk,
+  #   /run/**                   rwk,   # /run/user/<uid>, service sockets
+  #   /var/run/**               rwk,
+  #   /var/log/**               rwk,
+  #   /dockerstartup/**         rwk,   # $STARTUPDIR runtime assets
+  #   /etc/passwd               rw,    # kasm-setup regenerates the user
+  #   /etc/group                rw,
+  #   /etc/shadow               rw,
+  #   /etc/gshadow              rw,
+  #   /etc/subuid               rw,
+  #   /etc/subgid               rw,
+}

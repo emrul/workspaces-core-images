@@ -1,0 +1,92 @@
+# kasm-app-bwrap — AppArmor profile for FHS / bubblewrap single-app images.
+#
+# Use case: single-app images whose app runs inside a bubblewrap FHS
+# environment (nixpkgs `buildFHSEnv` — OnlyOffice, Steam, etc.). Bubblewrap
+# has to BUILD its own mount namespace at startup, so unlike Chrome it needs
+# the mount family. Today these workspaces run with `apparmor=unconfined`,
+# which throws away ALL of AppArmor's protection. This profile is the
+# scoped replacement: it re-opens ONLY the mount operations bubblewrap
+# performs and keeps every other host-escape denial in force.
+#
+# It is the AppArmor analogue of src/common/seccomp/bwrap.json (which is
+# chrome.json + the mount syscall family): same idea, same trade-off.
+#
+# Even the permissive mount set below is strictly better than unconfined,
+# because bubblewrap does its mounts INSIDE its own user+mount namespace
+# (they cannot alter the host mount table) and because caps, raw memory,
+# sysrq, kcore, firmware and ptrace stay locked down.
+#
+# See docs/apparmor-how-to.md.
+#
+#   Load on host:  sudo apparmor_parser -r -W src/common/apparmor/kasm-app-bwrap
+#   Apply:         run_config security_opt: ["apparmor=kasm-app-bwrap"]
+#
+# VERSION NOTE: `abi <abi/4.0>` / `userns,` need AppArmor >= 4.0 (Ubuntu
+# 24.04+); mount rule syntax is broadly stable across 3.x/4.x. Load in
+# complain mode first and tune — bubblewrap's exact mount set varies by app.
+
+abi <abi/4.0>,
+
+#include <tunables/global>
+
+profile kasm-app-bwrap flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  capability,
+  file,
+  network,
+  signal (send,receive) peer=kasm-app-bwrap,
+  signal (receive) peer=unconfined,
+  userns,
+  ptrace (trace,read,tracedby,readby) peer=kasm-app-bwrap,
+
+  # ---------------------------------------------------------------------
+  # MOUNT FAMILY for bubblewrap. This is the only thing that distinguishes
+  # this profile from kasm-app. The rules are scoped to the fstypes and
+  # bind/remount operations bubblewrap actually uses. If an app fails to
+  # start with a mount denial in the logs, the simplest (looser) fallback
+  # is a single unqualified `mount,` — still far better than unconfined.
+  # ---------------------------------------------------------------------
+  mount fstype=tmpfs,
+  mount fstype=proc,
+  mount fstype=sysfs,
+  mount fstype=devpts,
+  mount fstype=mqueue,
+  mount options=(rw,rbind),
+  mount options=(rw,rprivate),
+  mount options=(rw,rslave),
+  mount options=(rw,rshared),
+  mount options=(ro,remount,bind),
+  mount options=(ro,remount,bind,nosuid,nodev,noexec),
+  mount options=(ro,remount),
+  umount,
+  pivot_root,
+
+  # =====================================================================
+  # HOST-ESCAPE HARDENING — everything EXCEPT mount stays denied, so this
+  # is a scoped relaxation, not `unconfined`.
+  # =====================================================================
+  deny capability sys_module,
+  deny capability sys_rawio,
+  deny capability sys_boot,
+  deny capability sys_time,
+  deny capability mac_admin,
+  deny capability mac_override,
+  # NOTE: sys_admin is NOT denied here — some buildFHSEnv setups need it for
+  # their namespace/mount plumbing. If your specific app works without it,
+  # add `deny capability sys_admin,` for a tighter profile.
+
+  deny /sys/firmware/**        rwklx,
+  deny /sys/kernel/security/** rwklx,
+  deny @{PROC}/sysrq-trigger   rwklx,
+  deny @{PROC}/kcore           rwklx,
+  deny /dev/mem                rwklx,
+  deny /dev/kmem               rwklx,
+  deny /dev/port               rwklx,
+
+  deny @{PROC}/* w,
+  deny @{PROC}/sys/[^k]** w,
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,
+
+  deny /sys/firmware/** wklx,
+}

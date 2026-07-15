@@ -1,0 +1,106 @@
+# kasm-desktop — AppArmor profile for Kasm HOSTED DESKTOP workspaces.
+#
+# Use case: a developer runs a full Linux desktop inside the container and
+# is expected to have broad access *inside* it (shells, editors, installing
+# packages, editing files under $HOME). This profile does NOT try to lock
+# down what they do inside the box. Its one job is to make crossing the
+# container boundary to the HOST hard.
+#
+# It is Docker's built-in "docker-default" profile, restated in full so it
+# is self-contained and reviewable, then extended with:
+#   * explicit denials for the classic host-escape primitives, and
+#   * a scoped `userns` grant so in-container browser / Electron sandboxes
+#     keep working on Ubuntu 24.04+ without disabling protection host-wide.
+#
+# See docs/apparmor-how-to.md for what every block does and how to load it.
+#
+#   Load on host:  sudo apparmor_parser -r -W src/common/apparmor/kasm-desktop
+#   Apply:         run_config security_opt: ["apparmor=kasm-desktop"]
+#
+# NOTE ON VERSIONS: the `abi <abi/4.0>` and `userns,` lines require
+# AppArmor >= 4.0 (Ubuntu 24.04+). On older hosts (22.04 / AppArmor 3.x)
+# delete those two lines and instead set the host sysctl
+# `kernel.apparmor_restrict_unprivileged_userns=0` — see the how-to.
+# ALWAYS load this in complain mode first and watch the logs; see the doc.
+
+abi <abi/4.0>,
+
+#include <tunables/global>
+
+profile kasm-desktop flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # ---------------------------------------------------------------------
+  # Broad in-container access. A desktop needs it; the boundary is the host,
+  # not the box. `file` = all file access, `network` = all sockets (raw
+  # sockets are narrowed only in the single-app profile), `capability` =
+  # use of any capability the container was granted (the real cap limit is
+  # set by --cap-drop at run time, NOT here).
+  # ---------------------------------------------------------------------
+  network,
+  capability,
+  file,
+
+  # Signals: talk freely to our own processes; accept signals from the
+  # (unconfined) container runtime so `docker stop` can reach PID 1.
+  signal (send,receive) peer=kasm-desktop,
+  signal (receive) peer=unconfined,
+
+  # Let in-container browser / Electron / bubblewrap sandboxes create their
+  # own user namespaces. This is the SURGICAL alternative to setting
+  # `kernel.apparmor_restrict_unprivileged_userns=0` host-wide: only
+  # workspaces running under this profile get the privilege.
+  userns,
+
+  # Debugging (ps, gdb, browser crash handlers) is allowed WITHIN the
+  # container only — never tracing the host or another container.
+  ptrace (trace,read,tracedby,readby) peer=kasm-desktop,
+
+  # =====================================================================
+  # HOST-ESCAPE HARDENING.  In AppArmor a `deny` ALWAYS beats an `allow`,
+  # regardless of order, so these carve holes out of the broad grants above.
+  # =====================================================================
+
+  # No mounting. bind / remount / pivot_root are the standard way to break
+  # out of a container filesystem, and the core Kasm stack never mounts
+  # anything (verified: container-init and its units make no mount calls).
+  # FHS single-app workspaces that genuinely need mount use the separate
+  # kasm-app-bwrap profile, not this one.
+  deny mount,
+  deny umount,
+  deny pivot_root,
+
+  # Capabilities that have no legitimate use from a workspace and are prime
+  # escalation tools. (Kept: chown/setuid/setgid/dac_override etc. that
+  # container-init needs for per-session identity setup.)
+  deny capability sys_module,      # load/unload kernel modules
+  deny capability sys_rawio,       # raw port / iopl / ioperm
+  deny capability sys_boot,        # reboot / kexec
+  deny capability sys_time,        # set the host clock
+  deny capability sys_admin,       # the "god" cap — mount, setns, etc.
+  deny capability mac_admin,       # change AppArmor/SELinux policy
+  deny capability mac_override,    # bypass MAC policy
+
+  # Raw kernel / memory / firmware interfaces.
+  deny /sys/firmware/**            rwklx,
+  deny /sys/kernel/security/**     rwklx,
+  deny @{PROC}/sysrq-trigger       rwklx,
+  deny @{PROC}/kcore               rwklx,
+  deny /dev/mem                    rwklx,
+  deny /dev/kmem                   rwklx,
+  deny /dev/port                   rwklx,
+
+  # /proc write-hardening (from docker-default): reads are fine, but block
+  # writes to everything except a process's own tree and the shm* knobs.
+  deny @{PROC}/* w,
+  deny @{PROC}/sys/[^k]** w,
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,
+
+  # sysfs / cgroup write-hardening (from docker-default): block writes to
+  # everything under /sys except the cgroup tree the runtime manages.
+  deny /sys/[^f]*/**    wklx,
+  deny /sys/f[^s]*/**   wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+}

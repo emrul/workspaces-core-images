@@ -92,11 +92,14 @@ unprivileged userns creation even when the seccomp filter would allow
 it. Two options:
 
 1. Disable the restriction host-wide:
-   `sysctl kernel.apparmor_restrict_unprivileged_userns=0`
-2. Run the container with an AppArmor profile that grants
-   `userns,` — pass `--security-opt apparmor=unconfined` or ship a
-   custom profile. `unconfined` is fine here because seccomp is doing
-   the heavy lifting.
+   `sysctl kernel.apparmor_restrict_unprivileged_userns=0` (blunt — turns
+   it off for *every* process on the host).
+2. **Preferred:** run the container under an AppArmor profile that grants
+   `userns,` to that workspace only, leaving the host restriction on for
+   everything else. Ship one of `src/common/apparmor/{kasm-desktop,
+   kasm-app,kasm-app-bwrap}` — see [`apparmor-how-to.md`](apparmor-how-to.md).
+   `--security-opt apparmor=unconfined` also works (seccomp does the heavy
+   lifting) but drops AppArmor entirely; prefer the scoped profile.
 
 This applies equally to Docker, Podman, and Kubernetes (via crio /
 containerd) on affected hosts.
@@ -190,7 +193,9 @@ image. Set it to:
 }
 ```
 
-Add `"apparmor=unconfined"` to the array on Ubuntu 24.04+ hosts.
+On Ubuntu 24.04+ hosts also add an AppArmor entry to the array — prefer a
+scoped profile (`"apparmor=kasm-app"`, loaded per `apparmor-how-to.md`) over
+`"apparmor=unconfined"`, which drops AppArmor entirely.
 Downstream `workspaces-images` (the Chrome / Edge / Brave single-app
 images) should then drop their `--no-sandbox` launch arg — handle that
 in the workspaces-images repo, not here.

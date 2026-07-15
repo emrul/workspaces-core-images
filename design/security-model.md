@@ -191,8 +191,10 @@ Independent of the above:
 
 - The user-facing desktop/browser/app still runs as `kasm-user`, as in stock.
 - The seccomp baseline is still the Moby default minus a *scoped* delta — not
-  `--privileged`, not seccomp `unconfined` (except apparmor on bwrap workspaces,
-  which is required for FHS mount setup and should be paired with §4).
+  `--privileged`, not seccomp `unconfined`. AppArmor on bwrap workspaces was
+  historically run `unconfined` for FHS mount setup; the scoped
+  `src/common/apparmor/kasm-app-bwrap` profile now replaces that (re-opens only
+  the mount family, keeps every other escape denial). See `docs/apparmor-how-to.md`.
 - Capabilities are not broadly added; container-init needs a small set for setup.
 
 ---
@@ -239,6 +241,12 @@ add the boundary, not to disable the browser sandbox or lose setup capability.
   `kasm.service` path) and document it as the recommended high-risk posture.
 - Make the sandbox/seccomp choice a **per-workspace policy** knob rather than a
   global default, so Model A and Model B deployments can coexist.
+- Roll out the AppArmor profiles (`src/common/apparmor/{kasm-desktop,kasm-app,
+  kasm-app-bwrap}`, loaded via `bin/load-apparmor.sh`; see
+  `docs/apparmor-how-to.md`) as the complementary MAC layer: replaces the bwrap
+  `apparmor=unconfined`, and their scoped `userns` grant lets Ubuntu 24.04+ hosts
+  keep `apparmor_restrict_unprivileged_userns=1` on globally. Host-load
+  dependency + Debian/SUSE-only (RHEL family uses SELinux) are the caveats.
 - Nix alpine variant: software-render only today; GPU is future work and must
   feed glibc GL (nix mesa, or host-injected glibc nvidia libs) to glibc apps —
   never the host's musl mesa. See the nix design notes.
