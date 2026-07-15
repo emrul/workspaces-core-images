@@ -523,6 +523,11 @@ fi
 # successes. Failures are summarised at the end and written to failed.txt.
 : > "${STAGE_IN}/built.txt"
 : > "${STAGE_IN}/failed.txt"
+# changed.txt: profiles actually (re)built this run — i.e. NOT eval-gate-skipped.
+# On a full build this lets crane assemble per-app images only for what changed
+# (unchanged apps keep their already-published image; publish push-skips them on
+# store-path regardless). See design/nix-self-hosted-packages.md.
+: > "${STAGE_IN}/changed.txt"
 while IFS= read -r p; do
   [ -z "$p" ] && continue
   p_ref_orig="$(jq -r --arg p "$p" '.profiles[$p].ref // empty' \
@@ -558,7 +563,7 @@ while IFS= read -r p; do
     if [ -n "$p_prevkey" ] && [ "$p_key" = "$p_prevkey" ]; then
       echo "  [eval-gate] $p unchanged (inputKey match) — keeping warm profile, skipping reinstall" >&2
       ln -sfn "${KASM_PROFILE_DIR}/$p" "${KASM_GCROOT_DIR}/$p"
-      echo "$p" >> "${STAGE_IN}/built.txt"
+      echo "$p" >> "${STAGE_IN}/built.txt"   # (deliberately NOT in changed.txt)
       p_sp="$(readlink -f "${KASM_PROFILE_DIR}/$p" 2>/dev/null || true)"
       p_ver="$(jq -r --arg a "$p" '.apps[$a].version // ""' \
                  "${OUTPUT_IN}/labels.prev.json" 2>/dev/null || true)"
@@ -580,6 +585,7 @@ while IFS= read -r p; do
            profile install --impure $P_OVERRIDE --profile "${KASM_PROFILE_DIR}/$p"; then
     ln -sfn "${KASM_PROFILE_DIR}/$p" "${KASM_GCROOT_DIR}/$p"
     echo "$p" >> "${STAGE_IN}/built.txt"
+    echo "$p" >> "${STAGE_IN}/changed.txt"   # (re)built this run → needs assembly
     # Provenance for the per-app image label: the profile's realized store path
     # is content-addressed over the WHOLE app closure (changes iff anything in
     # the app changes); version is best-effort from the profile's first pkg.
@@ -1048,6 +1054,13 @@ if [ "${EMIT_APP_IMAGES:-0}" = "1" ]; then
 
   # App list for the outer build loop (profiles that have a staged Dockerfile).
   cp "${STAGE_IN}/selected.txt" "${STAGE_IN}/layers/apps.txt"
+  # On a FULL build, also surface the changed-apps list so crane can assemble only
+  # per-app images that actually changed. Deliberately NOT for subset builds:
+  # those already scope to their (few) apps, and a subset that changed only an
+  # app's wiring must still re-assemble it — so they fall back to apps.txt.
+  if [ -z "${ONLY_PROFILES:-}" ]; then
+    cp "${STAGE_IN}/changed.txt" "${STAGE_IN}/layers/changed.txt"
+  fi
 fi
 
 # ── 12. prune stale gcroots + GC unreachable store paths ──────────────
@@ -1187,6 +1200,10 @@ asm_env=(
   "STAGING=${STAGING}" "REPO_ROOT=${REPO_ROOT}"
   "FAT_TAG=${TAG}" "APP_REPO=${APP_REPO}" "APP_TAG=${APP_TAG}"
   "CONTAINER_CLI=${CONTAINER_CLI}" "ARCH=${ARCH}" "BUILD_PARALLEL=${BUILD_PARALLEL:-}"
+  # When the eval-gate is on, let crane assemble only the per-app images that
+  # changed this run (STAGING/changed.txt, written on full builds). The fat store
+  # is always assembled in full. Unchanged apps keep their published image.
+  "CHANGED_ONLY=${NIX_EVAL_GATE:-0}"
 )
 [[ "${EMIT_APP_IMAGES}" == 1 ]] && asm_env+=( "APP_BASE_IMAGE=${APP_BASE_IMAGE}" )
 [[ -n "${PUSH_REGISTRY}" ]] && asm_env+=( "PUSH_REGISTRY=${PUSH_REGISTRY}" )

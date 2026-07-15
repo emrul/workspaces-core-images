@@ -145,6 +145,16 @@ log "fat store ready: ${FAT_TAG}"
 # only tars its own meta+wiring and references existing blobs. crane dedups at
 # push (unchanged blobs = "existing blob", no re-upload) → automatic gating.
 mapfile -t apps < <(grep -v '^$' "${STAGING}/apps.txt" 2>/dev/null || true)
+# CHANGED_ONLY (eval-gate): assemble per-app images only for profiles that were
+# actually (re)built this run — unchanged apps keep their already-published image
+# (publish push-skips them on store-path anyway), so re-assembling them is wasted
+# work. The fat store above is unaffected (it globs ALL persistent store
+# partitions, so it stays complete). changed.txt is written only on full builds;
+# ONLY_APPS still overrides. See design/nix-self-hosted-packages.md.
+if [[ "${CHANGED_ONLY:-0}" == "1" && -f "${STAGING}/changed.txt" ]]; then
+  mapfile -t apps < <(grep -v '^$' "${STAGING}/changed.txt" 2>/dev/null || true)
+  log "CHANGED_ONLY: ${#apps[@]} changed app(s) to assemble (unchanged apps keep their published image)"
+fi
 [[ -n "${ONLY_APPS:-}" ]] && apps=( ${ONLY_APPS} )
 RESULTS="${STAGING}/.crane-results"; rm -rf "${RESULTS}"; mkdir -p "${RESULTS}"
 

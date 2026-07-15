@@ -196,19 +196,59 @@ iterates the manifest filtered by `cadence`.
   pin bump rebuilds only that app), and `bin/nix-kasm-overlay/{flake.*,overlay.nix,lib/*}`
   → whole catalog (shared overlay machinery changed).
 
-- **Eval-gate** (new, `NIX_EVAL_GATE=1`): a pre-pass before the install loop.
-  For each selected profile, `nix eval` every pkg's `.outPath` (with the same
-  `--override-input` for overlay pkgs), sort, hash → `pkgHash`. Compare to
-  `apps[p].pkgHash` in `labels.prev.json`. If equal, the profile is unchanged —
-  drop it from `selected.txt` so it is not re-realized or re-assembled. `pkgHash`
-  is added to the label schema (`APPLABELS` ~line 514 and `labels.json` ~line
-  746). Missing `pkgHash` (first run after deploy) ⇒ treat as changed (safe).
-  Rationale: `nix eval outPath` is evaluation-only (seconds, no realize); it
-  replaces a full `profile install` (evaluate closure + substitute) for every
-  unchanged app, which is the bulk of a scheduled full build's cost. The
-  publish-side push-skip (registry `store-path` label compare in
-  `nix-publish.sh:classify`) remains the backstop against build-vs-published
-  drift.
+- **Eval-gate** (`NIX_EVAL_GATE=1`, on by default): see the next section.
+
+## Build decision flow: four independent gating layers
+
+A build does the minimum work by filtering at four points. Each layer is
+fail-safe (any uncertainty → do the work), and the layers compose so that a
+scheduled full build where nothing moved is a near-noop, while a real change
+flows all the way to a published image.
+
+1. **Change-gate — *which profiles enter the build*** (`ci-scripts/nix-changed-profiles.sh`, CI `prepare`).
+   Maps the git diff → `NIX_PROFILES`: a shared/base file or a `schedule` run →
+   whole catalog (`""`); an app's `src/ubuntu/install/nix/<app>/` or overlay
+   `pkgs/<app>/` dir → just that app; docs/CI-only → `__none__` (skip). This is
+   about *files that changed in the repo*, not upstream versions.
+
+2. **Eval-gate — *which selected profiles get reinstalled*** (`build-nix-store-volume`, `NIX_EVAL_GATE=1`).
+   A profile's store path is a pure function of its inputs, so before reinstalling
+   we compute a cheap **input key** = `sha256(resolved-rev + sorted pkg attrs +
+   hash of any overlay sources it references)` — **no `nix eval`/realize**. If it
+   matches the previous build's key (`apps[p].inputKey` in
+   `/output/labels.prev.json`) *and* the warm profile still exists, the store path
+   is provably identical: we **keep the warm profile and skip the reinstall**, but
+   the profile stays in `selected.txt` so its closure/partition are still captured
+   and the fat store stays complete. Fail-safe: unresolved rev, missing prior key,
+   or missing warm profile → reinstall. The resolved rev is what makes a
+   `nixos-unstable` advance flow through — when that channel moves, every
+   unstable-pinned profile's key changes and they all rebuild together (one glibc).
+   Missing `inputKey` (first run after deploy) → everything rebuilds once.
+
+3. **Assembly-gate — *which per-app images get re-assembled*** (`nix-crane-assemble`, `CHANGED_ONLY=1`).
+   Reinstalling is skipped for unchanged apps, but assembling their OCI image
+   would still be wasted CPU. On a **full** build the eval-gate writes
+   `changed.txt` (profiles actually (re)built, i.e. not gate-skipped); crane then
+   assembles per-app images only for those. The **fat store is always assembled in
+   full** (it globs every persistent `profile-*` partition, so it can never go
+   partial). Only enabled for full builds — a subset build already scopes to its
+   few apps, and a subset that changed only an app's *wiring* must re-assemble it,
+   so those fall back to `apps.txt`. Safe because layer 4 already skips unchanged
+   apps at publish on store-path — so skipping their assembly changes nothing
+   observable, it just avoids the work.
+
+4. **Publish-gate — *which images get pushed*** (`ci-scripts/nix-publish.sh`).
+   For each local per-app image, compares this build's `dev.kasm.nix.store-path`
+   label to the one already in the registry (via `skopeo`, no pull); identical →
+   **skip the push**. The fat store always pushes (its content changes whenever
+   any app does; gating it would reopen the dedup gap — see `nix-dedup-gap.md`).
+
+Net effect on the **twice-daily schedule**: change-gate says "whole catalog" (it's
+a schedule); the eval-gate keeps every profile warm whose rev+attrs+pins are
+unchanged; the assembly-gate assembles only the handful that moved (often zero);
+the publish-gate pushes only those. A Chrome release moves the pin → chrome flows
+through all four. A `nixos-unstable` advance moves the shared rev → the whole
+unstable set flows through together. A quiet run touches only the fat store.
 
 ## Cadence: schedules
 
@@ -252,10 +292,12 @@ uses `-o ci.skip` so it never triggers a redundant pipeline.
 2. **Overlay skeleton + Chrome** (Kind A reference): `bin/nix-kasm-overlay/`
    with `pkgs/chrome`, wired into `nix-profiles.toml` + the install loop +
    the overlay mount.
-3. **Eval-gate** in `build-nix-store-volume` (`NIX_EVAL_GATE=1`).
+3. **Eval-gate** in `build-nix-store-volume` (`NIX_EVAL_GATE=1`, now on by default).
 4. **Chrome updater** + supply-chain check.
 5. **CI schedules** + change-gate rules for the overlay tree.
-6. *(Later)* first **Kind B** app to prove the not-in-nixpkgs path end-to-end.
+6. **Assembly-gate** (`CHANGED_ONLY`) — crane assembles only changed per-app
+   images on full builds (fat store always full). See the flow section above.
+7. *(Later)* first **Kind B** app to prove the not-in-nixpkgs path end-to-end.
 
 Each step is independently testable; Chrome earns its keep immediately.
 
