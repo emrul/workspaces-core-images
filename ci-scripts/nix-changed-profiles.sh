@@ -68,7 +68,17 @@ while IFS= read -r f; do
     src/ubuntu/install/nix/*/*)
       a="${f#src/ubuntu/install/nix/}"; a="${a%%/*}"
       case "${a}" in scripts|units) all=1; BASE_AFFECTED=1 ;; *) apps="${apps} ${a}" ;; esac ;;
-    # Everything else (docs, .gitlab-ci.yml, other ci-scripts) — not image content.
+    # Self-hosted overlay (bin/nix-kasm-overlay). Shared machinery affects every
+    # overlay-backed app → whole catalog; a per-app dir (pin.json/package.nix)
+    # rebuilds only that app (dir name == profile name). The updater/manifest/docs
+    # are not image content. See design/nix-self-hosted-packages.md.
+    bin/nix-kasm-overlay/flake.nix|bin/nix-kasm-overlay/flake.lock|\
+    bin/nix-kasm-overlay/overlay.nix|bin/nix-kasm-overlay/lib/*)
+      all=1 ;;
+    bin/nix-kasm-overlay/pkgs/*/*)
+      a="${f#bin/nix-kasm-overlay/pkgs/}"; a="${a%%/*}"; apps="${apps} ${a}" ;;
+    # Everything else (docs, .gitlab-ci.yml, other ci-scripts, the updater,
+    # overlay manifest/README) — not image content.
     *) : ;;
   esac
 done <<EOF

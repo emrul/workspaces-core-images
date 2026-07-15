@@ -44,6 +44,12 @@ variables:
   DIND_IMG: "quay.io/podman/stable"
   GIT_SUBMODULE_STRATEGY: normal
   NIX_GC: ""                # set to "1" on a scheduled pipeline → run only `gc`
+  NIX_UPDATE: ""            # set to a cadence (twice-daily|weekly) on a schedule
+                            # → run bin/nix-kasm-update first to refresh self-hosted
+                            # pins (Chrome, …). See design/nix-self-hosted-packages.md.
+  NIX_EVAL_GATE: ""         # "1" → build keeps warm (skips reinstalling) profiles
+                            # whose inputs are unchanged since the last build. Auto-
+                            # enabled on scheduled builds; fail-safe + opt-in elsewhere.
 
 default:
   tags: [nix-builder]
@@ -75,6 +81,48 @@ prepare:
   artifacts:
     reports:
       dotenv: build.env
+
+# ── nix-update: refresh self-hosted package pins (scheduled) ────────────────
+# Runs ONLY when a schedule sets NIX_UPDATE=<cadence>. Bumps the pins for
+# matching apps (e.g. Chrome from Google's stable channel, ~12h behind release),
+# verifies provenance, and exports the updated pin.json files as artifacts. The
+# same pipeline's `build` job consumes those artifacts (needs: → restored into
+# its workspace, robust against the shell executor re-checking-out CI_COMMIT_SHA)
+# and ships the bump; on a schedule the whole catalog is "built" but NIX_EVAL_GATE
+# keeps unchanged apps warm, so only the bumped app actually rebuilds.
+#
+# The git commit + push is a best-effort AUDIT TRAIL so the repo reflects what
+# shipped; it uses `-o ci.skip` to avoid triggering a redundant pipeline and is
+# skipped (with a warning) when NIX_UPDATE_TOKEN (a write-repo token) is unset.
+# See design/nix-self-hosted-packages.md.
+nix-update:
+  stage: prepare
+  needs: []
+  rules:
+    - if: '$NIX_UPDATE == ""'
+      when: never
+    - when: on_success
+  script:
+    - |
+      set -euo pipefail
+      git config user.email "nix-ci@kasmweb.com"
+      git config user.name  "kasm-nix-bot"
+      before="$(git rev-parse HEAD)"
+      bash bin/nix-kasm-update --cadence "$NIX_UPDATE" --commit --date "$(date -u +%F)"
+      after="$(git rev-parse HEAD)"
+      if [ "$before" = "$after" ]; then
+        echo "no pin changes"
+      elif [ -n "${NIX_UPDATE_TOKEN:-}" ]; then
+        git remote set-url --push origin "https://oauth2:${NIX_UPDATE_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+        git push -o ci.skip origin "HEAD:${CI_COMMIT_REF_NAME}" && echo "pushed pin audit commit(s)"
+      else
+        echo "WARNING: NIX_UPDATE_TOKEN unset — pin bump is in the build artifacts but NOT pushed to git (no audit trail)."
+      fi
+  artifacts:
+    when: on_success
+    expire_in: 30 days
+    paths:
+      - bin/nix-kasm-overlay/pkgs/*/pin.json
 
 # ── gc: bound the persistent podman store (scheduled). Runs ONLY when a
 # pipeline schedule sets NIX_GC=1 — the build/publish jobs skip on that run.
@@ -130,23 +178,32 @@ base-alpine:
 # ── build: fat store + per-app images (parallel) ────────────────────────────
 build:
   stage: build
-  needs: [prepare]
+  # Optional dependency on nix-update: when a schedule bumped a pin, its updated
+  # pin.json artifacts are restored into this job's workspace before the build,
+  # so the bump ships even though the shell executor re-checks-out CI_COMMIT_SHA.
+  needs:
+    - prepare
+    - job: nix-update
+      optional: true
   timeout: 4h
   rules:
     - if: '$NIX_GC == "1"'
       when: never
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'   # scheduled full builds → cheap
+      variables:
+        NIX_EVAL_GATE: "1"
     - when: on_success
   script:
     - |
       if [ "${NIX_PROFILES:-}" = "__none__" ]; then echo "no image-relevant changes — skipping build"; exit 0; fi
-      echo "building profiles: ${NIX_PROFILES:-<all>}  (per-app parallel=${BUILD_PARALLEL})"
+      echo "building profiles: ${NIX_PROFILES:-<all>}  (per-app parallel=${BUILD_PARALLEL}, eval-gate=${NIX_EVAL_GATE:-0})"
       bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/root/.cache/nix-build-output" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e PROFILES="$NIX_PROFILES" -e BUILD_PARALLEL="$BUILD_PARALLEL" \
         -e NIX_BASE_AFFECTED="$NIX_BASE_AFFECTED" -e CI_COMMIT_SHA="$CI_COMMIT_SHA" \
-        -e ALLOW_STALE_BASE="$ALLOW_STALE_BASE" \
+        -e ALLOW_STALE_BASE="$ALLOW_STALE_BASE" -e NIX_EVAL_GATE="$NIX_EVAL_GATE" \
         -e DISK_MIN_GB="$DISK_MIN_GB" -e NIX_STAGE_CAP_G="$NIX_STAGE_CAP_G" \
         "$DIND_IMG" /work/runs/nix-portal/dind-build.sh
 

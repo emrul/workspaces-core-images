@@ -83,6 +83,14 @@ build-nix-store-volume — build a Nix-store OCI image
                        <REPO>-store/<profile>:<tag>).
   -h, --help           This text
 
+Environment:
+  NIX_EVAL_GATE=1      Skip reinstalling profiles whose inputs (resolved rev +
+                       pkg attrs + overlay sources) are byte-identical to the
+                       previous build, keeping the warm profile instead. Cheap,
+                       fail-safe, opt-in. Needs a persistent staging volume +
+                       /output/labels.prev.json from a prior build to have any
+                       effect. See design/nix-self-hosted-packages.md.
+
 Host requirements: podman (preferred) OR docker. That's it.
 Staging volume: podman volume nix-build-stage-<arch> (cached).
 Tear down with:  ${0##*/} --prune-stage   or
@@ -333,7 +341,7 @@ DEFAULT_REF="$(jq -r '.nixpkgs.ref' "${STAGE_IN}/profiles.json")"
 # volume's profiles (nix profile install appends → "already provides" errors);
 # every profile is therefore reset before install (reset_profile below).
 REFMAP="${STAGE_IN}/refmap.tsv"        # cache: <orig-ref>\t<rev>
-APPLABELS="${STAGE_IN}/applabels.tsv"  # per-app: name\tref\trev\tstorepath\tversion
+APPLABELS="${STAGE_IN}/applabels.tsv"  # per-app: name\tref\trev\tstorepath\tversion\tinputKey
 : > "${REFMAP}"
 : > "${APPLABELS}"
 
@@ -406,6 +414,43 @@ collect_attrs() {
     [ -z "$a" ] && continue
     rewrite_attr "$a" "$ref"
   done
+}
+
+# gate_input_key <profile> <resolved-rev> — cheap "did anything change" key for
+# the eval-gate (NIX_EVAL_GATE=1). A profile's store path is a pure function of
+# the inputs that build it: the resolved nixpkgs rev + the profile's pkg attrs +
+# (for self-hosted overlay pkgs) the overlay sources (pin.json, package.nix,
+# shared machinery). If all three are byte-identical to the previous build, the
+# derivation is byte-identical by Nix purity — so we can keep the warm profile
+# and skip the reinstall WITHOUT a nix eval. Prints empty (⇒ caller treats the
+# profile as changed and rebuilds) whenever anything is uncertain: unresolved
+# rev, missing sha256sum, or an overlay whose sources can't be hashed.
+# See design/nix-self-hosted-packages.md.
+gate_input_key() {
+  _gp="$1"; _grev="$2"
+  [ -n "${_grev}" ] || { printf ''; return 0; }
+  command -v sha256sum >/dev/null 2>&1 || { printf ''; return 0; }
+  _gattrs="$(jq -r --arg p "$_gp" '.profiles[$p].pkgs[]' \
+               "${STAGE_IN}/profiles.json" 2>/dev/null | sort)"
+  _govl=""
+  if printf '%s\n' "${_gattrs}" | grep -q '^path:/config/kasm-overlay'; then
+    _govl="$( { for _a in ${_gattrs}; do
+                  case "${_a}" in
+                    path:/config/kasm-overlay#*)
+                      _app="${_a#path:/config/kasm-overlay#}"
+                      find "/config/kasm-overlay/pkgs/${_app}" -type f 2>/dev/null ;;
+                  esac
+                done
+                # shared overlay machinery (flake.nix, overlay.nix, lib/*.nix, lock)
+                find /config/kasm-overlay -maxdepth 2 \
+                     \( -name '*.nix' -o -name 'flake.lock' \) 2>/dev/null
+              } | sort -u | xargs sha256sum 2>/dev/null | awk '{print $1}' | sort \
+              | sha256sum | awk '{print $1}' )"
+    # Overlay in play but its sources couldn't be hashed → don't risk a stale skip.
+    [ -n "${_govl}" ] || { printf ''; return 0; }
+  fi
+  printf '%s\n%s\n%s\n' "${_grev}" "${_gattrs}" "${_govl}" \
+    | sha256sum | awk '{print $1}'
 }
 
 # ── 3. bootstrap profile (bundled nix CLI) ─────────────────────────────
@@ -486,6 +531,42 @@ while IFS= read -r p; do
   p_rev="$(resolve_rev "$p_ref_orig")"
   p_ref="$(pin_ref "$p_ref_orig")"      # install against the concrete commit
   echo "  ($p uses ref $p_ref_orig @ ${p_rev:-<unresolved>})" >&2
+  p_pkgs="$(collect_attrs ".profiles.\"$p\".pkgs[]" "$p_ref")"
+  # Self-hosted overlay packages (path:/config/kasm-overlay#…) carry their own
+  # nixpkgs input. Override it to the profile's resolved rev so the app builds
+  # against the SAME nixpkgs as its ref-class peers — one glibc, full store dedup
+  # (no manual flake.lock re-pin, unlike gpu/steam overlays). Unset when the ref
+  # is unresolvable (offline) — the overlay's committed default then applies.
+  # See design/nix-self-hosted-packages.md.
+  P_OVERRIDE=""
+  if printf '%s\n' "$p_pkgs" | grep -q '^path:/config/kasm-overlay' && [ -n "$p_ref" ]; then
+    P_OVERRIDE="--override-input nixpkgs $p_ref"
+    echo "  ($p uses kasm-overlay → --override-input nixpkgs $p_ref)" >&2
+  fi
+  # eval-gate (NIX_EVAL_GATE=1): if this profile's input key is byte-identical to
+  # the previous build's (same rev + attrs + overlay sources) AND the warm profile
+  # from that build is still present, its store path is provably unchanged — keep
+  # the warm profile and skip the reinstall (the dominant cost of a full rebuild
+  # when nothing changed). The profile stays in selected.txt so the fat store
+  # remains complete and its label/closure are captured normally. Fail-safe: an
+  # empty key, missing prev label, or missing warm profile → fall through and
+  # rebuild. See design/nix-self-hosted-packages.md.
+  p_key="$(gate_input_key "$p" "$p_rev")"
+  if [ "${NIX_EVAL_GATE:-0}" = "1" ] && [ -n "$p_key" ] && [ -e "${KASM_PROFILE_DIR}/$p" ]; then
+    p_prevkey="$(jq -r --arg a "$p" '.apps[$a].inputKey // ""' \
+                   "${OUTPUT_IN}/labels.prev.json" 2>/dev/null || true)"
+    if [ -n "$p_prevkey" ] && [ "$p_key" = "$p_prevkey" ]; then
+      echo "  [eval-gate] $p unchanged (inputKey match) — keeping warm profile, skipping reinstall" >&2
+      ln -sfn "${KASM_PROFILE_DIR}/$p" "${KASM_GCROOT_DIR}/$p"
+      echo "$p" >> "${STAGE_IN}/built.txt"
+      p_sp="$(readlink -f "${KASM_PROFILE_DIR}/$p" 2>/dev/null || true)"
+      p_ver="$(jq -r --arg a "$p" '.apps[$a].version // ""' \
+                 "${OUTPUT_IN}/labels.prev.json" 2>/dev/null || true)"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$p" "$p_ref_orig" "$p_rev" "$p_sp" "$p_ver" "$p_key" >> "${APPLABELS}"
+      continue
+    fi
+  fi
   # Reset the profile each run (same rationale as _gpu above): when a profile's
   # pkg set changes on the warm staging volume — swapping nixpkgs#steam for
   # path:…#steam-vgl, an onlyoffice ref bump, etc. — `nix profile install` appends
@@ -494,9 +575,9 @@ while IFS= read -r p; do
   # store (closures are cached), so rebuilding it fresh is safe and avoids the
   # collision.
   reset_profile "$p"
-  if collect_attrs ".profiles.\"$p\".pkgs[]" "$p_ref" \
+  if printf '%s\n' "$p_pkgs" \
        | xargs nix --extra-experimental-features 'nix-command flakes' \
-           profile install --impure --profile "${KASM_PROFILE_DIR}/$p"; then
+           profile install --impure $P_OVERRIDE --profile "${KASM_PROFILE_DIR}/$p"; then
     ln -sfn "${KASM_PROFILE_DIR}/$p" "${KASM_GCROOT_DIR}/$p"
     echo "$p" >> "${STAGE_IN}/built.txt"
     # Provenance for the per-app image label: the profile's realized store path
@@ -510,9 +591,15 @@ while IFS= read -r p; do
       nixpkgs#*) p_ver="$(nix --extra-experimental-features 'nix-command flakes' \
                             eval --raw "$(rewrite_attr "$p_first" "$p_ref").version" \
                             2>/dev/null || true)" ;;
+      path:/config/kasm-overlay#*)
+                 # Self-hosted overlay pkg: eval against the same overridden
+                 # nixpkgs the install used, so the version reflects the pin.
+                 p_ver="$(nix --extra-experimental-features 'nix-command flakes' \
+                            eval --raw --impure $P_OVERRIDE "${p_first}.version" \
+                            2>/dev/null || true)" ;;
     esac
-    printf '%s\t%s\t%s\t%s\t%s\n' \
-      "$p" "$p_ref_orig" "$p_rev" "$p_sp" "$p_ver" >> "${APPLABELS}"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$p" "$p_ref_orig" "$p_rev" "$p_sp" "$p_ver" "$p_key" >> "${APPLABELS}"
   else
     echo "[inner] WARN profile install FAILED: $p — skipping (catalog continues)" >&2
     echo "$p" >> "${STAGE_IN}/failed.txt"
@@ -743,7 +830,8 @@ jq '
 apps_json="$(jq -R -s '
     split("\n") | map(select(length > 0) | split("\t"))
     | map({key: .[0], value: {
-        ref: .[1], rev: .[2], storePath: .[3], version: (.[4] // "")
+        ref: .[1], rev: .[2], storePath: .[3], version: (.[4] // ""),
+        inputKey: (.[5] // "")
       }}) | from_entries
   ' "${APPLABELS}")"
 jq -n \
@@ -1053,6 +1141,7 @@ inner_run_args=(
     -e "APP_REPO=${APP_REPO}"
     -e "APP_TAG=${APP_TAG}"
     -e "APP_BASE_REF=${APP_BASE_IMAGE}"
+    -e "NIX_EVAL_GATE=${NIX_EVAL_GATE:-0}"
 )
 # Mount the GPU overlay flake (trimmed VirtualGL) so a [gpu] profile entry can
 # reference it as `path:/config/gpu-overlay#…`. Pinned to the same nixpkgs rev as
@@ -1067,6 +1156,13 @@ inner_run_args=(
 # faker's glibc matches the FHS. Optional: absent dir → not mounted.
 [[ -d "${SCRIPT_DIR}/nix-steam-overlay" ]] && \
   inner_run_args+=( --volume "${SCRIPT_DIR}/nix-steam-overlay:/config/steam-overlay:ro" )
+# Mount the self-hosted package overlay (Chrome, and apps not in nixpkgs),
+# referenced by profiles as `path:/config/kasm-overlay#<app>`. Unlike the gpu/
+# steam overlays, its nixpkgs input is overridden per-profile at install time
+# (--override-input, see the install loop), so it never needs a manual flake.lock
+# re-pin. Optional: absent dir → not mounted. See design/nix-self-hosted-packages.md.
+[[ -d "${SCRIPT_DIR}/nix-kasm-overlay" ]] && \
+  inner_run_args+=( --volume "${SCRIPT_DIR}/nix-kasm-overlay:/config/kasm-overlay:ro" )
 inner_run_args+=( --entrypoint /bin/sh "${NIX_IMAGE_DEFAULT}" /inner-build.sh )
 
 "${CONTAINER_CLI}" "${inner_run_args[@]}"

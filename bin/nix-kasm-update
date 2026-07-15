@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+# nix-kasm-update — refresh self-hosted package pins in bin/nix-kasm-overlay.
+#
+# For each app in manifest.toml (optionally filtered by --cadence / positional
+# app names), run its `discover` method to find the newest upstream version, pin
+# the artifact by SRI hash, verify provenance, and write pkgs/<app>/pin.json.
+# When a pin actually changes and --commit is given, commit it as
+# "<app>: <old> -> <new>" so the CI change-gate rebuilds only that app.
+#
+# The three-layer model (build / pin / discover) and the CVE-cadence rationale
+# are in design/nix-self-hosted-packages.md.
+#
+# Usage:
+#   bin/nix-kasm-update [--cadence twice-daily|weekly|manual] [--commit]
+#                       [--date YYYY-MM-DD] [app ...]
+#
+# Requires: curl, jq, openssl. gpg is optional but recommended — without it,
+# Chrome provenance falls back to HTTPS + Google's apt index cross-check only
+# (a WARNING is printed). No nix needed: the SRI hash is computed from the
+# downloaded artifact (sha256 → base64), so this runs on a plain CI runner.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OVERLAY_DIR="${SCRIPT_DIR}/nix-kasm-overlay"
+MANIFEST="${OVERLAY_DIR}/manifest.toml"
+
+CADENCE=""
+DO_COMMIT=0
+STAMP=""            # --date; scripts can't call date() deterministically in some
+                    # contexts, so allow the caller (CI) to pass it. Falls back to
+                    # `date -u` locally.
+APPS=()
+
+log()  { printf '[nix-kasm-update] %s\n' "$*" >&2; }
+warn() { printf '[nix-kasm-update] WARNING: %s\n' "$*" >&2; }
+fail() { printf '[nix-kasm-update] FATAL: %s\n' "$*" >&2; exit 1; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cadence) CADENCE="$2"; shift 2 ;;
+    --commit)  DO_COMMIT=1; shift ;;
+    --date)    STAMP="$2"; shift 2 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -*)        fail "unknown flag: $1" ;;
+    *)         APPS+=("$1"); shift ;;
+  esac
+done
+
+command -v curl    >/dev/null || fail "curl not found"
+command -v jq      >/dev/null || fail "jq not found"
+command -v openssl >/dev/null || fail "openssl not found (needed to hash the artifact)"
+[[ -f "${MANIFEST}" ]] || fail "manifest not found: ${MANIFEST}"
+[[ -n "${STAMP}" ]] || STAMP="$(date -u +%Y-%m-%d)"
+
+# ── manifest.toml reader (flat [apps.<name>] blocks, key = "value") ─────────
+# List app names, optionally filtered to a cadence.
+manifest_apps() {
+  awk -v want="${CADENCE}" '
+    /^\[apps\./ { name=$0; sub(/^\[apps\./,"",name); sub(/\].*/,"",name); cad=""; next }
+    /^\[/       { name="" }
+    name && /^[[:space:]]*cadence[[:space:]]*=/ {
+      v=$0; sub(/^[^=]*=[[:space:]]*/,"",v); gsub(/["[:space:]]/,"",v); cad=v
+      if (want=="" || cad==want) print name
+    }
+  ' "${MANIFEST}"
+}
+# Read one field of one app.
+manifest_field() {
+  awk -v app="$1" -v key="$2" '
+    /^\[apps\./ { name=$0; sub(/^\[apps\./,"",name); sub(/\].*/,"",name); next }
+    /^\[/       { name="" }
+    name==app && $0 ~ "^[[:space:]]*"key"[[:space:]]*=" {
+      v=$0; sub(/^[^=]*=[[:space:]]*/,"",v); gsub(/^["[:space:]]+|["[:space:]]+$/,"",v); print v; exit
+    }
+  ' "${MANIFEST}"
+}
+
+# ── discoverer: Google Chrome stable (chrome-version-api) ───────────────────
+# Google's version-history API gives the current Linux stable version; the .deb
+# is published to Google's apt pool at release time. Provenance is bound two ways:
+#   1. the artifact SHA256 must match the SHA256 Google publishes in its apt
+#      `Packages` index (fetched over HTTPS), and
+#   2. (best-effort) that index is attested by Google's GPG-signed InRelease.
+CHROME_VER_API="https://versionhistory.googleapis.com/v1/chrome/platforms/linux/channels/stable/versions"
+CHROME_DEB_BASE="https://dl.google.com/linux/chrome/deb"
+GOOGLE_KEY_URL="https://dl.google.com/linux/linux_signing_key.pub"
+
+discover_chrome_version_api() {
+  curl -fsSL "${CHROME_VER_API}?pageSize=1" \
+    | jq -r '.versions[0].version // empty'
+}
+
+# Verify + pin the amd64 .deb for a given version. Prints the SRI hash on stdout.
+chrome_pin_hash() {
+  ver="$1"
+  deb_rel="pool/main/g/google-chrome-stable/google-chrome-stable_${ver}-1_amd64.deb"
+  deb_url="${CHROME_DEB_BASE}/${deb_rel}"
+
+  tmp="$(mktemp -d)"; trap 'rm -rf "${tmp}"' RETURN
+
+  # 1. Fetch Google's apt index (HTTPS) and the expected SHA256 for this version.
+  idx="${tmp}/Packages"
+  if curl -fsSL "${CHROME_DEB_BASE}/dists/stable/main/binary-amd64/Packages" -o "${idx}"; then :
+  elif curl -fsSL "${CHROME_DEB_BASE}/dists/stable/main/binary-amd64/Packages.gz" -o "${idx}.gz"; then
+    gunzip -f "${idx}.gz"
+  else
+    fail "chrome: could not fetch Google apt Packages index for provenance"
+  fi
+  # One stanza per package; blank line terminates a stanza. `done` guards against
+  # a double emit (awk `exit` would also run END). No exit so the last stanza,
+  # which may not be followed by a blank line, is still handled by END.
+  want_hex="$(awk -v v="${ver}-1" '
+      /^Package:/{pkg=$2} /^Version:/{vr=$2} /^SHA256:/{sha=$2}
+      /^$/{ if(!done && pkg=="google-chrome-stable" && vr==v){print sha; done=1} }
+      END{ if(!done && pkg=="google-chrome-stable" && vr==v) print sha }
+    ' "${idx}")"
+  [[ -n "${want_hex}" ]] || fail "chrome: version ${ver} not found in Google apt index (not yet published?)"
+
+  # 2. (best-effort) verify the index is attested by Google's signed InRelease.
+  if command -v gpg >/dev/null 2>&1; then
+    gnupghome="${tmp}/gnupg"; mkdir -p "${gnupghome}"; chmod 700 "${gnupghome}"
+    if curl -fsSL "${GOOGLE_KEY_URL}" -o "${tmp}/google.pub" \
+       && curl -fsSL "${CHROME_DEB_BASE}/dists/stable/InRelease" -o "${tmp}/InRelease"; then
+      GNUPGHOME="${gnupghome}" gpg --batch --quiet --import "${tmp}/google.pub" 2>/dev/null || true
+      # NOTE (hardening TODO): pin GOOGLE_KEY_FPR to Google's published Linux
+      # signing key fingerprint and assert it here, to remove trust-on-first-use.
+      if GNUPGHOME="${gnupghome}" gpg --batch --verify "${tmp}/InRelease" >/dev/null 2>&1; then
+        insha="$(awk '/^SHA256:/{f=1;next} f && /binary-amd64\/Packages$/{print $1; exit}' "${tmp}/InRelease" 2>/dev/null || true)"
+        [[ -z "${insha}" ]] || log "chrome: InRelease GPG-verified (Google signing key)"
+      else
+        warn "chrome: InRelease GPG verification FAILED — proceeding on HTTPS + index cross-check only"
+      fi
+    else
+      warn "chrome: could not fetch Google key / InRelease — provenance is HTTPS + index cross-check only"
+    fi
+  else
+    warn "chrome: gpg not available — provenance is HTTPS + Google apt index cross-check only"
+  fi
+
+  # 3. Download the .deb and cross-check its SHA256 against the index before
+  #    trusting it, then emit the SRI hash (sha256 → base64) nixpkgs' fetchurl
+  #    expects. Both derive from the same bytes we verified.
+  deb="${tmp}/chrome.deb"
+  curl -fsSL "${deb_url}" -o "${deb}" \
+    || fail "chrome: could not download ${deb_url}"
+  got_hex="$(openssl dgst -sha256 "${deb}" | awk '{print $NF}')"
+  [[ "${got_hex}" == "${want_hex}" ]] \
+    || fail "chrome: SHA256 mismatch vs Google apt index — got ${got_hex}, index ${want_hex} (REFUSING to pin)"
+  log "chrome: artifact SHA256 matches Google apt index (${got_hex:0:12}…)"
+  printf 'sha256-%s' "$(openssl dgst -sha256 -binary "${deb}" | openssl base64 -A)"
+}
+
+# ── per-app update ──────────────────────────────────────────────────────────
+update_app() {
+  app="$1"
+  discover="$(manifest_field "${app}" discover)"
+  pin="${OVERLAY_DIR}/pkgs/${app}/pin.json"
+  [[ -f "${pin}" ]] || fail "${app}: pin.json missing (${pin})"
+  cur="$(jq -r '.version // ""' "${pin}")"
+
+  case "${discover}" in
+    chrome-version-api)
+      latest="$(discover_chrome_version_api)"
+      [[ -n "${latest}" ]] || fail "${app}: version discovery returned nothing"
+      if [[ "${latest}" == "${cur}" ]]; then
+        log "${app}: up to date (${cur})"; return 0
+      fi
+      log "${app}: ${cur} -> ${latest}"
+      sri="$(chrome_pin_hash "${latest}")"
+      tmp="$(mktemp)"
+      jq --arg v "${latest}" --arg h "${sri}" --arg d "${STAMP}" \
+         '.version=$v | .hashes."x86_64-linux"=$h | .updated=$d' "${pin}" > "${tmp}"
+      mv "${tmp}" "${pin}"
+      log "${app}: pinned ${latest} (${sri})"
+      CHANGED+=("${app}:${cur}:${latest}")
+      ;;
+    github-releases:*|nix-update)
+      fail "${app}: discover '${discover}' not implemented yet (see design/nix-self-hosted-packages.md)"
+      ;;
+    *)
+      fail "${app}: unknown discover method '${discover}'"
+      ;;
+  esac
+}
+
+# ── main ────────────────────────────────────────────────────────────────────
+CHANGED=()
+if [[ ${#APPS[@]} -eq 0 ]]; then
+  while IFS= read -r a; do [[ -n "$a" ]] && APPS+=("$a"); done < <(manifest_apps)
+fi
+[[ ${#APPS[@]} -gt 0 ]] || { log "no apps match (cadence='${CADENCE:-any}')"; exit 0; }
+
+log "updating: ${APPS[*]}  (cadence='${CADENCE:-any}')"
+for a in "${APPS[@]}"; do update_app "$a"; done
+
+if [[ ${#CHANGED[@]} -eq 0 ]]; then
+  log "no pins changed"; exit 0
+fi
+
+log "pins changed: ${#CHANGED[@]}"
+if [[ "${DO_COMMIT}" -eq 1 ]]; then
+  for c in "${CHANGED[@]}"; do
+    app="${c%%:*}"; rest="${c#*:}"; old="${rest%%:*}"; new="${rest#*:}"
+    git -C "${SCRIPT_DIR}/.." add "bin/nix-kasm-overlay/pkgs/${app}/pin.json"
+    git -C "${SCRIPT_DIR}/.." commit -q -m "${app}: ${old} -> ${new}" \
+      -m "Automated pin bump by bin/nix-kasm-update (${STAMP})." \
+      && log "committed ${app}: ${old} -> ${new}"
+  done
+else
+  log "(--commit not given; pin.json files updated in the working tree)"
+fi

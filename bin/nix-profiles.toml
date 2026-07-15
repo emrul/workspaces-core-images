@@ -214,9 +214,19 @@ pkgs = [
 pkgs = ["nixpkgs#firefox"]
 ref  = "github:NixOS/nixpkgs/nixos-unstable"
 
+# Chrome is SELF-HOSTED via bin/nix-kasm-overlay so we track Google's stable
+# channel faster than nixpkgs commits it (~12h via the twice-daily updater vs
+# nixpkgs' ~weekly + channel lag; also covers Google's out-of-band 0-day
+# patches). The overlay reuses nixpkgs' google-chrome packaging and swaps only
+# version+src from a committed pin (bin/nix-kasm-overlay/pkgs/chrome/pin.json).
+# `ref` is the rev the overlay is built against — the build passes it as
+# --override-input nixpkgs so Chrome shares the other browsers' glibc/closure
+# (single glibc, full dedup). amd64 only: Google ships no arm64 Linux Chrome;
+# arm64 uses [profiles.chromium]. See design/nix-self-hosted-packages.md.
 [profiles.chrome]
-pkgs = ["nixpkgs#google-chrome"]
-ref  = "github:NixOS/nixpkgs/nixos-unstable"
+pkgs      = ["path:/config/kasm-overlay#chrome"]
+ref       = "github:NixOS/nixpkgs/nixos-unstable"
+platforms = ["amd64"]
 
 [profiles.brave]
 pkgs = ["nixpkgs#brave"]

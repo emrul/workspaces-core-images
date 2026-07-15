@@ -1,0 +1,20 @@
+# Self-hosted app manifest — drives the updater (bin/nix-kasm-update) and the CI
+# schedules. See design/nix-self-hosted-packages.md.
+#
+#   kind      = override | binary | source
+#               override → reuse a nixpkgs derivation, swap version+src
+#               binary   → prebuilt .deb/AppImage/tarball (autoPatchelf/FHS)
+#               source   → build from source (language builder)
+#   discover  = how the updater finds the newest version:
+#               "chrome-version-api"        Google Chrome version-history API
+#               "github-releases:owner/repo" latest GitHub release tag
+#               "nix-update"                delegate to nix-update
+#   cadence   = which schedule runs this app's updater:
+#               twice-daily | weekly | manual
+#   platforms = build targets (amd64 | arm64)
+
+[apps.chrome]
+kind      = "override"
+discover  = "chrome-version-api"
+cadence   = "twice-daily"
+platforms = ["amd64"]
