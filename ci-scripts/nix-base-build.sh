@@ -90,7 +90,12 @@ wait
 # the contention is gone, so a serial rebuild succeeds (verified: alpine builds
 # cleanly on its own). A genuinely-broken build still fails here. Serial retries
 # append to the same per-distro log.
-ATTEMPTS="${BASE_BUILD_ATTEMPTS:-2}"
+# Retries do a full build_one, but podman's layer cache resumes from the failed
+# step, so a retry mostly re-runs just the failing package install with a fresh
+# index fetch. Several attempts with backoff ride out dl-cdn's flaky windows
+# (alpine's apk is intermittently rate-limited even serially).
+ATTEMPTS="${BASE_BUILD_ATTEMPTS:-3}"
+BACKOFF="${BASE_BUILD_BACKOFF:-30}"
 for d in ${WANT}; do
   [ "$(cat "/tmp/base-${d}.rc" 2>/dev/null || echo 1)" = 0 ] && continue
   echo "[base:${d}] pass-1 failed — serial retry (mirror contention now cleared)" >&2
@@ -100,7 +105,7 @@ for d in ${WANT}; do
       echo "[base:${d}] serial retry ${attempt} succeeded" >&2; break
     fi
     echo "[base:${d}] serial retry ${attempt}/${ATTEMPTS} failed" >&2
-    [ "${attempt}" -lt "${ATTEMPTS}" ] && sleep 10
+    [ "${attempt}" -lt "${ATTEMPTS}" ] && sleep "${BACKOFF}"
   done
 done
 

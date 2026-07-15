@@ -194,6 +194,10 @@ base-check:
 base:
   stage: base
   needs: [base-check]
+  # A full multi-distro rebuild (3× core + nix) plus serial retries can exceed
+  # GitLab's 1h default; the old per-distro jobs each built one distro. Give it
+  # room (the build job is 4h).
+  timeout: 3h
   rules:
     - if: '$NIX_GC == "1"'
       when: never
