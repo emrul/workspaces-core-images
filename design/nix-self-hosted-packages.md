@@ -229,10 +229,13 @@ the existing GC schedule, each just a schedule variable:
 
 Both are ordinary `schedule`-source pipelines (no `NIX_GC`). The `nix-update`
 job's audit commit + push (repo reflects what shipped) needs a masked CI
-variable **`NIX_UPDATE_TOKEN`** = a project/group access token with
-`write_repository`. Without it the pin still ships (via artifact) but is not
-pushed to git — a warning is logged. The push uses `-o ci.skip` so it never
-triggers a redundant pipeline.
+variable **`NIX_UPDATE_TOKEN`** = a project access token with `write_repository`
+and a role allowed to push the target branch (Maintainer, since `kasm-nix` is
+protected). Provision/rotate it with **`ci-scripts/setup-nix-update-token.sh`**
+(creates the least-privilege token, revokes any prior one, stores it
+masked+protected via stdin — never printed). Without the variable the pin still
+ships (via artifact) but is not pushed to git — a warning is logged. The push
+uses `-o ci.skip` so it never triggers a redundant pipeline.
 
 ## Rollout (this change set)
 
