@@ -5,6 +5,7 @@ Lightweight design bundle for the Kasm Nix-packaging effort. Source of truth is
 
 | Doc | What it covers |
 |---|---|
+| [`RUNBOOK.md`](RUNBOOK.md) | **Operations & troubleshooting** — how the CI pipeline runs, the gating layers, self-hosted packages, base auto-rebuild, and symptom→cause→fix for the gotchas we've hit (cross-distro launch, alpine/dl-cdn, timeouts). Read this when operating or debugging the live pipeline. |
 | [`REQUIREMENTS.md`](REQUIREMENTS.md) | Scope, models, constraints, open questions — start here |
 | [`BUILDING.md`](BUILDING.md) | **How images are built today** (manual/local PoC commands) + the CI/CD mapping |
 | [`LIMITATIONS.md`](LIMITATIONS.md) | Known limitations (QtWebEngine/Angelfish WebGL; GPU runtime contract) |
