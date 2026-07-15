@@ -218,9 +218,10 @@ the existing GC schedule, each just a schedule variable:
 1. **Chrome / fast-cadence** — every 12h, variable `NIX_UPDATE=twice-daily`.
    The `nix-update` job refreshes `cadence=twice-daily` pins (Chrome), exports
    the bumped `pin.json` as an artifact that `build` consumes, and ships it in
-   the same pipeline. On a schedule the whole catalog is "built" but
-   `NIX_EVAL_GATE` (auto-enabled for `schedule` pipelines) keeps every unchanged
-   app warm, so only Chrome actually rebuilds. ~12h behind Google's stable.
+   the same pipeline. The twice-daily schedule sets `NIX_PROFILES=chrome`, so
+   the run is surgical: when Chrome released, the pin bumps and chrome rebuilds
+   + publishes; when it hasn't, `NIX_EVAL_GATE` (on by default) skips the
+   reinstall and it's a near-noop. ~12h behind Google's stable.
 2. **Browser ref-class advance** — weekly, variable `NIX_UPDATE=weekly` (or just
    an empty scheduled run). Re-resolves the floating `nixos-unstable` ref; the
    eval-gate's input key includes the resolved rev, so all browsers on that ref

@@ -47,9 +47,12 @@ variables:
   NIX_UPDATE: ""            # set to a cadence (twice-daily|weekly) on a schedule
                             # → run bin/nix-kasm-update first to refresh self-hosted
                             # pins (Chrome, …). See design/nix-self-hosted-packages.md.
-  NIX_EVAL_GATE: ""         # "1" → build keeps warm (skips reinstalling) profiles
-                            # whose inputs are unchanged since the last build. Auto-
-                            # enabled on scheduled builds; fail-safe + opt-in elsewhere.
+  NIX_EVAL_GATE: "1"        # ON by default: build keeps warm (skips reinstalling)
+                            # profiles whose inputs (resolved rev + attrs + overlay
+                            # sources) are unchanged since the last build. Fail-safe
+                            # (any doubt → rebuild); needs a warm staging volume +
+                            # /output/labels.prev.json to skip anything. Set "" to
+                            # disable. See design/nix-self-hosted-packages.md.
 
 default:
   tags: [nix-builder]
@@ -189,10 +192,7 @@ build:
   rules:
     - if: '$NIX_GC == "1"'
       when: never
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'   # scheduled full builds → cheap
-      variables:
-        NIX_EVAL_GATE: "1"
-    - when: on_success
+    - when: on_success           # NIX_EVAL_GATE is on by default (see variables)
   script:
     - |
       if [ "${NIX_PROFILES:-}" = "__none__" ]; then echo "no image-relevant changes — skipping build"; exit 0; fi
