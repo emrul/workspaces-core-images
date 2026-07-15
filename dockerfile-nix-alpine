@@ -23,6 +23,12 @@ FROM $BASE_IMAGE
 ARG DISTRO=alpine
 USER 0
 
+# nix-launch execs nix-bwrap-run for every app, and buildFHSEnv apps (onlyoffice,
+# steam, …) need a real /usr/bin/bwrap to get a real /nix/store under the
+# /nix/store->/store symlink layout. Normally inherited from the core base as a
+# desktop dependency; self-heal if a future base drops it. No-op when present.
+RUN command -v bwrap >/dev/null 2>&1 || apk add --no-cache bubblewrap
+
 # Drop-in unit + scripts (shared with ubuntu/fedora). Gated by
 # ConditionPathIsDirectory so the image still boots without /nix mounted.
 COPY src/ubuntu/install/nix/units/nix-activate.service \
@@ -31,11 +37,12 @@ COPY src/ubuntu/install/nix/units/nix-activate.service \
 COPY src/ubuntu/install/nix/scripts/nix-activate \
      src/ubuntu/install/nix/scripts/nix-app \
      src/ubuntu/install/nix/scripts/nix-launch \
+     src/ubuntu/install/nix/scripts/nix-bwrap-run \
      src/ubuntu/install/nix/scripts/nix-gpu-run \
      src/ubuntu/install/nix/scripts/nix-gpu-setup \
      /usr/local/bin/
 
-RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app /usr/local/bin/nix-launch /usr/local/bin/nix-gpu-run /usr/local/bin/nix-gpu-setup && \
+RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app /usr/local/bin/nix-launch /usr/local/bin/nix-bwrap-run /usr/local/bin/nix-gpu-run /usr/local/bin/nix-gpu-setup && \
     /usr/local/bin/container-init \
         --units /etc/container-init/units \
         --drop-in /etc/container-init.d \
