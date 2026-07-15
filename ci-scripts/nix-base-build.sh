@@ -67,16 +67,33 @@ sem() { while [ "$(jobs -rp | wc -l)" -ge "${PAR}" ]; do wait -n 2>/dev/null || 
 echo "[base] building: ${WANT}  (parallel=${PAR})"
 for d in ${WANT}; do
   sem
-  ( build_one "$d" >"/tmp/base-${d}.log" 2>&1; echo $? >"/tmp/base-${d}.rc" ) &
+  # set +e in the subshell so a failing build_one still records its real exit code
+  # (otherwise set -e would abort the subshell before the rc file is written).
+  ( set +e; build_one "$d" >"/tmp/base-${d}.log" 2>&1; echo $? >"/tmp/base-${d}.rc" ) &
 done
 wait
 
-fail=0
+# A secondary distro's failure must NOT block the ubuntu app pipeline. Fail the
+# job only when a CRITICAL distro (default: ubuntu, the app base) failed; other
+# distros' failures are surfaced loudly but tolerated (their base just isn't
+# refreshed this run, and publish-base skips a missing image).
+CRIT="${CRITICAL_DISTROS:-ubuntu}"
+failed=""; crit_fail=0
 for d in ${WANT}; do
   echo "===== base:${d} ====="
   cat "/tmp/base-${d}.log" 2>/dev/null || echo "(no log)"
   r="$(cat "/tmp/base-${d}.rc" 2>/dev/null || echo 1)"
-  [ "${r}" = 0 ] || { echo "[base] ${d} FAILED (rc=${r})" >&2; fail=1; }
+  if [ "${r}" != 0 ]; then
+    failed="${failed} ${d}"
+    case " ${CRIT} " in *" ${d} "*) crit_fail=1 ;; esac
+  fi
 done
-[ "${fail}" = 0 ] && echo "[base] all requested distros built OK: ${WANT}"
-exit "${fail}"
+if [ -n "${failed}" ]; then
+  echo "[base] WARNING: base build FAILED for:${failed}" >&2
+fi
+if [ "${crit_fail}" = 1 ]; then
+  echo "[base] a CRITICAL distro (${CRIT}) failed — failing the job" >&2
+  exit 1
+fi
+echo "[base] OK — built: ${WANT}; tolerated failures:${failed:- none}"
+exit 0
