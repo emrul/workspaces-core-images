@@ -47,6 +47,7 @@ stdenv.mkDerivation (finalAttrs: {
   # missing on the first .140 build.
   buildInputs = with prev; [
     stdenv.cc.cc.lib          # libstdc++/libgcc
+    libxcrypt                 # libcrypt.so.1 (split out of modern glibc)
     zlib openssl libjpeg_turbo libpng libtiff giflib pixman ffmpeg
     libGL libgbm libdrm libunwind
     xorg.libX11 xorg.libXext xorg.libXtst xorg.libXrandr xorg.libXcursor
