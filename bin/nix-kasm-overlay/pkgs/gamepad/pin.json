@@ -1,0 +1,7 @@
+{
+  "branch": "develop",
+  "commit_id": "55a4cc861d77b6bbe736b23cc40669cf0a35706a",
+  "arch": "amd64",
+  "hash": "sha256-dahtwVyml6PeZZB46zWWRKAKudRJ5/9+nQjsdLUvUqg=",
+  "_note": "Repackages Kasm's prebuilt kasm_gamepad_server from the public S3. Mirrors src/ubuntu/install/gamepad/install_gamepad.sh: url = kasm_gamepad_server/<commit>/kasm_gamepad_server_<arch>_<branch>.<commit6>.tar.gz. arch is amd64/arm64 (mapped uname). Staticx bundle (fully static ELF) -> no autoPatchelf. No uinput/kernel-module dependency (events go through KasmVNC). Bump: update commit_id/branch + hash (nix store prefetch-file <url>)."
+}

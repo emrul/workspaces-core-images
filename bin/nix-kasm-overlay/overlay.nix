@@ -72,4 +72,19 @@ in
     inherit prev;
     pin = loadPin "audio_input" ./pkgs/audio_input;
   };
+
+  # More staticx-bundle base components (fetch/unpack, no autoPatchelf), baked in
+  # like their peers: session recorder, virtual webcam, gamepad passthrough.
+  recorder = import ./pkgs/recorder/package.nix {
+    inherit prev;
+    pin = loadPin "recorder" ./pkgs/recorder;
+  };
+  webcam = import ./pkgs/webcam/package.nix {
+    inherit prev;
+    pin = loadPin "webcam" ./pkgs/webcam;
+  };
+  gamepad = import ./pkgs/gamepad/package.nix {
+    inherit prev;
+    pin = loadPin "gamepad" ./pkgs/gamepad;
+  };
 }

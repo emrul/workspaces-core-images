@@ -56,10 +56,14 @@ EOF
   podman pull -q "docker.io/library/${src}" >/dev/null 2>&1 || podman pull -q "${src}" >/dev/null 2>&1 || true
   digest="$(src_digest "${src}")"
   echo "[base:${d}] building ${coretag} (from ${src} @ ${digest:-unknown})"
-  # resolute gets KasmVNC, profile-sync and audio-input from the Nix overlay
-  # (baked below) → build the core without their per-distro artifacts.
+  # resolute gets its Kasm services from the Nix overlay (baked below) → build the
+  # core without their per-distro artifacts (KasmVNC, profile-sync, audio-input,
+  # recorder, webcam, gamepad). printer/smartcard stay on OS packages (system
+  # daemons — cupsd / pcscd — that Nix-packaging the binary alone can't retire).
   core_extra=()
-  [ "${d}" = resolute ] && core_extra=(--build-arg INCLUDE_KASMVNC=0 --build-arg INCLUDE_PROFILE_SYNC=0 --build-arg INCLUDE_AUDIO_INPUT=0)
+  [ "${d}" = resolute ] && core_extra=(--build-arg INCLUDE_KASMVNC=0 --build-arg INCLUDE_PROFILE_SYNC=0 \
+      --build-arg INCLUDE_AUDIO_INPUT=0 --build-arg INCLUDE_RECORDER=0 \
+      --build-arg INCLUDE_WEBCAM=0 --build-arg INCLUDE_GAMEPAD=0)
   # Explicit `|| return 1` so a failed build propagates even under the caller's
   # `set +e` (the retry subshell) — otherwise a core-build failure would fall
   # through to the nix build and be masked as success.
@@ -76,6 +80,7 @@ EOF
     bin/nix-bake-closure \
       --base "${coretag}" --tag "${nixtag}" \
       --pkg kasmvnc --pkg profile_sync --pkg audio_input \
+      --pkg recorder --pkg webcam --pkg gamepad \
       --dockerfile /work/dockerfile-nix-ubuntu-resolute \
       --overlay /work/bin/nix-kasm-overlay \
       --context "${ctx}" \

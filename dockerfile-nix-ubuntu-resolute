@@ -22,10 +22,14 @@ USER 0
 ARG KASMVNC_STORE_PATH
 ARG PROFILE_SYNC_STORE_PATH
 ARG AUDIO_INPUT_STORE_PATH
+ARG RECORDER_STORE_PATH
+ARG WEBCAM_STORE_PATH
+ARG GAMEPAD_STORE_PATH
 
 # The baked Nix closures (binaries need their store deps present). Staged by
 # bin/nix-bake-closure as the union of every --pkg's closure (kasmvnc +
-# profile_sync + audio_input), so every service's store paths are here.
+# profile_sync + audio_input + recorder + webcam + gamepad), so every service's
+# store paths are here.
 COPY nix-closure/nix /nix
 
 RUN set -eu; \
@@ -66,16 +70,21 @@ RUN set -eu; \
         echo "PROFILE_SYNC_STORE_PATH unset/invalid — skipping profile-sync wiring"; \
     fi
 
-# Wire the Nix microphone capture server at the path audio-in.service execs
-# (/dockerstartup/audio_input/kasm_audio_input_server). Replaces the per-distro
-# S3 build (skipped in the resolute core via INCLUDE_AUDIO_INPUT=0).
+# Wire the staticx-bundle services at the /dockerstartup/<svc>/<binary> paths
+# their container-init units exec (audio-in / recorder-watch / webcam / gamepad).
+# Each is skipped in the resolute core (INCLUDE_*=0) and provided by the bake.
+# Tolerant of an unset store path so partial bakes still build.
 RUN set -eu; \
-    ai="${AUDIO_INPUT_STORE_PATH:-}"; \
-    if [ -n "$ai" ] && [ -x "$ai/bin/kasm_audio_input_server" ]; then \
-        mkdir -p /dockerstartup/audio_input; \
-        ln -sf "$ai/bin/kasm_audio_input_server" /dockerstartup/audio_input/kasm_audio_input_server; \
-        /dockerstartup/audio_input/kasm_audio_input_server --help >/dev/null 2>&1 \
-          && echo "nix audio-input wired: ok" || echo "nix audio-input wired (--help nonzero)"; \
-    else \
-        echo "AUDIO_INPUT_STORE_PATH unset/invalid — skipping audio-input wiring"; \
-    fi
+    wire() { \
+      sp="$1"; dst="$2"; bin="$3"; \
+      if [ -n "$sp" ] && [ -x "$sp/bin/$bin" ]; then \
+        mkdir -p "$(dirname "$dst")"; ln -sf "$sp/bin/$bin" "$dst"; \
+        echo "wired ${dst} -> ${sp}/bin/${bin}"; \
+      else \
+        echo "skip ${dst} (store path unset/invalid)"; \
+      fi; \
+    }; \
+    wire "${AUDIO_INPUT_STORE_PATH:-}" /dockerstartup/audio_input/kasm_audio_input_server kasm_audio_input_server; \
+    wire "${RECORDER_STORE_PATH:-}"    /dockerstartup/recorder/kasm_recorder_service       kasm_recorder_service; \
+    wire "${WEBCAM_STORE_PATH:-}"      /dockerstartup/webcam/kasm_webcam_server            kasm_webcam_server; \
+    wire "${GAMEPAD_STORE_PATH:-}"     /dockerstartup/gamepad/kasm_gamepad_server          kasm_gamepad_server

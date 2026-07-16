@@ -1,0 +1,7 @@
+{
+  "branch": "develop",
+  "commit_id": "32c8f6f60395503152c55333bffb66df887bd4b5",
+  "arch": "amd64",
+  "hash": "sha256-NoOd6SI63/K3q8e2ICdZCtxe7aBvO1q09i9ndsApi84=",
+  "_note": "Repackages Kasm's prebuilt kasm_webcam_server from the public S3. Mirrors src/ubuntu/install/webcam/install_webcam.sh: url = kasm_webcam_server/<commit>/kasm_webcam_server_<arch>_<branch>.<commit6>.tar.gz. arch is amd64/arm64 (mapped uname). Staticx bundle (fully static ELF) -> no autoPatchelf. Runtime needs a host-provided /dev/video0 (v4l2loopback on the host, same as stock Kasm); webcam.service fails gracefully via StartLimitBurst if absent. Bump: update commit_id/branch + hash (nix store prefetch-file <url>)."
+}

@@ -1,0 +1,7 @@
+{
+  "branch": "develop",
+  "commit_id": "075aab468e8fcb4cf70703770164d8f3b89df5b8",
+  "arch": "amd64",
+  "hash": "sha256-B8jW1wZ1IFtTW6N45UW9z8IokHyZrFyDxZNB5zuVi7w=",
+  "_note": "Repackages Kasm's prebuilt kasm_recorder_service from the public S3. Mirrors src/ubuntu/install/recorder/install_recorder.sh: url = kasm_recorder_service/<commit>/kasm_recorder_service_<arch>_<branch>.<commit6>.tar.gz. arch is amd64/arm64 (mapped uname). The artifact is a staticx bundle (fully static ELF) so there is nothing to autoPatchelf. No ffmpeg/daemon dependency (recording is handled in KasmVNC/Xvnc). Bump: update commit_id/branch + hash (nix store prefetch-file <url>)."
+}
