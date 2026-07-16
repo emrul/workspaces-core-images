@@ -69,6 +69,7 @@ stages:
   - base
   - build
   - publish
+  - test
   - maintenance
 
 # ── prepare: change-gating → NIX_PROFILES dotenv ────────────────────────────
@@ -342,3 +343,24 @@ publish:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+# ── testbench: post-publish app assurance (downstream pipeline) ──────────────
+# Fire-and-forget trigger of kasm-nix-testbench: it fetches this pipeline's
+# nix-build-report.json (job-token allowlisted), spins up Kasm sessions for
+# the changed apps on the .140 runner, and commits verdict reports to its own
+# repo. Report-only in v1 — a red testbench pipeline does NOT fail this one
+# (no strategy:depend); candidate→promote comes later.
+testbench:
+  stage: test
+  needs: [publish]
+  rules:
+    - if: '$NIX_GC == "1"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  variables:
+    UPSTREAM_PIPELINE_ID: $CI_PIPELINE_ID
+  trigger:
+    project: kasm-technologies/labs-sandbox/kasm-nix-testbench
+    branch: main
