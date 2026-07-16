@@ -23,6 +23,22 @@ freeG() { df -PBG /var/lib/containers 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4); 
 
 echo "[gc] free before: $(freeG)G"
 
+# 0. reclaim local copies of PUSHED images + throwaway staging tags — the single
+# biggest accumulator (~130 G/run) that image-prune (dangling-only) leaves behind:
+#   • registry.gitlab.com/<ns>/…:nix — per-app + fat-store + base images we
+#     already pushed; the authoritative copies live in the GitLab registry, and
+#     the next build rebuilds localhost/…:dev + re-pushes, so the local pushed
+#     copies are pure cache.
+#   • 127.0.0.1:<port>/… — the crane staging registry tags; nix-crane-assemble
+#     recreates its staging registry every run, so these are throwaway.
+# Deliberately NOT `image prune -a`: that would also evict the docker.io/library
+# base images (ubuntu/fedora/alpine/golang/nixos-nix) and the localhost
+# nix-<distro>/kasm-core bases, forcing slow re-pulls/rebuilds. Removing the tags
+# here turns their layers dangling so step 1 reclaims them.
+podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+  | grep -E '^(registry\.gitlab\.com/|127\.0\.0\.1:[0-9]+/)' \
+  | sort -u | xargs -r -n1 podman rmi -f >/dev/null 2>&1 || true
+
 # 1. dangling image layers
 podman image prune -f >/dev/null 2>&1 || true
 
