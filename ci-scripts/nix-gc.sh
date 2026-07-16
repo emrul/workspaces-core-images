@@ -49,9 +49,10 @@ podman image prune -f >/dev/null 2>&1 || true
 # cache backing live images and cascades into removing the tagged base images.
 podman builder prune -f >/dev/null 2>&1 || true
 
-# 2. superseded per-app / fat-store dev tags (keep the base images)
+# 2. superseded per-app / fat-store dev tags (keep ALL distro base images —
+# nix-ubuntu*, nix-fedora, nix-alpine — which publish-base pushes from this store)
 podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
-  | grep -E '^localhost/nix-' | grep -vE 'nix-ubuntu|nixbase' \
+  | grep -E '^localhost/nix-' | grep -vE 'nix-ubuntu|nix-fedora|nix-alpine|nixbase' \
   | sort -u | xargs -r -n1 podman rmi -f >/dev/null 2>&1 || true
 
 # 3. stale anonymous volumes (old registry staging etc.) — never the Nix cache

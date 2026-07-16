@@ -92,8 +92,12 @@ podman image prune -f >/dev/null 2>&1 || true
 # `podman build` runs), which `image prune` misses. -f only (NEVER -a: that drops
 # live images' cache and cascades into removing the tagged base images).
 podman builder prune -f >/dev/null 2>&1 || true
+# Keep ALL distro bases (nix-ubuntu*, nix-fedora, nix-alpine) — publish-base
+# pushes them from this same store, and the base job may have just rebuilt them.
+# (A keep list of only nix-ubuntu silently deleted the freshly-built alpine and
+# fedora bases here, so publish-base reported them "missing" — pipeline 2682481145.)
 podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
-  | grep -E '^localhost/nix-' | grep -vE 'nix-ubuntu|nixbase' \
+  | grep -E '^localhost/nix-' | grep -vE 'nix-ubuntu|nix-fedora|nix-alpine|nixbase' \
   | sort -u | xargs -r -n1 podman rmi -f >/dev/null 2>&1 || true
 # Backstop: if still tight, drop stale anonymous volumes (old registry staging,
 # etc.) — but NEVER the nix-build-stage-* Nix cache.

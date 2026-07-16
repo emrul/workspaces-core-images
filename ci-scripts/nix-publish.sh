@@ -176,7 +176,14 @@ mapfile -t imgs < <(
     | sort -u
 )
 
-[[ ${#imgs[@]} -gt 0 ]] || { echo "[nix-publish] no ${NIX_APP_REPO}-<app>:dev images found — nothing to publish" >&2; exit 1; }
+# Zero per-app images is a LEGITIMATE outcome, not an error: on a warm store
+# the eval-gate keeps every profile and crane's CHANGED_ONLY assembles nothing
+# (unchanged apps keep their published image). Fall through — the fat-store
+# guard below still FATALs when the build stage produced no fat store either,
+# which is the actual "build broke" signal.
+if [[ ${#imgs[@]} -eq 0 ]]; then
+  echo "[nix-publish] no ${NIX_APP_REPO}-<app>:dev images from this build — all apps unchanged; fat store + report only"
+fi
 
 echo "[nix-publish] ${#imgs[@]} image(s) → ${REGISTRY_NS}/<kasm_name>:${KASM_TAG}"
 
