@@ -135,6 +135,20 @@ fi
 # "user kasm_user does not exist"). Also register a *custom* KASM_OS_USER
 # (operator rename) so a direct noVNC connect under that name still
 # works. Read-only record stays "kasm_viewer" — a role designator.
+# Multi-store images (e.g. resolute) provide kasmvncpasswd as a Nix binary whose
+# ELF interpreter lives in the /nix/store farm that nix-compose.service builds
+# concurrently at boot. container-init orders nix-compose before us but does NOT
+# block on its oneshot completion, so wait (bounded, ~30s) for nix-compose's ready
+# sentinel — otherwise kasmvncpasswd can't exec and ~/.kasmpasswd is never written,
+# and KasmVNC rejects every login. No-op on single-store / non-Nix images.
+if [ -d /nix-stores ]; then
+    _i=0
+    while [ ! -e /run/nix-compose.ready ] && [ "$_i" -lt 300 ]; do
+        _i=$((_i + 1)); sleep 0.1
+    done
+    [ -e /run/nix-compose.ready ] || echo "kasm-setup: WARN nix-compose not ready after 30s; kasmvncpasswd may fail" >&2
+fi
+
 if command -v kasmvncpasswd >/dev/null 2>&1 && [ -n "${VNC_PW:-}" ]; then
     HOME="$KASM_OS_HOME" sh -c "printf '%s\n%s\n\n' '$VNC_PW' '$VNC_PW' | kasmvncpasswd -u kasm_user -wo" >/dev/null 2>&1 || true
     if [ "$KASM_OS_USER" != kasm_user ] && [ "$KASM_OS_USER" != kasm-user ]; then

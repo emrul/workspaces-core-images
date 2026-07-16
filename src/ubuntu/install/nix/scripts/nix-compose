@@ -40,13 +40,17 @@ install -d "${NIX}/store" "${PROFILES}" "${NIX}/var/nix/db"
 for sdir in "${STORES_ROOT}"/*/store; do
   [ -d "${sdir}" ] || continue
   id="$(basename "$(dirname "${sdir}")")"
-  n=0
-  for p in "${sdir}"/*; do
-    [ -e "${p}" ] || continue
-    ln -sfn "${p}" "${NIX}/store/$(basename "${p}")"
-    n=$((n + 1))
-  done
-  log "store '${id}': farmed ${n} paths into ${NIX}/store"
+  # One `ln -t` call for the whole store — a fat store is thousands of paths, so
+  # a fork-per-path loop (plus a basename fork each) costs tens of seconds on the
+  # boot critical path. GNU coreutils ln supports -t; fall back to a loop only if
+  # it's unavailable (e.g. a busybox ln on some distro) or the arg list is too long.
+  if ! ln -sfn -t "${NIX}/store" "${sdir}"/* 2>/dev/null; then
+    for p in "${sdir}"/*; do
+      [ -e "${p}" ] || continue
+      ln -sfn "${p}" "${NIX}/store/$(basename "${p}")"
+    done
+  fi
+  log "store '${id}': farmed $(ls -1 "${sdir}" 2>/dev/null | wc -l | tr -d ' ') paths into ${NIX}/store"
 done
 
 # ── 2+3. farm profiles + merge _meta, with CONSISTENT collision namespacing ──
@@ -128,5 +132,11 @@ if [ ! -f "${NIX}/var/nix/db/db.sqlite" ]; then
     [ -f "${db}" ] && { cp -f "${db}" "${NIX}/var/nix/db/db.sqlite" 2>/dev/null || true; break; }
   done
 fi
+
+# Ready sentinel: container-init orders nix-compose before its consumers but does
+# NOT block on this oneshot's completion, so consumers that must not race the farm
+# (notably kasm-setup's kasmvncpasswd, a Nix binary whose interpreter lives in the
+# farm) wait on this file. /run is a per-boot tmpfs.
+: > /run/nix-compose.ready 2>/dev/null || true
 
 log "compose complete"
