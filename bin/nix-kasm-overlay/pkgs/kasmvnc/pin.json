@@ -4,6 +4,6 @@
   "commit_id": "a4b74a836b7745209e6d5506fa2723603ed8b930",
   "codename": "noble",
   "arch": "amd64",
-  "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "hash": "sha256-XT6TsZvuN+CintgSy/3MnBhC8W1PqXS4b+LzpD+6Ygw=",
   "_note": "Repackages Kasm's prebuilt KasmVNC .deb from the public S3 (built per-distro; we take the `noble` build and autoPatchelf it against nix libs → distro-independent). These vars mirror src/ubuntu/install/kasm_vnc/install_kasm_vnc.sh; the URL is kasmvncserver_<codename>_<kasmvnc_ver>_<branch>_<commit6>_<arch>.deb (release branch omits _<branch>_<commit6>). hash is lib.fakeHash — the first `nix build` on .140 prints the real one."
 }
