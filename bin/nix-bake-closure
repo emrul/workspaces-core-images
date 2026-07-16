@@ -33,7 +33,9 @@ OVERLAY_DIR="${OVERLAY_DIR:-${REPO_ROOT}/bin/nix-kasm-overlay}"
 CONTEXT="${CONTEXT:-${REPO_ROOT}}"
 DOCKERFILE="${DOCKERFILE:-${REPO_ROOT}/dockerfile-nix-ubuntu-resolute}"
 DOCKER="${DOCKER:-docker}"
-NIX_IMAGE="${NIX_IMAGE:-nixos/nix:latest}"
+# Fully-qualified: podman in headless CI enforces short-name resolution and
+# cannot prompt for a registry, so a bare "nixos/nix:latest" fails there.
+NIX_IMAGE="${NIX_IMAGE:-docker.io/nixos/nix:latest}"
 NIX_RUNNER="${NIX_RUNNER:-auto}"        # auto | host | container
 NIX_VOLUME="${NIX_VOLUME:-}"            # persistent /nix store volume (container runner)
 BASE_IMAGE=""
@@ -61,7 +63,7 @@ Usage: nix-bake-closure --base IMG --tag IMG [--pkg ATTR]... [options]
                         base-stamp labels nix-base-check/publish-base read
   --docker CMD          docker|podman (default: docker)
   --nix-runner MODE     auto|host|container (default: auto)
-  --nix-image IMG       nixos/nix image for container runner (default: nixos/nix:latest)
+  --nix-image IMG       nixos/nix image for container runner (default: docker.io/nixos/nix:latest)
   --nix-volume NAME     persistent /nix store volume for the container runner
   --keep-closure        keep <context>/nix-closure after the build (default: remove)
   -h, --help            this help
@@ -110,68 +112,72 @@ if [ "${NIX_RUNNER}" = "auto" ]; then
 fi
 log "nix runner: ${NIX_RUNNER}"
 
-# run_nix "<shell>" — evaluate a nix-using snippet in $OVERLAY_DIR, host or container.
-run_nix() {
-  local snippet="$1"
-  if [ "${NIX_RUNNER}" = "host" ]; then
-    ( cd "${OVERLAY_DIR}" && bash -eu -o pipefail -c "${snippet}" )
-  else
-    local vol_arg=()
-    [ -n "${NIX_VOLUME}" ] && vol_arg=(-v "${NIX_VOLUME}:/nix")
-    "${DOCKER}" run --rm \
-      "${vol_arg[@]}" \
-      -v "${OVERLAY_DIR}:/overlay" \
-      -w /overlay \
-      "${NIX_IMAGE}" \
-      sh -eu -c "mkdir -p /etc/nix && printf 'experimental-features = nix-command flakes\n' > /etc/nix/nix.conf && ${snippet}"
-  fi
-}
-
-# ── 1. build each pkg, collect out paths ────────────────────────────────────
-declare -a OUT_PATHS=()
-for pkg in "${PKGS[@]}"; do
-  log "nix build .#${pkg}"
-  out="$(run_nix "nix build --impure --no-link --print-out-paths .#${pkg} | tail -1")"
-  [ -n "${out}" ] || { echo "nix-bake-closure: empty out path for ${pkg}" >&2; exit 1; }
-  log "  ${pkg} -> ${out}"
-  OUT_PATHS+=("${out}")
-  EXTRA_BUILD_ARGS+=("--build-arg" "$(argname "${pkg}")_STORE_PATH=${out}")
-done
-
-# ── 2. union closure of all out paths (sorted, deduped) ─────────────────────
-log "computing closure (nix-store -qR)"
-closure_list="$(run_nix "nix-store -qR ${OUT_PATHS[*]} | sort -u")"
-n_paths="$(printf '%s\n' "${closure_list}" | grep -c . || true)"
-log "closure: ${n_paths} store paths"
-
-# ── 3. stage closure into the build context (deterministic tar) ─────────────
-# A tar pipe (not cp -al) so it works non-root: nix store dirs are read-only, so
-# `cp -al`/`cp -a` can't populate them without root, whereas GNU tar reads the
-# read-only tree fine and restores dir modes last. --sort/--mtime/--numeric-owner
-# make the staged tree byte-stable → reproducible finish layers. Members are
-# relative to / (nix/store/<hash>...) so they land under <context>/nix-closure/nix.
+# ── build packages + stage their closure into the build context ──────────────
+# Staging uses a tar pipe (not cp -al) so it works non-root: nix store dirs are
+# read-only, which defeats cp without root, whereas GNU tar reads the read-only
+# tree and restores dir modes last. --sort/--mtime/--numeric-owner make the
+# staged tree byte-stable → reproducible finish layers. Members are relative to /
+# (nix/store/<hash>...) so they land under <context>/nix-closure/nix.
 # chmod first: the read-only dirs otherwise block rm -rf on re-runs.
 if [ -e "${CLOSURE_DIR}" ]; then chmod -R u+w "${CLOSURE_DIR}" 2>/dev/null || true; rm -rf "${CLOSURE_DIR}"; fi
 mkdir -p "${STORE_DST}"
 
-members="$(printf '%s\n' "${closure_list}" | sed 's|^/||')"    # nix/store/<hash>...
+attrs=""; for pkg in "${PKGS[@]}"; do attrs="${attrs} .#${pkg}"; done
+declare -a OUT_PATHS=()
+
 if [ "${NIX_RUNNER}" = "host" ]; then
+  # Host /nix persists across commands, so build → closure → stage can be steps.
+  for pkg in "${PKGS[@]}"; do
+    log "nix build .#${pkg}"
+    out="$( cd "${OVERLAY_DIR}" && nix build --impure --no-link --print-out-paths ".#${pkg}" | tail -1 )"
+    [ -n "${out}" ] || { echo "nix-bake-closure: empty out path for ${pkg}" >&2; exit 1; }
+    log "  ${pkg} -> ${out}"
+    OUT_PATHS+=("${out}")
+    EXTRA_BUILD_ARGS+=("--build-arg" "$(argname "${pkg}")_STORE_PATH=${out}")
+  done
+  log "computing + staging closure (nix-store -qR)"
+  members="$( nix-store -qR "${OUT_PATHS[@]}" | sort -u | sed 's|^/||' )"
   tar -C / --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
       -cf - -T <(printf '%s\n' "${members}") \
     | tar -C "${CLOSURE_DIR}" -xf -
 else
-  # Container runner: tar inside the container (which holds /nix), unpack on host
-  # (hardlinks can't cross the container/host boundary).
-  log "exporting closure from container"
-  printf '%s\n' "${members}" > "${CLOSURE_DIR}/.members.txt"
+  # Container runner (no host nix): build + closure-capture + tar-export MUST run
+  # in ONE `docker run`, because each run's /nix is ephemeral unless --nix-volume
+  # is given — a separate build and a separate nix-store -qR would not share the
+  # store. Writes outpaths.txt (attr -> store path) + closure.tar into the ctx.
+  log "nix build (container, single-shot): ${PKGS[*]}"
+  # The nixos/nix image is minimal (no sed/tar/cut), so the inner steps run under
+  # `nix shell` (coreutils/gnutar/gnused on PATH) from a mounted script — which
+  # also avoids fragile nested quoting. Build + closure + tar-export all happen in
+  # this one container so its ephemeral /nix persists across them. $ATTRS is left
+  # literal here (single-quoted heredoc) and expanded in-container from -e ATTRS.
+  cat > "${CLOSURE_DIR}/_inner.sh" <<'INNER'
+set -eu
+: > /out/outpaths.txt
+for a in $ATTRS; do
+  o=$(nix build --impure --no-link --print-out-paths "$a" | tail -1)
+  [ -n "$o" ] || { echo "empty out path for $a" >&2; exit 1; }
+  printf '%s %s\n' "$a" "$o" >> /out/outpaths.txt
+done
+nix-store -qR $(cut -d' ' -f2 /out/outpaths.txt) | sort -u | sed 's|^/||' > /out/members.txt
+tar -C / --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf /out/closure.tar -T /out/members.txt
+INNER
+  vol_arg=(); [ -n "${NIX_VOLUME}" ] && vol_arg=(-v "${NIX_VOLUME}:/nix")
   "${DOCKER}" run --rm \
-    $( [ -n "${NIX_VOLUME}" ] && echo -v "${NIX_VOLUME}:/nix" ) \
-    -v "${CLOSURE_DIR}:/out" \
+    "${vol_arg[@]}" \
+    -e ATTRS="${attrs}" \
+    -v "${OVERLAY_DIR}:/overlay" -v "${CLOSURE_DIR}:/out" -w /overlay \
     "${NIX_IMAGE}" \
-    sh -eu -c 'tar -C / --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-                 -cf /out/.closure.tar -T /out/.members.txt'
-  tar -C "${CLOSURE_DIR}" -xf "${CLOSURE_DIR}/.closure.tar"
-  rm -f "${CLOSURE_DIR}/.closure.tar" "${CLOSURE_DIR}/.members.txt"
+    sh -euc 'mkdir -p /etc/nix && printf "experimental-features = nix-command flakes\n" > /etc/nix/nix.conf && exec nix shell nixpkgs#coreutils nixpkgs#gnutar nixpkgs#gnused --command sh /out/_inner.sh'
+  while read -r a o; do
+    [ -n "${o}" ] || continue
+    pkg="${a#.#}"
+    OUT_PATHS+=("${o}")
+    EXTRA_BUILD_ARGS+=("--build-arg" "$(argname "${pkg}")_STORE_PATH=${o}")
+    log "  ${pkg} -> ${o}"
+  done < "${CLOSURE_DIR}/outpaths.txt"
+  tar -C "${CLOSURE_DIR}" -xf "${CLOSURE_DIR}/closure.tar"
+  rm -f "${CLOSURE_DIR}/closure.tar" "${CLOSURE_DIR}/members.txt" "${CLOSURE_DIR}/outpaths.txt" "${CLOSURE_DIR}/_inner.sh"
 fi
 chmod -R u+w "${CLOSURE_DIR}" 2>/dev/null || true
 log "staged closure into ${STORE_DST} ($(du -sh "${CLOSURE_DIR}" 2>/dev/null | cut -f1))"

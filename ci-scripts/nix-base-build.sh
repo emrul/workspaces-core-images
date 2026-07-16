@@ -85,7 +85,7 @@ EOF
       --overlay /work/bin/nix-kasm-overlay \
       --context "${ctx}" \
       --docker podman --nix-runner container \
-      --nix-image "${NIX_STAGE_IMAGE:-nixos/nix:latest}" \
+      --nix-image "${NIX_STAGE_IMAGE:-docker.io/nixos/nix:latest}" \
       ${NIX_STAGE_VOLUME:+--nix-volume "${NIX_STAGE_VOLUME}"} \
       --label "kasm.base.builtsha=${BASE_BUILT_SHA:-unknown}" \
       --label "dev.kasm.base.src-image=${src}" \
