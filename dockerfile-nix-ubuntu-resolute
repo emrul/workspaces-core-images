@@ -1,24 +1,31 @@
-# nix-ubuntu-resolute — the resolute runtime base with KasmVNC provided by Nix.
+# nix-ubuntu-resolute — the resolute runtime base, Kasm services provided by Nix
+# under the MULTI-STORE model (design/nix-workspace-as-code.md).
 #
-# The resolute core (dockerfile-kasm-core-ubuntu-resolute, built with
-# INCLUDE_KASMVNC=0) has no KasmVNC, because Kasm publishes no per-distro KasmVNC
-# .deb for resolute (26.04). This finish build bakes the distro-independent Nix
-# KasmVNC (bin/nix-kasm-overlay/pkgs/kasmvnc, autoPatchelf'd against the Nix
-# closure) into the image and wires it into the paths the boot expects.
+# The resolute core (dockerfile-kasm-core-ubuntu-resolute) is built with
+# INCLUDE_KASMVNC/PROFILE_SYNC/AUDIO_INPUT/RECORDER/WEBCAM/GAMEPAD=0 — Kasm ships
+# no per-distro artifacts for 26.04 — so those services come from Nix instead.
 #
-# The Nix closure (the kasmvnc store path + all its deps) must be staged into the
-# build context at ./nix-closure/nix by the build helper, since the resolute core
-# has no Nix. KASMVNC_STORE_PATH is the /nix/store/<hash>-kasmvnc-… path.
+# This finish build BAKES the Nix service closure as ONE store at
+# /nix-stores/services (staged by bin/nix-bake-closure --store-id services). At
+# boot, nix-compose.service unions that baked store with any fat store mounted at
+# /nix-stores/base into a single /nix/store symlink farm, so:
+#   • services run standalone (the baked store is always present), and
+#   • apps appear when a fat store is mounted (the select-apps desktop).
 #
-# Binaries stay symlinked to the (immutable) store so their baked interpreter +
-# RPATH resolve; the web assets are COPIED out to a WRITABLE /usr/share/kasmvnc
-# (the boot adds www/Downloads there). Replicates the .deb's /usr layout +
-# post-install (incl. the /usr/bin/Xvnc→Xkasmvnc symlink the .deb postinst makes,
-# which kasm-xvnc execs).
-ARG BASE_IMAGE="localhost/kasm-core-ubuntu-resolute:test"
+# Service binaries are symlinked to their path inside the BAKED store
+# (/nix-stores/services/store/<hash>) — a real path at build/parse time, so the
+# units' ConditionPathExists pass — while each binary's baked interpreter/RUNPATH
+# (/nix/store/<hash>) is resolved at exec by the farm nix-compose builds first
+# (nix-compose.service is ordered Before these service units).
+ARG BASE_IMAGE="localhost/kasm-core-ubuntu-resolute:dev"
 FROM $BASE_IMAGE
 
+ARG DISTRO=ubuntu
 USER 0
+
+# Store out-paths (/nix/store/<hash>-…) of each baked service, from the build
+# helper. The staged location is /nix-stores/services/store/<basename>; the wiring
+# below derives it from the basename.
 ARG KASMVNC_STORE_PATH
 ARG PROFILE_SYNC_STORE_PATH
 ARG AUDIO_INPUT_STORE_PATH
@@ -26,25 +33,57 @@ ARG RECORDER_STORE_PATH
 ARG WEBCAM_STORE_PATH
 ARG GAMEPAD_STORE_PATH
 
-# The baked Nix closures (binaries need their store deps present). Staged by
-# bin/nix-bake-closure as the union of every --pkg's closure (kasmvnc +
-# profile_sync + audio_input + recorder + webcam + gamepad), so every service's
-# store paths are here.
-COPY nix-closure/nix /nix
+# ── Nix activation hooks (lockstep with dockerfile-nix-ubuntu + nix-compose) ──
+# nix-bwrap-run needs a real /usr/bin/bwrap for buildFHSEnv apps; self-heal if a
+# future base drops it (no-op when present).
+RUN command -v bwrap >/dev/null 2>&1 || { \
+        apt-get update && \
+        apt-get install -y --no-install-recommends bubblewrap && \
+        rm -rf /var/lib/apt/lists/*; }
 
+COPY src/ubuntu/install/nix/units/nix-compose.service \
+     src/ubuntu/install/nix/units/nix-activate.service \
+     src/ubuntu/install/nix/units/nix-gpu-setup.service \
+     /etc/container-init.d/
+COPY src/ubuntu/install/nix/scripts/nix-compose \
+     src/ubuntu/install/nix/scripts/nix-activate \
+     src/ubuntu/install/nix/scripts/nix-app \
+     src/ubuntu/install/nix/scripts/nix-launch \
+     src/ubuntu/install/nix/scripts/nix-bwrap-run \
+     src/ubuntu/install/nix/scripts/nix-gpu-run \
+     src/ubuntu/install/nix/scripts/nix-gpu-setup \
+     /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/nix-compose /usr/local/bin/nix-activate \
+        /usr/local/bin/nix-app /usr/local/bin/nix-launch /usr/local/bin/nix-bwrap-run \
+        /usr/local/bin/nix-gpu-run /usr/local/bin/nix-gpu-setup && \
+    /usr/local/bin/container-init \
+        --units /etc/container-init/units \
+        --drop-in /etc/container-init.d \
+        --strict-units --validate
+RUN { \
+      echo ''; \
+      echo '# nix-app: ensure interactive shells see the activated profiles.'; \
+      echo '[ -f /etc/profile.d/nix-app.sh ] && . /etc/profile.d/nix-app.sh'; \
+    } >> /etc/bash.bashrc
+
+# ── Baked service store (one of the stores nix-compose unions into /nix) ──
+COPY nix-stores/services/store /nix-stores/services/store
+
+# ── Wire the services from the baked store ──
+# Symlinks target /nix-stores/services/store/<hash> (real now); nix-compose builds
+# the /nix/store farm at boot so the binaries' interpreters resolve at exec.
 RUN set -eu; \
-    kv="${KASMVNC_STORE_PATH}"; \
-    test -x "$kv/bin/Xkasmvnc" || { echo "KASMVNC_STORE_PATH invalid: $kv"; exit 1; }; \
-    # Binaries → symlink to the store (keep their nix interpreter/RPATH).
-    ln -sf "$kv/bin/Xkasmvnc" /usr/bin/Xkasmvnc; \
-    ln -sf "$kv/bin/Xkasmvnc" /usr/bin/Xvnc; \
+    svc=/nix-stores/services/store; \
+    kv="${svc}/$(basename "${KASMVNC_STORE_PATH}")"; \
+    test -x "${kv}/bin/Xkasmvnc" || { echo "KASMVNC store missing at ${kv}"; exit 1; }; \
+    ln -sf "${kv}/bin/Xkasmvnc" /usr/bin/Xkasmvnc; \
+    ln -sf "${kv}/bin/Xkasmvnc" /usr/bin/Xvnc; \
     for b in kasmvncserver kasmvncconfig kasmvncpasswd kasmxproxy; do \
-        [ -e "$kv/bin/$b" ] && ln -sf "$kv/bin/$b" "/usr/bin/$b"; \
+        [ -e "${kv}/bin/${b}" ] && ln -sf "${kv}/bin/${b}" "/usr/bin/${b}"; \
     done; \
-    # Web assets + config → writable copy (boot adds www/Downloads).
-    rm -rf /usr/share/kasmvnc; cp -a "$kv/share/kasmvnc" /usr/share/kasmvnc; \
-    [ -d "$kv/lib/kasmvncserver" ] && { rm -rf /usr/lib/kasmvncserver; cp -a "$kv/lib/kasmvncserver" /usr/lib/kasmvncserver; } || true; \
-    # Post-install (mirrors src/ubuntu/install/kasm_vnc/install_kasm_vnc.sh tail).
+    # KasmVNC web assets + libs → writable copies (boot adds www/Downloads).
+    rm -rf /usr/share/kasmvnc; cp -a "${kv}/share/kasmvnc" /usr/share/kasmvnc; \
+    [ -d "${kv}/lib/kasmvncserver" ] && { rm -rf /usr/lib/kasmvncserver; cp -a "${kv}/lib/kasmvncserver" /usr/lib/kasmvncserver; } || true; \
     mkdir -p /usr/share/kasmvnc/www/Downloads; \
     chown -R 0:0 /usr/share/kasmvnc; chmod -R og-w /usr/share/kasmvnc; \
     ln -sf /home/kasm-user/Downloads /usr/share/kasmvnc/www/Downloads/Downloads; \
@@ -54,37 +93,19 @@ RUN set -eu; \
         -keyout /etc/kasm/self-default.pem -out /etc/kasm/self-default.pem \
         -subj "/C=US/ST=VA/L=None/O=None/OU=DoFu/CN=kasm/emailAddress=none@none.none"; \
     chown 0:1000 /etc/kasm/self-default.pem; chmod 0640 /etc/kasm/self-default.pem; \
-    echo "nix KasmVNC wired: $(/usr/bin/Xvnc -version 2>&1 | head -1)"
-
-# Wire the Nix profile-sync binaries (both versions the boot selects via
-# KASM_PROFILE_LDR — see src/common/kasm-go/scripts/kasm-profile-pull). Replaces
-# the per-distro S3 build (skipped in the resolute core via INCLUDE_PROFILE_SYNC=0).
-RUN set -eu; \
-    ps="${PROFILE_SYNC_STORE_PATH:-}"; \
-    if [ -n "$ps" ] && [ -x "$ps/bin/kasm-profile-sync" ]; then \
-        ln -sf "$ps/bin/kasm-profile-sync"   /usr/bin/kasm-profile-sync; \
-        ln -sf "$ps/bin/kasm-profile-sync-2" /usr/bin/kasm-profile-sync-2; \
-        /usr/bin/kasm-profile-sync-2 --help >/dev/null 2>&1 \
-          && echo "nix profile-sync wired: ok" || echo "nix profile-sync wired (v2 --help nonzero)"; \
-    else \
-        echo "PROFILE_SYNC_STORE_PATH unset/invalid — skipping profile-sync wiring"; \
-    fi
-
-# Wire the staticx-bundle services at the /dockerstartup/<svc>/<binary> paths
-# their container-init units exec (audio-in / recorder-watch / webcam / gamepad).
-# Each is skipped in the resolute core (INCLUDE_*=0) and provided by the bake.
-# Tolerant of an unset store path so partial bakes still build.
-RUN set -eu; \
-    wire() { \
-      sp="$1"; dst="$2"; bin="$3"; \
-      if [ -n "$sp" ] && [ -x "$sp/bin/$bin" ]; then \
-        mkdir -p "$(dirname "$dst")"; ln -sf "$sp/bin/$bin" "$dst"; \
-        echo "wired ${dst} -> ${sp}/bin/${bin}"; \
-      else \
-        echo "skip ${dst} (store path unset/invalid)"; \
-      fi; \
-    }; \
-    wire "${AUDIO_INPUT_STORE_PATH:-}" /dockerstartup/audio_input/kasm_audio_input_server kasm_audio_input_server; \
-    wire "${RECORDER_STORE_PATH:-}"    /dockerstartup/recorder/kasm_recorder_service       kasm_recorder_service; \
-    wire "${WEBCAM_STORE_PATH:-}"      /dockerstartup/webcam/kasm_webcam_server            kasm_webcam_server; \
-    wire "${GAMEPAD_STORE_PATH:-}"     /dockerstartup/gamepad/kasm_gamepad_server          kasm_gamepad_server
+    # profile-sync (both versions the boot selects via KASM_PROFILE_LDR).
+    ps="${svc}/$(basename "${PROFILE_SYNC_STORE_PATH:-__unset__}")"; \
+    if [ -x "${ps}/bin/kasm-profile-sync" ]; then \
+        ln -sf "${ps}/bin/kasm-profile-sync"   /usr/bin/kasm-profile-sync; \
+        ln -sf "${ps}/bin/kasm-profile-sync-2" /usr/bin/kasm-profile-sync-2; \
+        echo "profile-sync wired"; \
+    else echo "profile-sync store unset — skipping"; fi; \
+    # staticx services at the /dockerstartup/<svc>/<binary> paths their units exec.
+    wire() { p="$1"; d="$2"; b="$3"; \
+      if [ -x "${p}/bin/${b}" ]; then mkdir -p "$(dirname "${d}")"; ln -sf "${p}/bin/${b}" "${d}"; echo "wired ${d}"; \
+      else echo "skip ${d} (store unset)"; fi; }; \
+    wire "${svc}/$(basename "${AUDIO_INPUT_STORE_PATH:-__unset__}")" /dockerstartup/audio_input/kasm_audio_input_server kasm_audio_input_server; \
+    wire "${svc}/$(basename "${RECORDER_STORE_PATH:-__unset__}")"    /dockerstartup/recorder/kasm_recorder_service       kasm_recorder_service; \
+    wire "${svc}/$(basename "${WEBCAM_STORE_PATH:-__unset__}")"      /dockerstartup/webcam/kasm_webcam_server            kasm_webcam_server; \
+    wire "${svc}/$(basename "${GAMEPAD_STORE_PATH:-__unset__}")"     /dockerstartup/gamepad/kasm_gamepad_server          kasm_gamepad_server; \
+    echo "resolute multi-store services wired under ${svc}"

@@ -38,6 +38,9 @@ DOCKER="${DOCKER:-docker}"
 NIX_IMAGE="${NIX_IMAGE:-docker.io/nixos/nix:latest}"
 NIX_RUNNER="${NIX_RUNNER:-auto}"        # auto | host | container
 NIX_VOLUME="${NIX_VOLUME:-}"            # persistent /nix store volume (container runner)
+STORE_ID="${STORE_ID:-}"               # non-empty → stage a multi-store store at
+                                       #   <ctx>/nix-stores/<id>/store (for nix-compose),
+                                       #   instead of the single-mount <ctx>/nix-closure/nix.
 BASE_IMAGE=""
 TAG=""
 KEEP_CLOSURE=0
@@ -65,7 +68,10 @@ Usage: nix-bake-closure --base IMG --tag IMG [--pkg ATTR]... [options]
   --nix-runner MODE     auto|host|container (default: auto)
   --nix-image IMG       nixos/nix image for container runner (default: docker.io/nixos/nix:latest)
   --nix-volume NAME     persistent /nix store volume for the container runner
-  --keep-closure        keep <context>/nix-closure after the build (default: remove)
+  --store-id ID         stage as a multi-store store at <context>/nix-stores/ID/store
+                        (for nix-compose union) instead of <context>/nix-closure/nix.
+                        The finish Dockerfile then COPYs nix-stores/ID/store.
+  --keep-closure        keep the staged closure dir after the build (default: remove)
   -h, --help            this help
 EOF
   exit "${1:-0}"
@@ -86,6 +92,7 @@ while [ $# -gt 0 ]; do
     --nix-runner)  NIX_RUNNER="$2"; shift 2 ;;
     --nix-image)   NIX_IMAGE="$2"; shift 2 ;;
     --nix-volume)  NIX_VOLUME="$2"; shift 2 ;;
+    --store-id)    STORE_ID="$2"; shift 2 ;;
     --keep-closure) KEEP_CLOSURE=1; shift ;;
     -h|--help)     usage 0 ;;
     *) echo "nix-bake-closure: unknown arg: $1" >&2; usage 1 ;;
@@ -98,8 +105,20 @@ done
 [ -d "${OVERLAY_DIR}" ] || { echo "nix-bake-closure: overlay dir not found: ${OVERLAY_DIR}" >&2; exit 1; }
 [ "${#PKGS[@]}" -gt 0 ] || PKGS=(kasmvnc)
 
-CLOSURE_DIR="${CONTEXT}/nix-closure"
-STORE_DST="${CLOSURE_DIR}/nix/store"
+# Where the closure is staged in the build context, and how the extract tar
+# strips the leading path. Default: <ctx>/nix-closure/nix/store (dockerfile COPYs
+# nix-closure/nix -> /nix). With --store-id: <ctx>/nix-stores/<id>/store (a
+# mountable-shaped store; dockerfile COPYs nix-stores/<id>/store), stripping the
+# "nix/" prefix off the "nix/store/<hash>" members so they land under .../store.
+if [ -n "${STORE_ID}" ]; then
+  CLOSURE_DIR="${CONTEXT}/nix-stores/${STORE_ID}"
+  STORE_DST="${CLOSURE_DIR}/store"
+  EXTRACT_STRIP="--strip-components=1"
+else
+  CLOSURE_DIR="${CONTEXT}/nix-closure"
+  STORE_DST="${CLOSURE_DIR}/nix/store"
+  EXTRACT_STRIP=""
+fi
 
 log() { echo "[nix-bake-closure] $*" >&2; }
 
@@ -139,7 +158,7 @@ if [ "${NIX_RUNNER}" = "host" ]; then
   members="$( nix-store -qR "${OUT_PATHS[@]}" | sort -u | sed 's|^/||' )"
   tar -C / --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
       -cf - -T <(printf '%s\n' "${members}") \
-    | tar -C "${CLOSURE_DIR}" -xf -
+    | tar -C "${CLOSURE_DIR}" ${EXTRACT_STRIP} -xf -
 else
   # Container runner (no host nix): build + closure-capture + tar-export MUST run
   # in ONE `docker run`, because each run's /nix is ephemeral unless --nix-volume
@@ -163,7 +182,9 @@ nix-store -qR $(cut -d' ' -f2 /out/outpaths.txt) | sort -u | sed 's|^/||' > /out
 tar -C / --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf /out/closure.tar -T /out/members.txt
 INNER
   vol_arg=(); [ -n "${NIX_VOLUME}" ] && vol_arg=(-v "${NIX_VOLUME}:/nix")
-  "${DOCKER}" run --rm \
+  # --network host: the nested nixos/nix container inside the forge DIND otherwise
+  # has no DNS, so nix build/shell can't resolve channels.nixos.org/cache.nixos.org.
+  "${DOCKER}" run --rm --network host \
     "${vol_arg[@]}" \
     -e ATTRS="${attrs}" \
     -v "${OVERLAY_DIR}:/overlay" -v "${CLOSURE_DIR}:/out" -w /overlay \
@@ -176,7 +197,7 @@ INNER
     EXTRA_BUILD_ARGS+=("--build-arg" "$(argname "${pkg}")_STORE_PATH=${o}")
     log "  ${pkg} -> ${o}"
   done < "${CLOSURE_DIR}/outpaths.txt"
-  tar -C "${CLOSURE_DIR}" -xf "${CLOSURE_DIR}/closure.tar"
+  tar -C "${CLOSURE_DIR}" ${EXTRACT_STRIP} -xf "${CLOSURE_DIR}/closure.tar"
   rm -f "${CLOSURE_DIR}/closure.tar" "${CLOSURE_DIR}/members.txt" "${CLOSURE_DIR}/outpaths.txt" "${CLOSURE_DIR}/_inner.sh"
 fi
 chmod -R u+w "${CLOSURE_DIR}" 2>/dev/null || true

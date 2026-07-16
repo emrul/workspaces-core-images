@@ -78,7 +78,7 @@ EOF
     # ro). NIX_STAGE_VOLUME (a persistent /nix podman volume) warms the cache if set.
     ctx="$(mktemp -d)"
     bin/nix-bake-closure \
-      --base "${coretag}" --tag "${nixtag}" \
+      --base "${coretag}" --tag "${nixtag}" --store-id services \
       --pkg kasmvnc --pkg profile_sync --pkg audio_input \
       --pkg recorder --pkg webcam --pkg gamepad \
       --dockerfile /work/dockerfile-nix-ubuntu-resolute \
