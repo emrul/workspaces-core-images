@@ -167,12 +167,16 @@ gen_json() {
 
 generate_report() { gen_md; gen_json; }
 
-# All per-app images from the build: localhost/nix-<profile>:dev, excluding the
-# base (nix-ubuntu) and the fat store (nix-store*).
+# All per-app images from the build: localhost/nix-<profile>:dev, excluding
+# EVERY distro base (nix-ubuntu*, nix-fedora, nix-alpine — published separately
+# by nix-publish-base under their kasm-core-* names) and the fat store
+# (nix-store*). The prune keep-list (dind-build.sh/nix-gc.sh) preserves the
+# bases in the store, so an incomplete exclusion here republishes them as fake
+# "apps" (seen as alpine:nix / fedora:nix — pipeline 2683070693).
 mapfile -t imgs < <(
   "${DOCKER}" images --format '{{.Repository}}:{{.Tag}}' \
     | grep -E "^${NIX_APP_REPO}-[a-z0-9][a-z0-9-]*:dev$" \
-    | grep -vE "^${NIX_APP_REPO}-(ubuntu|store)" \
+    | grep -vE "^${NIX_APP_REPO}-(ubuntu|store|fedora|alpine)" \
     | sort -u
 )
 
