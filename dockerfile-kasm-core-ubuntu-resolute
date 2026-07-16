@@ -39,12 +39,18 @@ ARG BG_IMG=bg_kasm.png
 ARG EXTRA_SH=noop.sh
 ARG DISTRO=ubuntu
 ARG KASM_ENABLE_GVFS=0
+# Resolute (26.04) has no published Kasm per-distro build artifacts yet. Portable
+# (Go-binary) Kasm services fetch a supported release's artifact instead, via this
+# codename override (see src/ubuntu/install/*/install_*.sh). KasmVNC is handled
+# separately (INCLUDE_KASMVNC=0 → provided by the Nix overlay).
+ARG KASM_UBUNTU_ARTIFACT_CODENAME=noble
 ARG LANG='en_US.UTF-8'
 ARG LANGUAGE='en_US:en'
 ARG LC_ALL='en_US.UTF-8'
 ARG TZ='Etc/UTC'
 ENV DEBIAN_FRONTEND=noninteractive \
     DISTRO=$DISTRO \
+    KASM_UBUNTU_ARTIFACT_CODENAME=$KASM_UBUNTU_ARTIFACT_CODENAME \
     HOME=/home/kasm-default-profile \
     INST_SCRIPTS=/dockerstartup/install \
     KASM_ENABLE_GVFS=$KASM_ENABLE_GVFS \

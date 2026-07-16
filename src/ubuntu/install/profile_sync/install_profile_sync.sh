@@ -19,7 +19,11 @@ detect_deb_distro() {
   local full_name
 
   distro=$(grep -Po -m 1 '(?<=PRETTY_NAME=")[^ ]+' /etc/os-release)
-  codename=$(grep -Po -m 1 "(?<=_CODENAME=)\w+" /etc/os-release)
+  # KASM_UBUNTU_ARTIFACT_CODENAME overrides the codename used to pick the S3
+  # artifact — set it (e.g. to "noble") on releases whose own build isn't
+  # published yet (resolute/26.04). profile-sync is a portable Go binary, so a
+  # supported-release build runs fine. Unset ⇒ native codename (noble/jammy).
+  codename="${KASM_UBUNTU_ARTIFACT_CODENAME:-$(grep -Po -m 1 "(?<=_CODENAME=)\w+" /etc/os-release)}"
   full_name="${distro}_${codename}"
   echo "${full_name,,}"
 }
