@@ -103,6 +103,47 @@ add it to `overlay.nix` + `flake.nix` packages + `manifest.toml`, point
 `[profiles.<profile>]` in `nix-profiles.toml` at `path:/config/kasm-overlay#<profile>`.
 See the overlay's `README.md`.
 
+### 4.1 What an `overlay.nix` / `flake.*` change rebuilds (change-gate scoping)
+
+The overlay feeds exactly two kinds of consumer, so the change-gate scopes an
+overlay-**shared** change (`overlay.nix`, `flake.nix`, `flake.lock`, `lib/*`) to
+*those consumers only* — **never the whole catalog** (the other ~49 apps use
+plain nixpkgs and cannot be affected):
+
+1. **Overlay-backed catalog apps** — profiles whose `pkgs` reference
+   `path:/config/kasm-overlay#…` in `bin/nix-profiles.toml`. **Today: `chrome`.**
+2. **Distro bases that bake overlay components** — bases whose recipe in
+   `ci-scripts/nix-base-build.sh` runs `nix-bake-closure --pkg …`. **Today:
+   `resolute`** (KasmVNC, profile-sync, audio-input, recorder, webcam, gamepad).
+
+So the current value, in the `overlay.nix|flake.*|lib/*` arm of
+`nix-changed-profiles.sh`, is `apps="chrome"` + `BASES_AFFECTED="resolute"`
+(eval-gate no-ops chrome if its inputs didn't actually change).
+
+> **This is not a dev-vs-prod toggle — it is the real consumer set, and it grows
+> with adoption.** It is driven by two product decisions, not by environment:
+> - **Self-host another app** (fast-cadence, or not-in-nixpkgs, like chrome) →
+>   add it to the app side.
+> - **Migrate another distro off its per-distro service artifacts** onto the
+>   Nix-baked services (the cross-distro goal) → that distro gains `--pkg` bake
+>   lines in `nix-base-build.sh`, so add it to the base side. If noble/fedora/
+>   alpine adopt the Nix KasmVNC/profile-sync/etc., the base side becomes
+>   `resolute ubuntu fedora alpine`.
+> - If chrome stays the only self-hosted app **and** resolute the only
+>   Nix-services base, then **`chrome + resolute` is the correct, permanent
+>   production value** — nothing to change.
+
+Whole-catalog is never right for an overlay change: it was the old behaviour and
+is what filled the forge build disk (every overlay edit rebuilt all ~50 apps +
+republished the fat store, then starved the next pipeline's checkout).
+
+**Keep it from drifting:**
+- **App side is derivable** — `grep -oE 'kasm-overlay#[a-z0-9_-]+' bin/nix-profiles.toml`.
+  Prefer deriving over a hardcoded list.
+- **Base side** must match exactly the bases with `nix-bake-closure --pkg` lines
+  in `nix-base-build.sh`. Adding a base to the bake is a deliberate multi-file
+  edit — update this arm in the same change (or derive it from there).
+
 ---
 
 ## 5. Base images (auto-rebuild)
