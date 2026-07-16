@@ -1,122 +1,89 @@
-# KasmVNC (Kind B — from scratch) — FIRST-CUT SPIKE, expect .140 iteration.
+# KasmVNC (Kind B) — repackage Kasm's prebuilt KasmVNC .deb as a Nix package.
 #
-# Goal: a single glibc/x86_64 Nix build of Kasm's KasmVNC server (Xvnc fork +
-# web stack + perl `vncserver` wrapper) so the runtime base no longer needs a
-# per-distro .deb/.rpm/.apk. This unblocks Ubuntu Resolute and every future
-# distro (no Kasm S3 artifact / codename matrix), and thins the base toward
-# distro-independence. See design/nix/RUNBOOK.md and base-image-assessment.md.
+# Goal: a distro-independent Nix build of the KasmVNC server so the runtime base
+# no longer needs a per-distro .deb/.rpm/.apk — unblocking Ubuntu Resolute (26.04,
+# which has no published KasmVNC build) and every future distro, and thinning the
+# base toward distro-independence. First step of moving Kasm services into Nix.
 #
-# KasmVNC is a TigerVNC fork, so this cribs nixpkgs' `tigervnc` derivation
-# (pkgs/by-name/ti/tigervnc/package.nix) — which already solves the hard part,
-# building the Xvnc X-server fork under Nix — and adapts it:
-#   • CMake flags per KasmVNC builder/build.sh: -DBUILD_VIEWER=OFF (no fltk viewer),
-#     -DENABLE_GNUTLS=OFF (KasmVNC links openssl instead).
-#   • Xvnc build: extract nixpkgs xorg-server.src into unix/xserver, apply
-#     KasmVNC's unix/xserver21.patch (21.x — matches nixpkgs xorg-server 21.1.x),
-#     configure+make. Identical shape to tigervnc's postBuild.
-#   • Runtime: wrap the perl `vncserver` with the perl modules Kasm's debian/control
-#     lists (YAML::Tiny, List::MoreUtils, DateTime, DateTime::TimeZone, Switch,
-#     Try::Tiny, Hash::Merge::Simple) + xkbcomp/xauth/xkeyboard-config.
+# APPROACH: KasmVNC source is internal (not on public GitHub), but Kasm publishes
+# the built artifacts to a PUBLIC S3 bucket. So — exactly like nixpkgs' google-chrome
+# repackages Google's .deb — we fetch the prebuilt KasmVNC .deb and re-link it
+# against Nix libraries with autoPatchelfHook. The .deb is built per-distro, but
+# autoPatchelf discards its system-lib links and rebinds to the Nix closure, so a
+# single build (from the `noble` .deb) runs on ANY host distro. URL is built from
+# the same vars as src/ubuntu/install/kasm_vnc/install_kasm_vnc.sh
+# (COMMIT_ID / BRANCH / KASMVNC_VER → KASM_VER_NAME_PART).
 #
-# ITERATION TODO (resolve on .140 via `nix build`):
-#   [ ] src hash — fill from the first build (currently fakeHash).
-#   [ ] the make Xvnc step: KasmVNC's hw/vnc Makefile may use TIGERVNC_SRC/
-#       TIGERVNC_BUILDDIR (fork kept the name) or KASMVNC_*; adjust if make errors.
-#   [ ] web UI: confirm whether kasmweb/ ships prebuilt or needs a buildNpmPackage
-#       sub-derivation; install the www assets where vncserver expects them.
-#   [ ] install layout: KasmVNC installs vncserver + Xvnc + libvnc.so + www +
-#       yaml config; verify paths vs what src/.../kasm_vnc runtime expects.
+# ITERATION on .140 (`nix build`):
+#   [ ] src hash — fill from the first build (pin.hash is lib.fakeHash now).
+#   [ ] autoPatchelf will list any missing .so for Xkasmvnc/kasmxproxy/… — add the
+#       provider to buildInputs and re-run until clean.
+#   [ ] confirm the perl `kasmvncserver` launcher runs (PERL5LIB + X helpers).
 { prev, pin }:
 
 let
-  inherit (prev) lib stdenv fetchFromGitHub xorg;
-  xorgServer = xorg.xorgserver;   # 21.1.x → matches unix/xserver21.patch
+  inherit (prev) lib stdenv fetchurl autoPatchelfHook dpkg makeWrapper;
+  short = builtins.substring 0 6 pin.commit_id;
+  # Matches install_kasm_vnc.sh: release → bare version; otherwise VER_BRANCH_SHORT6.
+  verPart = if pin.branch == "release"
+            then pin.kasmvnc_ver
+            else "${pin.kasmvnc_ver}_${pin.branch}_${short}";
+  url = "https://kasmweb-build-artifacts.s3.amazonaws.com/kasmvnc/${pin.commit_id}"
+      + "/kasmvncserver_${pin.codename}_${verPart}_${pin.arch}.deb";
   perlDeps = with prev.perlPackages; [
-    YAMLTiny ListMoreUtils TryTiny DateTime DateTimeTimeZone Switch HashMergeSimple
+    Switch YAMLTiny HashMergeSimple ListMoreUtils TryTiny DateTime DateTimeTimeZone
   ];
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "kasmvnc";
-  version = pin.version;
+  version = pin.kasmvnc_ver;
 
-  src = fetchFromGitHub {
-    owner = "kasmtech";
-    repo = "KasmVNC";
-    rev = pin.rev;
-    hash = pin.hash;   # lib.fakeHash until the first .140 build reports the real one
-  };
+  src = fetchurl { inherit url; hash = pin.hash; };
 
-  # KasmVNC builds in-tree (cmake .), like tigervnc.
-  dontUseCmakeBuildDir = true;
+  nativeBuildInputs = [ autoPatchelfHook dpkg makeWrapper ];
 
-  nativeBuildInputs = with prev; [
-    cmake gettext autoconf automake libtool pkg-config makeWrapper
-    xorg.utilmacros xorg.fontutil gawk
-  ] ++ xorgServer.nativeBuildInputs;
-
+  # Runtime .so providers for the KasmVNC ELF binaries (Xkasmvnc is an Xvnc fork,
+  # so it pulls a lot). autoPatchelfHook rebinds against these; add any it reports
+  # missing on the first .140 build.
   buildInputs = with prev; [
-    openssl zlib libjpeg_turbo libpng libtiff giflib pixman ffmpeg libGL libGLU
-    libgbm nettle pam perl
-    xorg.libXtst xorg.libXext xorg.libX11 xorg.libICE xorg.libXi xorg.libSM
-    xorg.libXft xorg.libxkbfile xorg.libXfont2 xorg.libpciaccess xorg.libXrandr
-    xorg.libXdamage xorg.libXcursor
-  ] ++ xorgServer.buildInputs ++ perlDeps;
+    stdenv.cc.cc.lib          # libstdc++/libgcc
+    zlib openssl libjpeg_turbo libpng libtiff giflib pixman ffmpeg
+    libGL libgbm libdrm libunwind
+    xorg.libX11 xorg.libXext xorg.libXtst xorg.libXrandr xorg.libXcursor
+    xorg.libXfont2 xorg.libxshmfence xorg.libpciaccess xorg.libxkbfile
+    xorg.libSM xorg.libICE xorg.libxcb xorg.libXdamage xorg.libXfixes
+    xorg.libXau xorg.libXdmcp
+  ] ++ perlDeps ++ [ perl ];
 
-  propagatedBuildInputs = xorgServer.propagatedBuildInputs or [ ];
-
-  # gcc-12 -Warray-bounds trips the Xvnc build (see builder/build.sh fail_on_gcc_12).
-  env.NIX_CFLAGS_COMPILE = toString [ "-Wno-error=array-bounds" ];
-
-  cmakeFlags = [
-    (lib.cmakeBool "BUILD_VIEWER" false)
-    (lib.cmakeBool "ENABLE_GNUTLS" false)
-    (lib.cmakeFeature "CMAKE_BUILD_TYPE" "RelWithDebInfo")
-  ];
-
-  # After the KasmVNC libs/tools build, build Xvnc against nixpkgs xorg-server —
-  # same procedure as tigervnc's postBuild.
-  postBuild = ''
-    export CXXFLAGS="$CXXFLAGS -fpermissive"
-    tar xf ${xorgServer.src}
-    cp -R xorg*/* unix/xserver
-    pushd unix/xserver
-    patch -p1 < ../xserver21.patch
-    autoreconf -vfi
-    ./configure $configureFlags --disable-devel-docs --disable-docs \
-        --disable-xorg --disable-xnest --disable-xvfb --disable-dmx \
-        --disable-xwin --disable-xephyr --disable-kdrive --with-pic \
-        --disable-xorgcfg --disable-xprint --disable-static \
-        --enable-composite --disable-xtrap --enable-xcsecurity \
-        --disable-{a,c,m}fb --disable-xwayland \
-        --disable-config-dbus --disable-config-udev --disable-config-hal \
-        --disable-xevie --disable-dri --disable-dri2 --disable-dri3 --enable-glx \
-        --enable-install-libxf86config \
-        --prefix="$out" --disable-unit-tests \
-        --with-xkb-path=${xorg.xkeyboardconfig}/share/X11/xkb \
-        --with-xkb-bin-directory=${xorg.xkbcomp}/bin \
-        --with-xkb-output=$out/share/X11/xkb/compiled
-    make KASMVNC_SRC=$src KASMVNC_BUILDDIR=`pwd`/../.. -j$NIX_BUILD_CORES
-    popd
+  unpackPhase = ''
+    runHook preUnpack
+    dpkg-deb -x "$src" .
+    runHook postUnpack
   '';
 
-  postInstall = ''
-    pushd unix/xserver/hw/vnc
-    make KASMVNC_SRC=$src KASMVNC_BUILDDIR=`pwd`/../../../.. install
-    popd
-    # perl vncserver wrapper needs its modules + X helpers on PATH.
-    if [ -e "$out/bin/vncserver" ]; then
-      wrapProgram $out/bin/vncserver \
-        --prefix PATH : ${lib.makeBinPath (with prev.xorg; [ xkbcomp xauth setxkbmap ])} \
-        --prefix PERL5LIB : "$PERL5LIB"
+  # Ship the .deb tree under $out (bin/lib/share) + the default config.
+  installPhase = ''
+    runHook preInstall
+    mkdir -p "$out"
+    cp -r usr/. "$out/"
+    if [ -d etc ]; then mkdir -p "$out/etc"; cp -r etc/. "$out/etc/"; fi
+    runHook postInstall
+  '';
+
+  # kasmvncserver is the perl launcher — give it its modules + X helpers.
+  postFixup = ''
+    if [ -e "$out/bin/kasmvncserver" ]; then
+      wrapProgram "$out/bin/kasmvncserver" \
+        --prefix PERL5LIB : "$PERL5LIB" \
+        --prefix PATH : ${lib.makeBinPath (with prev.xorg; [ xkbcomp xauth setxkbmap ])}
     fi
-    # TODO(.140): install/point at the web UI assets (kasmweb) + default yaml config.
   '';
 
   meta = {
-    description = "KasmVNC server (Kasm fork of TigerVNC) — Nix build for cross-distro use";
-    homepage = "https://github.com/kasmtech/KasmVNC";
-    license = lib.licenses.gpl2Plus;
-    platforms = [ "x86_64-linux" "aarch64-linux" ];
-    mainProgram = "vncserver";
+    description = "KasmVNC server (Kasm) repackaged from the prebuilt .deb for cross-distro Nix use";
+    homepage = "https://www.kasmweb.com/";
+    license = lib.licenses.unfree;   # Kasm-built artifact; source is internal
+    platforms = [ "x86_64-linux" ];
+    mainProgram = "kasmvncserver";
   };
 })
