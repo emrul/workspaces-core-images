@@ -32,6 +32,7 @@
           chrome       = pkgs.chrome;
           kasmvnc      = pkgs.kasmvnc;
           profile_sync = pkgs.profile_sync;
+          audio_input  = pkgs.audio_input;
           default      = pkgs.chrome;
         });
     };

@@ -96,10 +96,11 @@ while IFS= read -r f; do
     bin/nix-kasm-overlay/flake.nix|bin/nix-kasm-overlay/flake.lock|\
     bin/nix-kasm-overlay/overlay.nix|bin/nix-kasm-overlay/lib/*)
       all=1 ;;
-    # KasmVNC is a Nix-packaged BASE component (baked into the resolute base via
-    # nix-bake-closure), NOT a catalog app — a pin/package change rebuilds the
-    # resolute base, not an app profile. Matched before the generic pkgs case.
-    bin/nix-kasm-overlay/pkgs/kasmvnc/*)
+    # KasmVNC / profile-sync / audio-input are Nix-packaged BASE components
+    # (baked into the resolute base via nix-bake-closure), NOT catalog apps — a
+    # pin/package change rebuilds the resolute base, not an app profile. Matched
+    # before the generic pkgs case.
+    bin/nix-kasm-overlay/pkgs/kasmvnc/*|bin/nix-kasm-overlay/pkgs/profile_sync/*|bin/nix-kasm-overlay/pkgs/audio_input/*)
       BASES_AFFECTED="${BASES_AFFECTED} resolute" ;;
     bin/nix-kasm-overlay/pkgs/*/*)
       a="${f#bin/nix-kasm-overlay/pkgs/}"; a="${a%%/*}"; apps="${apps} ${a}" ;;

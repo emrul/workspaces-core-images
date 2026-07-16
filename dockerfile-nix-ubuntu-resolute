@@ -21,10 +21,11 @@ FROM $BASE_IMAGE
 USER 0
 ARG KASMVNC_STORE_PATH
 ARG PROFILE_SYNC_STORE_PATH
+ARG AUDIO_INPUT_STORE_PATH
 
 # The baked Nix closures (binaries need their store deps present). Staged by
 # bin/nix-bake-closure as the union of every --pkg's closure (kasmvnc +
-# profile_sync), so both services' store paths are here.
+# profile_sync + audio_input), so every service's store paths are here.
 COPY nix-closure/nix /nix
 
 RUN set -eu; \
@@ -63,4 +64,18 @@ RUN set -eu; \
           && echo "nix profile-sync wired: ok" || echo "nix profile-sync wired (v2 --help nonzero)"; \
     else \
         echo "PROFILE_SYNC_STORE_PATH unset/invalid — skipping profile-sync wiring"; \
+    fi
+
+# Wire the Nix microphone capture server at the path audio-in.service execs
+# (/dockerstartup/audio_input/kasm_audio_input_server). Replaces the per-distro
+# S3 build (skipped in the resolute core via INCLUDE_AUDIO_INPUT=0).
+RUN set -eu; \
+    ai="${AUDIO_INPUT_STORE_PATH:-}"; \
+    if [ -n "$ai" ] && [ -x "$ai/bin/kasm_audio_input_server" ]; then \
+        mkdir -p /dockerstartup/audio_input; \
+        ln -sf "$ai/bin/kasm_audio_input_server" /dockerstartup/audio_input/kasm_audio_input_server; \
+        /dockerstartup/audio_input/kasm_audio_input_server --help >/dev/null 2>&1 \
+          && echo "nix audio-input wired: ok" || echo "nix audio-input wired (--help nonzero)"; \
+    else \
+        echo "AUDIO_INPUT_STORE_PATH unset/invalid — skipping audio-input wiring"; \
     fi

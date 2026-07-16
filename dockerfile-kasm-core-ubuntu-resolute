@@ -79,6 +79,9 @@ ARG INCLUDE_KASMVNC=1
 # overlay (bin/nix-kasm-overlay/pkgs/profile_sync) provides it via the bake. This
 # is what retires the KASM_UBUNTU_ARTIFACT_CODENAME stopgap on resolute.
 ARG INCLUDE_PROFILE_SYNC=1
+# INCLUDE_AUDIO_INPUT=0 → skip the S3 kasm_audio_input_server; the Nix overlay
+# (bin/nix-kasm-overlay/pkgs/audio_input) provides it via the bake.
+ARG INCLUDE_AUDIO_INPUT=1
 ARG INCLUDE_WEBCAM=1
 ARG INCLUDE_RECORDER=1
 ARG INCLUDE_GAMEPAD=1
@@ -140,7 +143,12 @@ RUN bash $INST_SCRIPTS/audio/install_audio.sh  && rm -rf $INST_SCRIPTS/audio/
 
 ### Install Audio Input
 COPY ./src/ubuntu/install/audio_input $INST_SCRIPTS/audio_input/
-RUN bash $INST_SCRIPTS/audio_input/install_audio_input.sh && rm -rf $INST_SCRIPTS/audio_input/
+RUN if [ "$INCLUDE_AUDIO_INPUT" = "1" ]; then \
+        bash $INST_SCRIPTS/audio_input/install_audio_input.sh; \
+    else \
+        echo "INCLUDE_AUDIO_INPUT=0: skipping the S3 kasm_audio_input_server — provided by the Nix overlay (bin/nix-kasm-overlay/pkgs/audio_input)"; \
+    fi; \
+    rm -rf $INST_SCRIPTS/audio_input/
 
 ### Install Gamepad Service
 COPY ./src/ubuntu/install/gamepad $INST_SCRIPTS/gamepad/

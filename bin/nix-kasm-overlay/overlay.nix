@@ -65,4 +65,11 @@ in
     inherit prev;
     pin = loadPin "profile_sync" ./pkgs/profile_sync;
   };
+
+  # Kind B (repackage S3 artifact): Kasm microphone capture server. A staticx
+  # bundle (no autoPatchelf needed); baked into distro bases like the peers.
+  audio_input = import ./pkgs/audio_input/package.nix {
+    inherit prev;
+    pin = loadPin "audio_input" ./pkgs/audio_input;
+  };
 }

@@ -1,0 +1,7 @@
+{
+  "branch": "develop",
+  "commit_id": "d42f0ca30311beaed2c9833fbd71ba56ddae7ec6",
+  "arch": "amd64",
+  "hash": "sha256-W1NQ8SNiSvJY6CQ7n46/Lv1T9iYlhO5blWLyi7ylaTk=",
+  "_note": "Repackages Kasm's prebuilt kasm_audio_input_server from the public S3. Mirrors src/ubuntu/install/audio_input/install_audio_input.sh: url = kasm_audio_input_server/<commit>/kasm_audio_input_server_<arch>_<branch>.<commit6>.tar.gz. arch is amd64/arm64 (mapped uname). The artifact is a staticx bundle (fully static ELF, self-extracts to /tmp at runtime) so there is nothing to autoPatchelf. Bump: update commit_id/branch + hash (nix store prefetch-file <url>)."
+}
