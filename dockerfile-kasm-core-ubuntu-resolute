@@ -75,6 +75,10 @@ COPY ./src/ubuntu/install/package_rules $INST_SCRIPTS/package_rules/
 RUN bash $INST_SCRIPTS/package_rules/package_rules.sh && rm -rf $INST_SCRIPTS/package_rules/
 
 ARG INCLUDE_KASMVNC=1
+# INCLUDE_PROFILE_SYNC=0 → skip the per-distro profile-sync S3 artifact; the Nix
+# overlay (bin/nix-kasm-overlay/pkgs/profile_sync) provides it via the bake. This
+# is what retires the KASM_UBUNTU_ARTIFACT_CODENAME stopgap on resolute.
+ARG INCLUDE_PROFILE_SYNC=1
 ARG INCLUDE_WEBCAM=1
 ARG INCLUDE_RECORDER=1
 ARG INCLUDE_GAMEPAD=1
@@ -118,7 +122,12 @@ COPY ./src/common/install/kasm_vnc/kasmvnc.yaml /etc/kasmvnc/
 
 ### Install Kasm Profile Sync
 COPY ./src/ubuntu/install/profile_sync $INST_SCRIPTS/profile_sync/
-RUN bash $INST_SCRIPTS/profile_sync/install_profile_sync.sh
+RUN if [ "$INCLUDE_PROFILE_SYNC" = "1" ]; then \
+        bash $INST_SCRIPTS/profile_sync/install_profile_sync.sh; \
+    else \
+        echo "INCLUDE_PROFILE_SYNC=0: skipping the per-distro profile-sync S3 artifact — provided by the Nix overlay (bin/nix-kasm-overlay/pkgs/profile_sync)"; \
+    fi; \
+    rm -rf $INST_SCRIPTS/profile_sync/
 
 ### Install Kasm Upload Server (Go drop-in built by kasmgo_builder)
 COPY ./src/ubuntu/install/kasm_upload_server $INST_SCRIPTS/kasm_upload_server/

@@ -56,9 +56,10 @@ EOF
   podman pull -q "docker.io/library/${src}" >/dev/null 2>&1 || podman pull -q "${src}" >/dev/null 2>&1 || true
   digest="$(src_digest "${src}")"
   echo "[base:${d}] building ${coretag} (from ${src} @ ${digest:-unknown})"
-  # resolute ships no per-distro KasmVNC .deb → build its core INCLUDE_KASMVNC=0.
+  # resolute ships no per-distro KasmVNC .deb, and its profile-sync comes from the
+  # Nix overlay too → build the core without both (they're baked below).
   core_extra=()
-  [ "${d}" = resolute ] && core_extra=(--build-arg INCLUDE_KASMVNC=0)
+  [ "${d}" = resolute ] && core_extra=(--build-arg INCLUDE_KASMVNC=0 --build-arg INCLUDE_PROFILE_SYNC=0)
   # Explicit `|| return 1` so a failed build propagates even under the caller's
   # `set +e` (the retry subshell) — otherwise a core-build failure would fall
   # through to the nix build and be masked as success.
@@ -73,7 +74,7 @@ EOF
     # ro). NIX_STAGE_VOLUME (a persistent /nix podman volume) warms the cache if set.
     ctx="$(mktemp -d)"
     bin/nix-bake-closure \
-      --base "${coretag}" --tag "${nixtag}" --pkg kasmvnc \
+      --base "${coretag}" --tag "${nixtag}" --pkg kasmvnc --pkg profile_sync \
       --dockerfile /work/dockerfile-nix-ubuntu-resolute \
       --overlay /work/bin/nix-kasm-overlay \
       --context "${ctx}" \

@@ -56,4 +56,13 @@ in
     inherit prev;
     pin = loadPin "kasmvnc" ./pkgs/kasmvnc;
   };
+
+  # Kind B (repackage S3 artifact): Kasm profile-sync client (v1 + v2). Another
+  # base component (not a catalog app) — baked into distro bases via
+  # nix-bake-closure, retiring the per-distro artifact matrix in
+  # src/ubuntu/install/profile_sync/install_profile_sync.sh.
+  profile_sync = import ./pkgs/profile_sync/package.nix {
+    inherit prev;
+    pin = loadPin "profile_sync" ./pkgs/profile_sync;
+  };
 }

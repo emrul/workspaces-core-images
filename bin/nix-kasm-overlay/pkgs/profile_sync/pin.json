@@ -1,0 +1,13 @@
+{
+  "profile_distro": "ubuntu_noble",
+  "arch": "x86_64",
+  "v1_version": "1.1.1",
+  "v1_branch": "release_1.1.1",
+  "v1_commit_id": "bdda739846603351abce617cd3c3ebaacdd44ff8",
+  "v1_hash": "sha256-rlAZbbv8VKcpsziuZlNu8qd6e4jVrfSPmFmS+qbAvtA=",
+  "v2_version": "2.1.0",
+  "v2_branch": "release_2.1.0",
+  "v2_commit_id": "c10d82f8492d711c01b67a97cb20bec0c357cf06",
+  "v2_hash": "sha256-LuQFb57fbDvvMmmfscVakGrGW9P7dy94cUKSzV6uQI0=",
+  "_note": "Repackages Kasm's prebuilt profile-sync Go binaries from the public S3 (built per-distro; we take the ubuntu_noble build and autoPatchelf it -> distro-independent). Mirrors src/ubuntu/install/profile_sync/install_profile_sync.sh: url = profile-sync/<commit>/<profile_distro>_<branch>_<commit6>_<arch>-kasm-profile-sync[-2]. Ships BOTH versions the boot selects via KASM_PROFILE_LDR (0/1 -> v1 kasm-profile-sync; 2 -> v2 kasm-profile-sync-2, which needs libarchive). arch is the raw uname (x86_64), NOT amd64. Bump: update commit_id/branch/version + hash (nix store prefetch-file <url>)."
+}

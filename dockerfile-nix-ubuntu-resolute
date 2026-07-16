@@ -20,8 +20,11 @@ FROM $BASE_IMAGE
 
 USER 0
 ARG KASMVNC_STORE_PATH
+ARG PROFILE_SYNC_STORE_PATH
 
-# The whole KasmVNC Nix closure (binaries need their store deps present).
+# The baked Nix closures (binaries need their store deps present). Staged by
+# bin/nix-bake-closure as the union of every --pkg's closure (kasmvnc +
+# profile_sync), so both services' store paths are here.
 COPY nix-closure/nix /nix
 
 RUN set -eu; \
@@ -47,3 +50,17 @@ RUN set -eu; \
         -subj "/C=US/ST=VA/L=None/O=None/OU=DoFu/CN=kasm/emailAddress=none@none.none"; \
     chown 0:1000 /etc/kasm/self-default.pem; chmod 0640 /etc/kasm/self-default.pem; \
     echo "nix KasmVNC wired: $(/usr/bin/Xvnc -version 2>&1 | head -1)"
+
+# Wire the Nix profile-sync binaries (both versions the boot selects via
+# KASM_PROFILE_LDR — see src/common/kasm-go/scripts/kasm-profile-pull). Replaces
+# the per-distro S3 build (skipped in the resolute core via INCLUDE_PROFILE_SYNC=0).
+RUN set -eu; \
+    ps="${PROFILE_SYNC_STORE_PATH:-}"; \
+    if [ -n "$ps" ] && [ -x "$ps/bin/kasm-profile-sync" ]; then \
+        ln -sf "$ps/bin/kasm-profile-sync"   /usr/bin/kasm-profile-sync; \
+        ln -sf "$ps/bin/kasm-profile-sync-2" /usr/bin/kasm-profile-sync-2; \
+        /usr/bin/kasm-profile-sync-2 --help >/dev/null 2>&1 \
+          && echo "nix profile-sync wired: ok" || echo "nix profile-sync wired (v2 --help nonzero)"; \
+    else \
+        echo "PROFILE_SYNC_STORE_PATH unset/invalid — skipping profile-sync wiring"; \
+    fi

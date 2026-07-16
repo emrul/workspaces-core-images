@@ -29,9 +29,10 @@
             config.allowUnfree = true;
           };
         in {
-          chrome  = pkgs.chrome;
-          kasmvnc = pkgs.kasmvnc;
-          default = pkgs.chrome;
+          chrome       = pkgs.chrome;
+          kasmvnc      = pkgs.kasmvnc;
+          profile_sync = pkgs.profile_sync;
+          default      = pkgs.chrome;
         });
     };
 }
