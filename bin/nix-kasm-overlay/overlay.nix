@@ -9,7 +9,34 @@
 # and expose it in flake.nix `packages`. See design/nix-self-hosted-packages.md.
 final: prev:
 let
-  loadPin = dir: builtins.fromJSON (builtins.readFile (dir + "/pin.json"));
+  lib = prev.lib;
+
+  # A package's committed pin (pkgs/<name>/pin.json) is the source of truth.
+  # Any top-level string field can be overridden per-build from the environment,
+  # so an engineer can test a PRIVATE build (their own commit/branch/hash)
+  # WITHOUT editing the committed pin:
+  #
+  #   KASM_PIN_KASMVNC_COMMIT_ID=<sha> \
+  #   KASM_PIN_KASMVNC_BRANCH=<branch> \
+  #   KASM_PIN_KASMVNC_HASH=sha256-… \
+  #     nix build --impure .#kasmvnc
+  #
+  # Env var name: KASM_PIN_<NAME>_<FIELD>, NAME and FIELD upper-cased (e.g.
+  # commit_id -> COMMIT_ID). Overrides are honored ONLY under `nix build
+  # --impure`; in normal (pure) evaluation builtins.getEnv returns "" and the
+  # committed value always wins — so CI/production builds stay fully
+  # deterministic and never depend on ambient environment. Nested objects
+  # (e.g. chrome's per-system `hashes`) are not overridable; edit the pin for
+  # those. See design/nix-self-hosted-packages.md § Pin config & private builds.
+  loadPin = name: dir:
+    let
+      committed = builtins.fromJSON (builtins.readFile (dir + "/pin.json"));
+      envFor = field:
+        builtins.getEnv ("KASM_PIN_" + lib.toUpper name + "_" + lib.toUpper field);
+      applyOverride = field: value:
+        if builtins.isString value && envFor field != "" then envFor field else value;
+    in
+      builtins.mapAttrs applyOverride committed;
 in
 {
   # Kind A (override): Google Chrome. Reuses nixpkgs' google-chrome packaging and
@@ -18,7 +45,7 @@ in
   # nixpkgs' ~weekly). amd64 only — Google ships no arm64 Linux Chrome.
   chrome = import ./pkgs/chrome/package.nix {
     inherit prev;
-    pin = loadPin ./pkgs/chrome;
+    pin = loadPin "chrome" ./pkgs/chrome;
   };
 
   # Kind B (from scratch): KasmVNC server built under Nix (fork of TigerVNC), so
@@ -27,6 +54,6 @@ in
   # host. See pkgs/kasmvnc/package.nix.
   kasmvnc = import ./pkgs/kasmvnc/package.nix {
     inherit prev;
-    pin = loadPin ./pkgs/kasmvnc;
+    pin = loadPin "kasmvnc" ./pkgs/kasmvnc;
   };
 }

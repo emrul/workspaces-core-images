@@ -129,6 +129,26 @@ source shape, same as nixpkgs:
 Both kinds are driven by an identical `pin.json` shape, so the updater and the
 eval-gate treat every self-hosted app uniformly.
 
+## Pin config & private builds
+
+`pkgs/<app>/pin.json` is the committed source of truth for each package. Any
+top-level string field can be overridden per-build from the environment as
+`KASM_PIN_<APP>_<FIELD>` (both upper-cased) — but **only** under `nix build
+--impure`. In pure evaluation `builtins.getEnv` returns `""`, so the committed
+pin always wins and CI/production stay deterministic regardless of ambient env.
+This lets an engineer test a private build (their own commit/branch/hash)
+without editing the committed pin, e.g.:
+
+```bash
+KASM_PIN_KASMVNC_COMMIT_ID=<sha> KASM_PIN_KASMVNC_BRANCH=<branch> \
+KASM_PIN_KASMVNC_HASH=sha256-… nix build --impure .#kasmvnc
+```
+
+The mechanism lives in `overlay.nix` (`loadPin`); the full field tables and the
+per-app version/tracking policy (Chrome floats via the updater; KasmVNC is a
+manual reproducible pin keyed by the S3 `commit_id`) are in
+[`bin/nix-kasm-overlay/README.md`](../bin/nix-kasm-overlay/README.md).
+
 ## Discover / updater
 
 Prefer **`nix-update`** (the standard nixpkgs tool) wherever the app has a
