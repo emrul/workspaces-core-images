@@ -37,6 +37,7 @@ localhost/nix-ubuntu:dev|kasm-core-ubuntu
 localhost/kasm-core-ubuntu-noble-minimal:dev|kasm-core-ubuntu-minimal
 localhost/nix-fedora:dev|kasm-core-fedora
 localhost/nix-alpine:dev|kasm-core-alpine
+localhost/nix-ubuntu-resolute:dev|kasm-core-ubuntu-resolute
 "
 # fedora/alpine have no minimal core (dockerfile-kasm-core-minimal is apt-only),
 # so nix-fedora/nix-alpine build on their standard cores. Alpine is musl: apps

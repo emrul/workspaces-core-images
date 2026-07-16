@@ -41,6 +41,7 @@ TAG=""
 KEEP_CLOSURE=0
 declare -a PKGS=()
 declare -a EXTRA_BUILD_ARGS=()
+declare -a LABELS=()
 
 usage() {
   cat >&2 <<EOF
@@ -56,6 +57,8 @@ Usage: nix-bake-closure --base IMG --tag IMG [--pkg ATTR]... [options]
   --overlay DIR         overlay flake dir (default: bin/nix-kasm-overlay)
   --context DIR         docker build context (default: repo root)
   --build-arg K=V       extra build-arg for the finish build (repeatable)
+  --label K=V           OCI label for the finish image (repeatable) — e.g. the
+                        base-stamp labels nix-base-check/publish-base read
   --docker CMD          docker|podman (default: docker)
   --nix-runner MODE     auto|host|container (default: auto)
   --nix-image IMG       nixos/nix image for container runner (default: nixos/nix:latest)
@@ -76,6 +79,7 @@ while [ $# -gt 0 ]; do
     --overlay)     OVERLAY_DIR="$2"; shift 2 ;;
     --context)     CONTEXT="$2"; shift 2 ;;
     --build-arg)   EXTRA_BUILD_ARGS+=("--build-arg" "$2"); shift 2 ;;
+    --label)       LABELS+=("--label" "$2"); shift 2 ;;
     --docker)      DOCKER="$2"; shift 2 ;;
     --nix-runner)  NIX_RUNNER="$2"; shift 2 ;;
     --nix-image)   NIX_IMAGE="$2"; shift 2 ;;
@@ -177,6 +181,7 @@ log "building ${TAG} (base=${BASE_IMAGE}, dockerfile=$(basename "${DOCKERFILE}")
 "${DOCKER}" build \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
   "${EXTRA_BUILD_ARGS[@]}" \
+  ${LABELS[@]+"${LABELS[@]}"} \
   -f "${DOCKERFILE}" \
   -t "${TAG}" \
   "${CONTEXT}"

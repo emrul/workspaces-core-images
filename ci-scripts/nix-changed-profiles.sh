@@ -67,7 +67,7 @@ while IFS= read -r f; do
     # feed EVERY distro core/nix base. ubuntu is the app base → apps rebuild +
     # freshness guard. Matched before the general src/ubuntu/* case below.
     src/common/*|src/ubuntu/install/nix/scripts/*|src/ubuntu/install/nix/units/*)
-      all=1; BASE_AFFECTED=1; BASES_AFFECTED="${BASES_AFFECTED} ubuntu fedora alpine" ;;
+      all=1; BASE_AFFECTED=1; BASES_AFFECTED="${BASES_AFFECTED} ubuntu fedora alpine resolute" ;;
     # ubuntu base dockerfiles → ubuntu base + apps rebuild.
     dockerfile-kasm-core-minimal|dockerfile-nix-ubuntu)
       all=1; BASE_AFFECTED=1; BASES_AFFECTED="${BASES_AFFECTED} ubuntu" ;;
@@ -77,6 +77,10 @@ while IFS= read -r f; do
       BASES_AFFECTED="${BASES_AFFECTED} fedora" ;;
     dockerfile-kasm-core-alpine|dockerfile-nix-alpine|src/alpine/*)
       BASES_AFFECTED="${BASES_AFFECTED} alpine" ;;
+    # resolute base dockerfiles → ONLY the resolute base (apps are noble-based).
+    # The bake helper itself is a resolute-base input too.
+    dockerfile-kasm-core-ubuntu-resolute|dockerfile-nix-ubuntu-resolute|bin/nix-bake-closure)
+      BASES_AFFECTED="${BASES_AFFECTED} resolute" ;;
     # Build/assembly-only shared files — whole catalog, but the base image
     # content is unchanged, so NOT base-affected.
     bin/build-nix-store-volume|bin/nix-crane-assemble|bin/nix-profiles.toml|\
@@ -92,6 +96,11 @@ while IFS= read -r f; do
     bin/nix-kasm-overlay/flake.nix|bin/nix-kasm-overlay/flake.lock|\
     bin/nix-kasm-overlay/overlay.nix|bin/nix-kasm-overlay/lib/*)
       all=1 ;;
+    # KasmVNC is a Nix-packaged BASE component (baked into the resolute base via
+    # nix-bake-closure), NOT a catalog app — a pin/package change rebuilds the
+    # resolute base, not an app profile. Matched before the generic pkgs case.
+    bin/nix-kasm-overlay/pkgs/kasmvnc/*)
+      BASES_AFFECTED="${BASES_AFFECTED} resolute" ;;
     bin/nix-kasm-overlay/pkgs/*/*)
       a="${f#bin/nix-kasm-overlay/pkgs/}"; a="${a%%/*}"; apps="${apps} ${a}" ;;
     # Any OTHER src/ubuntu path (fonts, xfce, kasm_vnc, audio, printer, …) is
@@ -99,7 +108,7 @@ while IFS= read -r f; do
     # an ubuntu base rebuild + app rebuild. Comes AFTER the nix/<app> case above so
     # per-app wiring stays app-scoped.
     src/ubuntu/*)
-      all=1; BASE_AFFECTED=1; BASES_AFFECTED="${BASES_AFFECTED} ubuntu" ;;
+      all=1; BASE_AFFECTED=1; BASES_AFFECTED="${BASES_AFFECTED} ubuntu resolute" ;;
     # Everything else (docs, .gitlab-ci.yml, other ci-scripts, the updater,
     # overlay manifest/README) — not image content.
     *) : ;;

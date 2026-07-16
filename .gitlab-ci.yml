@@ -275,6 +275,7 @@ publish-base:
           ubuntu) filt="${filt} kasm-core-ubuntu kasm-core-ubuntu-minimal" ;;
           fedora) filt="${filt} kasm-core-fedora" ;;
           alpine) filt="${filt} kasm-core-alpine" ;;
+          resolute) filt="${filt} kasm-core-ubuntu-resolute" ;;
         esac; done
         NIX_BASES="$(printf '%s' "${filt}" | sed 's/^ *//;s/ *$//')"
       fi

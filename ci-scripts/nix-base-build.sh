@@ -22,7 +22,7 @@ set -euo pipefail
 cd /work
 
 PAR="${BUILD_PARALLEL:-3}"
-WANT="${BASE_DISTROS:-ubuntu fedora alpine}"
+WANT="${BASE_DISTROS:-ubuntu fedora alpine resolute}"
 
 # Per-distro build recipe:
 #   src_image | core_dockerfile | core_tag | DISTRO arg | BG_IMG | nix_dockerfile | nix_tag
@@ -31,6 +31,10 @@ base_row() {
     ubuntu) echo "ubuntu:24.04|dockerfile-kasm-core-minimal|localhost/kasm-core-ubuntu-noble-minimal:dev|ubuntu|bg_noble.png|dockerfile-nix-ubuntu|localhost/nix-ubuntu:dev" ;;
     fedora) echo "fedora:42|dockerfile-kasm-core-fedora|localhost/kasm-core-fedora:dev|fedora42|bg_fedora.png|dockerfile-nix-fedora|localhost/nix-fedora:dev" ;;
     alpine) echo "alpine:3.21|dockerfile-kasm-core-alpine|localhost/kasm-core-alpine:dev|alpine|bg_alpine.png|dockerfile-nix-alpine|localhost/nix-alpine:dev" ;;
+    # Resolute (26.04): Kasm publishes no per-distro KasmVNC .deb, so its core is
+    # built INCLUDE_KASMVNC=0 and the nix finish BAKES the Nix KasmVNC closure in
+    # (see the resolute branch in build_one). DISTRO=ubuntu (shares src/ubuntu).
+    resolute) echo "ubuntu:26.04|dockerfile-kasm-core-ubuntu-resolute|localhost/kasm-core-ubuntu-resolute:dev|ubuntu|bg_kasm.png|dockerfile-nix-ubuntu-resolute|localhost/nix-ubuntu-resolute:dev" ;;
     *) return 1 ;;
   esac
 }
@@ -52,18 +56,43 @@ EOF
   podman pull -q "docker.io/library/${src}" >/dev/null 2>&1 || podman pull -q "${src}" >/dev/null 2>&1 || true
   digest="$(src_digest "${src}")"
   echo "[base:${d}] building ${coretag} (from ${src} @ ${digest:-unknown})"
+  # resolute ships no per-distro KasmVNC .deb → build its core INCLUDE_KASMVNC=0.
+  core_extra=()
+  [ "${d}" = resolute ] && core_extra=(--build-arg INCLUDE_KASMVNC=0)
   # Explicit `|| return 1` so a failed build propagates even under the caller's
   # `set +e` (the retry subshell) — otherwise a core-build failure would fall
   # through to the nix build and be masked as success.
   podman build --build-arg BASE_IMAGE="${src}" --build-arg DISTRO="${distarg}" \
-    --build-arg BG_IMG="${bg}" -f "${coredf}" -t "${coretag}" . || return 1
+    --build-arg BG_IMG="${bg}" "${core_extra[@]}" -f "${coredf}" -t "${coretag}" . || return 1
   echo "[base:${d}] building ${nixtag}"
   # Stamp: builtsha (freshness guard) + the source image ref/digest (staleness check).
-  podman build --build-arg BASE_IMAGE="${coretag}" \
-    --label "kasm.base.builtsha=${BASE_BUILT_SHA:-unknown}" \
-    --label "dev.kasm.base.src-image=${src}" \
-    --label "dev.kasm.base.src-digest=${digest}" \
-    -f "${nixdf}" -t "${nixtag}" . || return 1
+  if [ "${d}" = resolute ]; then
+    # resolute's nix finish BAKES the Nix KasmVNC closure into the core (no
+    # per-distro .deb). nix-bake-closure runs nix in a nixos/nix container (DIND
+    # has no host nix), staging the closure into a WRITABLE tmp context (/work is
+    # ro). NIX_STAGE_VOLUME (a persistent /nix podman volume) warms the cache if set.
+    ctx="$(mktemp -d)"
+    bin/nix-bake-closure \
+      --base "${coretag}" --tag "${nixtag}" --pkg kasmvnc \
+      --dockerfile /work/dockerfile-nix-ubuntu-resolute \
+      --overlay /work/bin/nix-kasm-overlay \
+      --context "${ctx}" \
+      --docker podman --nix-runner container \
+      --nix-image "${NIX_STAGE_IMAGE:-nixos/nix:latest}" \
+      ${NIX_STAGE_VOLUME:+--nix-volume "${NIX_STAGE_VOLUME}"} \
+      --label "kasm.base.builtsha=${BASE_BUILT_SHA:-unknown}" \
+      --label "dev.kasm.base.src-image=${src}" \
+      --label "dev.kasm.base.src-digest=${digest}" \
+      && rc=0 || rc=1
+    rm -rf "${ctx}"
+    [ "${rc}" = 0 ] || return 1
+  else
+    podman build --build-arg BASE_IMAGE="${coretag}" \
+      --label "kasm.base.builtsha=${BASE_BUILT_SHA:-unknown}" \
+      --label "dev.kasm.base.src-image=${src}" \
+      --label "dev.kasm.base.src-digest=${digest}" \
+      -f "${nixdf}" -t "${nixtag}" . || return 1
+  fi
   echo "[base:${d}] done: $(podman image inspect -f '{{.Id}}' "${nixtag}") src-digest=${digest:-unknown}"
   return 0
 }

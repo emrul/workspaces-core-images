@@ -10,10 +10,10 @@
 #   NIX_BASES_STALE=<space list of distro names>
 # plus human-readable [base-check] lines on stderr.
 set -euo pipefail
-WANT="${BASE_DISTROS:-ubuntu fedora alpine}"
+WANT="${BASE_DISTROS:-ubuntu fedora alpine resolute}"
 
-src_of() { case "$1" in ubuntu) echo ubuntu:24.04 ;; fedora) echo fedora:42 ;; alpine) echo alpine:3.21 ;; esac; }
-nix_of() { case "$1" in ubuntu) echo localhost/nix-ubuntu:dev ;; fedora) echo localhost/nix-fedora:dev ;; alpine) echo localhost/nix-alpine:dev ;; esac; }
+src_of() { case "$1" in ubuntu) echo ubuntu:24.04 ;; fedora) echo fedora:42 ;; alpine) echo alpine:3.21 ;; resolute) echo ubuntu:26.04 ;; esac; }
+nix_of() { case "$1" in ubuntu) echo localhost/nix-ubuntu:dev ;; fedora) echo localhost/nix-fedora:dev ;; alpine) echo localhost/nix-alpine:dev ;; resolute) echo localhost/nix-ubuntu-resolute:dev ;; esac; }
 
 stale=""
 for d in ${WANT}; do
