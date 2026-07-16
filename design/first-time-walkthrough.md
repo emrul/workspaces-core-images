@@ -26,7 +26,9 @@
 1. Install the [fat-store](https://kasm-nix-registry.emrul.dev/1.1/new/Tml4IEZhdCBTdG9yZSAoYWxsIGFwcHMp/) from the registry. It should install as a *hidden* workspace into Kasm and is *not* launchable as a workspace on its own.
 
 
-2) Install one or more of the desktops: [Ubuntu — Noble](https://kasm-nix-registry.emrul.dev/1.1/new/Tml4IFVidW50dSAtIE5vYmxl/), [Alpine](https://kasm-nix-registry.emrul.dev/1.1/new/Tml4IEFscGluZQ%3D%3D/), [Fedora](https://kasm-nix-registry.emrul.dev/1.1/new/Tml4IEZlZG9yYQ%3D%3D/). (Ubuntu — Resolute is being prepared; its image needs the Nix app-launch hooks before app-selection works.)
+2) Install one or more of the desktops: [Ubuntu — Noble](https://kasm-nix-registry.emrul.dev/1.1/new/Tml4IFVidW50dSAtIE5vYmxl/), [Ubuntu — Resolute](https://kasm-nix-registry.emrul.dev/1.1/new/Tml4IFVidW50dSAtIFJlc29sdXRl/), [Alpine](https://kasm-nix-registry.emrul.dev/1.1/new/Tml4IEFscGluZQ%3D%3D/), [Fedora](https://kasm-nix-registry.emrul.dev/1.1/new/Tml4IEZlZG9yYQ%3D%3D/).
+
+   > **Ubuntu — Resolute** is the multi-store variant: its Kasm services (KasmVNC, profile-sync, audio-input, recorder, webcam, gamepad) are baked as a Nix store at `/nix-stores/services`, and the fat store mounts at `/nix-stores/base`; `nix-compose` unions both into `/nix` at boot. See `design/nix-workspace-as-code.md`.
 
 
 3. Launch a desktop workspace using the configured launch form to select your application set.
