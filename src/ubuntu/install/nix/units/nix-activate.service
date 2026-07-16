@@ -3,7 +3,12 @@ Description=Activate Kasm Nix profiles from NIX_APP_PROFILES
 After=kasm-setup.service
 Before=window-manager.service
 Requires=kasm-setup.service
-ConditionPathExists=/nix/var/nix/profiles/_meta.json
+# NOTE: no ConditionPathExists=_meta.json here. On multi-store images (resolute)
+# _meta.json is materialised by nix-compose at boot, so it may not exist at the
+# moment container-init evaluates conditions — which would wrongly skip this unit.
+# The nix-activate script self-gates instead: it waits for nix-compose's ready
+# sentinel (multi-store) and no-ops if _meta.json is still absent (single-app /
+# no-store images).
 
 [Service]
 Type=oneshot

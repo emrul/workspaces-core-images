@@ -125,6 +125,25 @@ if [ "${have_jq}" = 1 ] && [ "${any_profile}" = 1 ]; then
 fi
 rm -f "${stores_tmp}" "${meta_tmp}"
 
+# No-jq fallback: nix-activate requires /nix/var/nix/profiles/_meta.json. The nix
+# tooling is jq-OPTIONAL by design (jq isn't installed in the core images — the
+# single-store desktops read _meta straight from the mounted fat store), so when
+# jq is absent the merge above is skipped and we must still produce _meta. If a
+# profile store ships one, use it directly: a single profile store (resolute's fat
+# store) copies verbatim — its keys already match the bare farm names (namespacing
+# needs jq and only triggers on cross-store collisions). Avoids adding jq to the image.
+if [ "${any_profile}" = 1 ] && [ ! -f "${PROFILES}/_meta.json" ]; then
+  set --
+  for mj in "${STORES_ROOT}"/*/var/nix/profiles/_meta.json; do
+    [ -f "${mj}" ] && set -- "$@" "${mj}"
+  done
+  if [ "$#" -ge 1 ]; then
+    cp -f "$1" "${PROFILES}/_meta.json"
+    [ "$#" -gt 1 ] && log "WARN: $# stores ship _meta.json but jq is absent; using the first, unmerged"
+    log "wrote _meta.json without jq (single-store copy)"
+  fi
+fi
+
 # ── 4. seed the writable db (best-effort; first store wins) ─────────────
 # nix-activate's setup_state copies this to /run/nix-state for the runtime db.
 if [ ! -f "${NIX}/var/nix/db/db.sqlite" ]; then

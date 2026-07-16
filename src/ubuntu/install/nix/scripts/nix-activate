@@ -410,6 +410,17 @@ apply_single_app_desktop() {
 }
 
 # ───── main ────────────────────────────────────────────────────────────
+# Multi-store images (resolute): _meta.json is materialised by nix-compose at boot
+# (not present in a mounted store). container-init starts nix-compose before us but
+# does NOT block on its oneshot completion, so wait (bounded ~30s) for its ready
+# sentinel before deciding there's nothing to do. No-op on single-store/no-store.
+if [ -d /nix-stores ]; then
+  _i=0
+  while [ ! -e /run/nix-compose.ready ] && [ "${_i}" -lt 300 ]; do
+    _i=$((_i + 1)); sleep 0.1
+  done
+fi
+
 [ -f "${META_JSON}" ] || {
   log "no /nix volume mounted (${META_JSON} absent); nothing to do"
   exit 0
