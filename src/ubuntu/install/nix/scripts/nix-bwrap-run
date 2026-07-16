@@ -34,14 +34,21 @@ prog="${1:-}"
 [ -n "${prog}" ] || { echo "nix-bwrap-run: no program given" >&2; exit 2; }
 
 # Resolve to a concrete store path in the host mount ns (where the /nix/store
-# symlink still works) so the outer bwrap gets a real target to exec.
+# symlink/farm still works) so the outer bwrap gets a real target to exec.
 real="$(readlink -f "${prog}" 2>/dev/null || printf '%s' "${prog}")"
 
-# Does this need the fix? Only on the symlink layout, with a usable bwrap, and
-# only for buildFHSEnv wrappers. nixpkgs names those <name>-bwrap; fall back to
-# sniffing the script body for a bubblewrap reference.
+# Composed multi-store layout (nix-compose): /nix/store is a real directory of
+# per-path symlinks into /nix-stores/<id>/store. Collect the backing stores.
+stores=""
+for s in /nix-stores/*/store; do
+    [ -d "${s}" ] && stores="${stores} ${s}"
+done
+
+# Does this need the fix? A usable bwrap, a store layout bwrap can't traverse
+# (legacy single /nix/store->/store symlink, OR the composed farm), and a
+# buildFHSEnv wrapper. nixpkgs names those <name>-bwrap; else sniff the body.
 needs_fix=0
-if [ -L /nix/store ] && [ -x "${BWRAP}" ]; then
+if [ -x "${BWRAP}" ] && { [ -L /nix/store ] || [ -n "${stores}" ]; }; then
     case "${real}" in
         *-bwrap) needs_fix=1 ;;
         *) LC_ALL=C head -c 8192 "${real}" 2>/dev/null | grep -qa 'bubblewrap\|bin/bwrap' && needs_fix=1 ;;
@@ -49,7 +56,24 @@ if [ -L /nix/store ] && [ -x "${BWRAP}" ]; then
 fi
 
 if [ "${needs_fix}" = 1 ]; then
-    shift
+    shift  # $@ now holds the app's own args
+    if [ -n "${stores}" ]; then
+        # Composed world: present the UNION of all stores as one real /nix/store
+        # via bwrap's read-only overlay (bwrap >= 0.9.0). Each --overlay-src adds
+        # a layer; --ro-overlay materialises them at /nix/store. Build the argv by
+        # PREPENDING (keeping the app args, which may contain spaces, at the tail);
+        # overlay order is irrelevant (content-addressed ⇒ identical paths).
+        set -- --ro-overlay /nix/store --bind /nix/var /nix/var -- "${real}" "$@"
+        for s in ${stores}; do
+            set -- --overlay-src "${s}" "$@"
+        done
+        set -- --bind / / --dev-bind /dev /dev --proc /proc --tmpfs /nix "$@"
+        # NOTE: fallback for bwrap < 0.9.0 (no --overlay-src) is to bind the
+        # single store that contains this app's closure; add if a base ships an
+        # older bwrap (noble is 0.9.0 — see RUNBOOK §5 / design Component 3).
+        exec "${BWRAP}" "$@"
+    fi
+    # Legacy single-store symlink layout (/nix/store -> /store).
     exec "${BWRAP}" \
         --bind / / \
         --dev-bind /dev /dev \

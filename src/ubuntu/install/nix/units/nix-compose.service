@@ -1,0 +1,21 @@
+[Unit]
+Description=Compose N Nix stores (/nix-stores/*) into a unified /nix
+After=kasm-setup.service
+Requires=kasm-setup.service
+# Ordered before profile activation AND before every unit that execs a binary
+# from a farmed store: distros with no per-distro service artifact (resolute)
+# bake their Kasm services into /nix-stores/services, so /usr/bin/Xvnc,
+# kasm-profile-sync, kasm_audio_input_server, … resolve their /nix/store
+# interpreter/RUNPATH only after nix-compose builds the /nix/store farm.
+# No Condition* here: nix-compose self-guards (no-ops when no /nix-stores/*/store
+# is mounted), so it is safe/inert on the single-/nix-mount desktops too.
+Before=nix-activate.service kasmvnc.service profile-pull.service audio-in.service recorder-watch.service recorder-drain.service webcam.service gamepad.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/nix-compose
+TimeoutStartSec=60s
+
+[Install]
+WantedBy=multi-user.target

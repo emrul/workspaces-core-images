@@ -1,0 +1,132 @@
+#!/bin/sh
+# nix-compose — union N read-only Nix stores mounted under /nix-stores/<id>/
+# into a single composed, writable /nix whose /nix/store and
+# /nix/var/nix/profiles are SYMLINK FARMS over every store.
+#
+# This is the direct generalization of the single-store /nix/store -> /store
+# seam (bin/nix-crane-assemble mk_symlink_tar) to N stores. It runs at boot
+# BEFORE nix-activate — and, where a distro bakes its Kasm services into a store
+# (resolute), before the service units that exec those store binaries (KasmVNC,
+# profile-sync, …), so /usr/bin/Xvnc -> /nix/store/<hash> resolves via the farm.
+#
+# Content-addressing makes the union safe: /nix/store/<hash>-x has that hash
+# because of its exact bytes, so two stores can only collide on byte-identical
+# paths (an identical relink). Independent stores contribute disjoint hashes;
+# all coexist. See design/nix-workspace-as-code.md.
+#
+# No-op when no store is mounted (the unit's ConditionPathExistsGlob gates it,
+# and the guard below double-checks) — the legacy single-/nix-mount path is
+# untouched: nix-activate then runs against the directly-mounted /nix as before.
+set -eu
+
+# Roots are overridable for testing (NIX_STORES_ROOT / NIX_COMPOSE_NIX);
+# production uses the defaults.
+STORES_ROOT="${NIX_STORES_ROOT:-/nix-stores}"
+NIX="${NIX_COMPOSE_NIX:-/nix}"
+PROFILES="${NIX}/var/nix/profiles"
+
+log() { printf 'nix-compose: %s\n' "$*" >&2; }
+
+# Guard: nothing to compose if no store is present.
+comp_any=0
+for _s in "${STORES_ROOT}"/*/store; do
+  [ -d "${_s}" ] && { comp_any=1; break; }
+done
+[ "${comp_any}" = 1 ] || { log "no ${STORES_ROOT}/*/store mounted; nothing to compose"; exit 0; }
+
+install -d "${NIX}/store" "${PROFILES}" "${NIX}/var/nix/db"
+
+# ── 1. farm /nix/store over every store ────────────────────────────────
+for sdir in "${STORES_ROOT}"/*/store; do
+  [ -d "${sdir}" ] || continue
+  id="$(basename "$(dirname "${sdir}")")"
+  n=0
+  for p in "${sdir}"/*; do
+    [ -e "${p}" ] || continue
+    ln -sfn "${p}" "${NIX}/store/$(basename "${p}")"
+    n=$((n + 1))
+  done
+  log "store '${id}': farmed ${n} paths into ${NIX}/store"
+done
+
+# ── 2+3. farm profiles + merge _meta, with CONSISTENT collision namespacing ──
+# A profile name unique across all stores stays bare; a name present in more than
+# one store is namespaced <id>__<p> in ALL of them (deterministic — stores are
+# processed in sorted id order). A PATH-safe separator ('__', not ':') is used
+# because profile dirs go onto PATH/XDG_DATA_DIRS (colon-separated) — a ':' in a
+# name would split the PATH entry. nix-activate needs no name changes. The SAME
+# mapping is applied to the farm, _stores.json, and the merged _meta.json, so
+# nix-activate's filter_existing/expand_deps see consistent names. (Skip
+# generation -links — they resolve relative within each store's profiles dir, so
+# the farmed <p> chain still resolves — and the JSON sidecars.)
+#
+# Limitation: `requires[]` cross-references inside a store's _meta are NOT
+# rewritten if a dependency name also gets namespaced — only reachable when two
+# stores collide (customer multi-store). Resolute (one profile store) never
+# collides, so this is a no-op there; noted for the workspace-as-code follow-up.
+have_jq=0; command -v jq >/dev/null 2>&1 && have_jq=1
+
+# Pass 1: count each profile name across stores → the set present in >1 store.
+occ="$(mktemp)"; : > "${occ}"
+for pdir in "${STORES_ROOT}"/*/var/nix/profiles; do
+  [ -d "${pdir}" ] || continue
+  for entry in "${pdir}"/*; do
+    [ -e "${entry}" ] || [ -L "${entry}" ] || continue
+    bn="$(basename "${entry}")"
+    case "${bn}" in _meta.json | _defaults.json | _stores.json | *-link) continue ;; esac
+    printf '%s\n' "${bn}" >> "${occ}"
+  done
+done
+dupes="$(sort "${occ}" | uniq -d)"; rm -f "${occ}"
+is_dupe() { printf '%s\n' "${dupes}" | grep -qx "$1"; }
+
+# Pass 2: farm (bare or namespaced), accumulate _stores.json + merged _meta.
+stores_tmp="$(mktemp)"; : > "${stores_tmp}"
+meta_tmp="$(mktemp)"; printf '{"profiles":{}}\n' > "${meta_tmp}"
+tab="$(printf '\t')"
+any_profile=0
+for pdir in $(for d in "${STORES_ROOT}"/*/var/nix/profiles; do [ -d "${d}" ] && printf '%s\n' "${d}"; done | sort); do
+  id="$(basename "$(dirname "$(dirname "$(dirname "${pdir}")")")")"
+  farmed=""; map_tmp="$(mktemp)"; : > "${map_tmp}"
+  for entry in "${pdir}"/*; do
+    [ -e "${entry}" ] || [ -L "${entry}" ] || continue
+    bn="$(basename "${entry}")"
+    case "${bn}" in _meta.json | _defaults.json | _stores.json | *-link) continue ;; esac
+    if is_dupe "${bn}"; then fn="${id}__${bn}"; else fn="${bn}"; fi
+    ln -sfn "${entry}" "${PROFILES}/${fn}"
+    farmed="${farmed} ${fn}"; any_profile=1
+    printf '%s%s%s\n' "${bn}" "${tab}" "${fn}" >> "${map_tmp}"
+  done
+  printf '%s%s%s\n' "${id}" "${tab}" "${farmed# }" >> "${stores_tmp}"
+  if [ "${have_jq}" = 1 ] && [ -f "${pdir}/_meta.json" ]; then
+    renamed="$(jq -n --slurpfile m "${pdir}/_meta.json" --rawfile map "${map_tmp}" '
+      ($map | split("\n") | map(select(length > 0) | split("\t")) | map({(.[0]): .[1]}) | add // {}) as $rn
+      | (($m[0].profiles) // {}) | to_entries | map(.key = ($rn[.key] // .key)) | from_entries' 2>/dev/null || printf '{}')"
+    jq --argjson add "${renamed:-{\}}" '.profiles += $add' "${meta_tmp}" > "${meta_tmp}.n" 2>/dev/null \
+      && mv "${meta_tmp}.n" "${meta_tmp}" || true
+  fi
+  rm -f "${map_tmp}"
+done
+
+# Only publish the profile registry when a store actually contributed profiles.
+# A services-only store (resolute standalone: KasmVNC etc., no app profiles)
+# leaves no _meta.json, so nix-activate cleanly no-ops ("nothing to do") while
+# the /nix/store farm still serves the baked service binaries.
+if [ "${have_jq}" = 1 ] && [ "${any_profile}" = 1 ]; then
+  cp -f "${meta_tmp}" "${PROFILES}/_meta.json" 2>/dev/null || true
+  jq -Rn '
+    [ inputs | split("\t")
+      | { (.[0]): ((.[1] // "") | split(" ") | map(select(length > 0))) } ]
+    | add // {}' "${stores_tmp}" > "${PROFILES}/_stores.json" 2>/dev/null || true
+fi
+rm -f "${stores_tmp}" "${meta_tmp}"
+
+# ── 4. seed the writable db (best-effort; first store wins) ─────────────
+# nix-activate's setup_state copies this to /run/nix-state for the runtime db.
+if [ ! -f "${NIX}/var/nix/db/db.sqlite" ]; then
+  for db in "${STORES_ROOT}"/*/var/nix/db/db.sqlite; do
+    [ -f "${db}" ] && { cp -f "${db}" "${NIX}/var/nix/db/db.sqlite" 2>/dev/null || true; break; }
+  done
+fi
+
+log "compose complete"
