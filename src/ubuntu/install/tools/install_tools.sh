@@ -168,12 +168,19 @@ else
   locale-gen en_US.UTF-8
 fi
 
-if [ "$DISTRO" = "ubuntu" ] && ! grep -q "24.04" /etc/os-release; then
-  #update mesa to latest
-  add-apt-repository ppa:kisak/turtle
-  apt-get update
-  apt full-upgrade -y
-elif [ "$DISTRO" = "ubuntu" ] && grep -q "24.04" /etc/os-release; then
-  userdel ubuntu
-  rm -Rf /home/ubuntu
+if [ "$DISTRO" = "ubuntu" ]; then
+  # Ubuntu 24.04+ base images (noble, resolute, and later) ship a default
+  # `ubuntu` user at uid/gid 1000, which collides with kasm-user (created later,
+  # also uid 1000). Remove it here — before user creation — so kasm-user can
+  # claim 1000. Guarded by existence so pre-24.04 bases are unaffected.
+  if id ubuntu >/dev/null 2>&1; then
+    userdel -r ubuntu 2>/dev/null || userdel ubuntu 2>/dev/null || true
+    rm -Rf /home/ubuntu
+  fi
+  # Pull mesa from the kisak PPA on releases newer than 24.04.
+  if ! grep -q "24.04" /etc/os-release; then
+    add-apt-repository ppa:kisak/turtle
+    apt-get update
+    apt full-upgrade -y
+  fi
 fi

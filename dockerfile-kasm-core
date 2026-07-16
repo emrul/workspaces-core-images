@@ -205,9 +205,10 @@ COPY ./src/ubuntu/install/emblems $INST_SCRIPTS/emblems/
 RUN bash $INST_SCRIPTS/emblems/install_emblems.sh && rm -rf $INST_SCRIPTS/emblems/
 
 ### Create user and home directory for base images that don't already define it
-RUN (groupadd -g 1000 kasm-user \
+RUN groupadd -g 1000 kasm-user \
     && useradd -M -u 1000 -g 1000 -s /bin/bash kasm-user \
-    && usermod -a -G kasm-user kasm-user) ; exit 0
+    && usermod -a -G kasm-user kasm-user \
+    && id kasm-user
 ENV HOME=/home/kasm-user
 WORKDIR $HOME
 RUN mkdir -p $HOME && chown -R 1000:0 $HOME

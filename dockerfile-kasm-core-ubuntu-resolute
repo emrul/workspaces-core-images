@@ -217,16 +217,14 @@ COPY ./src/ubuntu/install/emblems $INST_SCRIPTS/emblems/
 RUN bash $INST_SCRIPTS/emblems/install_emblems.sh && rm -rf $INST_SCRIPTS/emblems/
 
 ### Create user and home directory.
-# ubuntu:24.04+ (incl. resolute/26.04) ships a default `ubuntu` user at uid/gid
-# 1000. Remove it first so kasm-user can take 1000 — otherwise groupadd/useradd
-# fail and, with the old `; exit 0`, kasm-user silently never exists, so
-# kasm-setup's boot chown dies with "invalid user: 'kasm-user:kasm-user'".
-# (Same latent issue would bite dockerfile-kasm-core on a fresh noble rebuild.)
-RUN userdel -r ubuntu 2>/dev/null || true; \
-    groupdel ubuntu 2>/dev/null || true; \
-    groupadd -g 1000 kasm-user \
+# The default `ubuntu` user (uid/gid 1000, shipped by ubuntu:24.04+) is removed
+# earlier by install_tools.sh for every ubuntu release, so kasm-user can claim
+# 1000 here. The trailing `id kasm-user` asserts creation succeeded (no silent
+# `; exit 0` mask) — a uid-1000 collision would fail the build loudly.
+RUN groupadd -g 1000 kasm-user \
     && useradd -M -u 1000 -g 1000 -s /bin/bash kasm-user \
-    && usermod -a -G kasm-user kasm-user
+    && usermod -a -G kasm-user kasm-user \
+    && id kasm-user
 ENV HOME=/home/kasm-user
 WORKDIR $HOME
 RUN mkdir -p $HOME && chown -R 1000:0 $HOME
