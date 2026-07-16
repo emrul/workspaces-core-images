@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# nix-bake-closure — bake one or more nix-kasm-overlay packages into a distro
+# base image.
+#
+# Some distros ship no per-distro Kasm service artifact (e.g. no KasmVNC .deb for
+# Ubuntu Resolute / 26.04). For those we build the service as a Nix package
+# (bin/nix-kasm-overlay) and *bake* its closure into the base image: the finish
+# Dockerfile COPYs the staged store into /nix and wires the binaries. This
+# script productionises what used to be a hand-run sequence on the build host:
+#
+#   1. nix build --impure .#<pkg>            (each requested overlay attr)
+#   2. union of `nix-store -qR` of every out path  → the closure to ship
+#   3. deterministically stage that closure into <context>/nix-closure/nix/store
+#      (hardlink where possible — same primitive as build-nix-store-volume's
+#      link_path; cp -al for dirs, ln -f for files)
+#   4. docker/podman build the finish Dockerfile, passing each package's out
+#      path as <PKG>_STORE_PATH (e.g. kasmvnc -> KASMVNC_STORE_PATH)
+#
+# It is generic over the package set so new Nix-packaged services (profile_sync,
+# audio_input, …) bake through the same path: add `--pkg <attr>` and the
+# matching wiring + ARG in the finish Dockerfile.
+#
+# Nix runner: uses the host `nix` when present; otherwise runs the build inside a
+# `nixos/nix` container (for CI hosts with no host Nix, e.g. the forge DinD),
+# reusing a persistent store volume for cache when --nix-volume is given.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# ── defaults ────────────────────────────────────────────────────────────────
+OVERLAY_DIR="${OVERLAY_DIR:-${REPO_ROOT}/bin/nix-kasm-overlay}"
+CONTEXT="${CONTEXT:-${REPO_ROOT}}"
+DOCKERFILE="${DOCKERFILE:-${REPO_ROOT}/dockerfile-nix-ubuntu-resolute}"
+DOCKER="${DOCKER:-docker}"
+NIX_IMAGE="${NIX_IMAGE:-nixos/nix:latest}"
+NIX_RUNNER="${NIX_RUNNER:-auto}"        # auto | host | container
+NIX_VOLUME="${NIX_VOLUME:-}"            # persistent /nix store volume (container runner)
+BASE_IMAGE=""
+TAG=""
+KEEP_CLOSURE=0
+declare -a PKGS=()
+declare -a EXTRA_BUILD_ARGS=()
+
+usage() {
+  cat >&2 <<EOF
+Usage: nix-bake-closure --base IMG --tag IMG [--pkg ATTR]... [options]
+
+  --base IMG            base image to bake onto (required), e.g.
+                        localhost/kasm-core-ubuntu-resolute:dev
+  --tag IMG             output image tag (required)
+  --pkg ATTR            overlay package attr to bake (repeatable;
+                        default: kasmvnc). Passed to the finish build as
+                        <ATTR_UPPER>_STORE_PATH (profile_sync -> PROFILE_SYNC_STORE_PATH).
+  --dockerfile FILE     finish Dockerfile (default: dockerfile-nix-ubuntu-resolute)
+  --overlay DIR         overlay flake dir (default: bin/nix-kasm-overlay)
+  --context DIR         docker build context (default: repo root)
+  --build-arg K=V       extra build-arg for the finish build (repeatable)
+  --docker CMD          docker|podman (default: docker)
+  --nix-runner MODE     auto|host|container (default: auto)
+  --nix-image IMG       nixos/nix image for container runner (default: nixos/nix:latest)
+  --nix-volume NAME     persistent /nix store volume for the container runner
+  --keep-closure        keep <context>/nix-closure after the build (default: remove)
+  -h, --help            this help
+EOF
+  exit "${1:-0}"
+}
+
+# ── arg parse ───────────────────────────────────────────────────────────────
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base)        BASE_IMAGE="$2"; shift 2 ;;
+    --tag)         TAG="$2"; shift 2 ;;
+    --pkg)         PKGS+=("$2"); shift 2 ;;
+    --dockerfile)  DOCKERFILE="$2"; shift 2 ;;
+    --overlay)     OVERLAY_DIR="$2"; shift 2 ;;
+    --context)     CONTEXT="$2"; shift 2 ;;
+    --build-arg)   EXTRA_BUILD_ARGS+=("--build-arg" "$2"); shift 2 ;;
+    --docker)      DOCKER="$2"; shift 2 ;;
+    --nix-runner)  NIX_RUNNER="$2"; shift 2 ;;
+    --nix-image)   NIX_IMAGE="$2"; shift 2 ;;
+    --nix-volume)  NIX_VOLUME="$2"; shift 2 ;;
+    --keep-closure) KEEP_CLOSURE=1; shift ;;
+    -h|--help)     usage 0 ;;
+    *) echo "nix-bake-closure: unknown arg: $1" >&2; usage 1 ;;
+  esac
+done
+
+[ -n "${BASE_IMAGE}" ] || { echo "nix-bake-closure: --base is required" >&2; usage 1; }
+[ -n "${TAG}" ]        || { echo "nix-bake-closure: --tag is required" >&2; usage 1; }
+[ -f "${DOCKERFILE}" ] || { echo "nix-bake-closure: dockerfile not found: ${DOCKERFILE}" >&2; exit 1; }
+[ -d "${OVERLAY_DIR}" ] || { echo "nix-bake-closure: overlay dir not found: ${OVERLAY_DIR}" >&2; exit 1; }
+[ "${#PKGS[@]}" -gt 0 ] || PKGS=(kasmvnc)
+
+CLOSURE_DIR="${CONTEXT}/nix-closure"
+STORE_DST="${CLOSURE_DIR}/nix/store"
+
+log() { echo "[nix-bake-closure] $*" >&2; }
+
+# upper-case + s/-/_/ so `profile-sync` -> PROFILE_SYNC_STORE_PATH
+argname() { echo "$1" | tr '[:lower:]-' '[:upper:]_'; }
+
+# ── pick nix runner ─────────────────────────────────────────────────────────
+if [ "${NIX_RUNNER}" = "auto" ]; then
+  if command -v nix >/dev/null 2>&1; then NIX_RUNNER="host"; else NIX_RUNNER="container"; fi
+fi
+log "nix runner: ${NIX_RUNNER}"
+
+# run_nix "<shell>" — evaluate a nix-using snippet in $OVERLAY_DIR, host or container.
+run_nix() {
+  local snippet="$1"
+  if [ "${NIX_RUNNER}" = "host" ]; then
+    ( cd "${OVERLAY_DIR}" && bash -eu -o pipefail -c "${snippet}" )
+  else
+    local vol_arg=()
+    [ -n "${NIX_VOLUME}" ] && vol_arg=(-v "${NIX_VOLUME}:/nix")
+    "${DOCKER}" run --rm \
+      "${vol_arg[@]}" \
+      -v "${OVERLAY_DIR}:/overlay" \
+      -w /overlay \
+      "${NIX_IMAGE}" \
+      sh -eu -c "mkdir -p /etc/nix && printf 'experimental-features = nix-command flakes\n' > /etc/nix/nix.conf && ${snippet}"
+  fi
+}
+
+# ── 1. build each pkg, collect out paths ────────────────────────────────────
+declare -a OUT_PATHS=()
+for pkg in "${PKGS[@]}"; do
+  log "nix build .#${pkg}"
+  out="$(run_nix "nix build --impure --no-link --print-out-paths .#${pkg} | tail -1")"
+  [ -n "${out}" ] || { echo "nix-bake-closure: empty out path for ${pkg}" >&2; exit 1; }
+  log "  ${pkg} -> ${out}"
+  OUT_PATHS+=("${out}")
+  EXTRA_BUILD_ARGS+=("--build-arg" "$(argname "${pkg}")_STORE_PATH=${out}")
+done
+
+# ── 2. union closure of all out paths (sorted, deduped) ─────────────────────
+log "computing closure (nix-store -qR)"
+closure_list="$(run_nix "nix-store -qR ${OUT_PATHS[*]} | sort -u")"
+n_paths="$(printf '%s\n' "${closure_list}" | grep -c . || true)"
+log "closure: ${n_paths} store paths"
+
+# ── 3. stage closure into the build context (deterministic tar) ─────────────
+# A tar pipe (not cp -al) so it works non-root: nix store dirs are read-only, so
+# `cp -al`/`cp -a` can't populate them without root, whereas GNU tar reads the
+# read-only tree fine and restores dir modes last. --sort/--mtime/--numeric-owner
+# make the staged tree byte-stable → reproducible finish layers. Members are
+# relative to / (nix/store/<hash>...) so they land under <context>/nix-closure/nix.
+# chmod first: the read-only dirs otherwise block rm -rf on re-runs.
+if [ -e "${CLOSURE_DIR}" ]; then chmod -R u+w "${CLOSURE_DIR}" 2>/dev/null || true; rm -rf "${CLOSURE_DIR}"; fi
+mkdir -p "${STORE_DST}"
+
+members="$(printf '%s\n' "${closure_list}" | sed 's|^/||')"    # nix/store/<hash>...
+if [ "${NIX_RUNNER}" = "host" ]; then
+  tar -C / --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+      -cf - -T <(printf '%s\n' "${members}") \
+    | tar -C "${CLOSURE_DIR}" -xf -
+else
+  # Container runner: tar inside the container (which holds /nix), unpack on host
+  # (hardlinks can't cross the container/host boundary).
+  log "exporting closure from container"
+  printf '%s\n' "${members}" > "${CLOSURE_DIR}/.members.txt"
+  "${DOCKER}" run --rm \
+    $( [ -n "${NIX_VOLUME}" ] && echo -v "${NIX_VOLUME}:/nix" ) \
+    -v "${CLOSURE_DIR}:/out" \
+    "${NIX_IMAGE}" \
+    sh -eu -c 'tar -C / --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+                 -cf /out/.closure.tar -T /out/.members.txt'
+  tar -C "${CLOSURE_DIR}" -xf "${CLOSURE_DIR}/.closure.tar"
+  rm -f "${CLOSURE_DIR}/.closure.tar" "${CLOSURE_DIR}/.members.txt"
+fi
+chmod -R u+w "${CLOSURE_DIR}" 2>/dev/null || true
+log "staged closure into ${STORE_DST} ($(du -sh "${CLOSURE_DIR}" 2>/dev/null | cut -f1))"
+
+# ── 4. finish build (bake) ──────────────────────────────────────────────────
+log "building ${TAG} (base=${BASE_IMAGE}, dockerfile=$(basename "${DOCKERFILE}"))"
+"${DOCKER}" build \
+  --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+  "${EXTRA_BUILD_ARGS[@]}" \
+  -f "${DOCKERFILE}" \
+  -t "${TAG}" \
+  "${CONTEXT}"
+
+if [ "${KEEP_CLOSURE}" -eq 0 ]; then
+  chmod -R u+w "${CLOSURE_DIR}" 2>/dev/null || true
+  rm -rf "${CLOSURE_DIR}"
+  log "removed staging ${CLOSURE_DIR} (use --keep-closure to retain)"
+fi
+log "done: ${TAG}"
