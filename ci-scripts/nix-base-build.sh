@@ -77,6 +77,12 @@ EOF
     # has no host nix), staging the closure into a WRITABLE tmp context (/work is
     # ro). NIX_STAGE_VOLUME (a persistent /nix podman volume) warms the cache if set.
     ctx="$(mktemp -d)"
+    # Seed the writable ctx with the repo files the resolute finish COPYs (the
+    # nix hooks). /work is ro so we can't stage nix-stores there; nix-bake-closure
+    # stages nix-stores into ctx, but the dockerfile also COPYs
+    # src/ubuntu/install/nix/{units,scripts}/* — copy those in so both are present.
+    mkdir -p "${ctx}/src/ubuntu/install"
+    cp -a /work/src/ubuntu/install/nix "${ctx}/src/ubuntu/install/nix"
     bin/nix-bake-closure \
       --base "${coretag}" --tag "${nixtag}" --store-id services \
       --pkg kasmvnc --pkg profile_sync --pkg audio_input \
