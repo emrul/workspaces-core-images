@@ -1,0 +1,6 @@
+{
+  "version": "1.4.1",
+  "rev": "a4b74a836b7745209e6d5506fa2723603ed8b930",
+  "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "_note": "rev = the KasmVNC COMMIT_ID pinned in src/ubuntu/install/kasm_vnc/install_kasm_vnc.sh (branch feature_touch-device-support, KASMVNC_VER 1.4.1). hash is lib.fakeHash — the first `nix build` on .140 prints the real one to paste in."
+}

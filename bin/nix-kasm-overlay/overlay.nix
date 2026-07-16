@@ -20,4 +20,13 @@ in
     inherit prev;
     pin = loadPin ./pkgs/chrome;
   };
+
+  # Kind B (from scratch): KasmVNC server built under Nix (fork of TigerVNC), so
+  # the runtime base no longer needs a per-distro .deb/.rpm/.apk — unblocks new
+  # distros (Resolute) and thins the base. SPIKE: iterate the build on the .140
+  # host. See pkgs/kasmvnc/package.nix.
+  kasmvnc = import ./pkgs/kasmvnc/package.nix {
+    inherit prev;
+    pin = loadPin ./pkgs/kasmvnc;
+  };
 }

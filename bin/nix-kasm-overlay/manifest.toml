@@ -18,3 +18,12 @@ kind      = "override"
 discover  = "chrome-version-api"
 cadence   = "twice-daily"
 platforms = ["amd64"]
+
+# KasmVNC is a Kasm SERVICE (not an app-catalog entry): a from-scratch Nix build
+# of the KasmVNC server so the runtime base is distro-independent (no per-distro
+# .deb). Bumped by hand when tracking the KasmVNC fork (pin.json rev/version).
+[apps.kasmvnc]
+kind      = "source"
+discover  = "manual"
+cadence   = "manual"
+platforms = ["amd64", "arm64"]

@@ -30,6 +30,7 @@
           };
         in {
           chrome  = pkgs.chrome;
+          kasmvnc = pkgs.kasmvnc;
           default = pkgs.chrome;
         });
     };
