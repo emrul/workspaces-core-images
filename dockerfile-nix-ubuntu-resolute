@@ -1,0 +1,49 @@
+# nix-ubuntu-resolute — the resolute runtime base with KasmVNC provided by Nix.
+#
+# The resolute core (dockerfile-kasm-core-ubuntu-resolute, built with
+# INCLUDE_KASMVNC=0) has no KasmVNC, because Kasm publishes no per-distro KasmVNC
+# .deb for resolute (26.04). This finish build bakes the distro-independent Nix
+# KasmVNC (bin/nix-kasm-overlay/pkgs/kasmvnc, autoPatchelf'd against the Nix
+# closure) into the image and wires it into the paths the boot expects.
+#
+# The Nix closure (the kasmvnc store path + all its deps) must be staged into the
+# build context at ./nix-closure/nix by the build helper, since the resolute core
+# has no Nix. KASMVNC_STORE_PATH is the /nix/store/<hash>-kasmvnc-… path.
+#
+# Binaries stay symlinked to the (immutable) store so their baked interpreter +
+# RPATH resolve; the web assets are COPIED out to a WRITABLE /usr/share/kasmvnc
+# (the boot adds www/Downloads there). Replicates the .deb's /usr layout +
+# post-install (incl. the /usr/bin/Xvnc→Xkasmvnc symlink the .deb postinst makes,
+# which kasm-xvnc execs).
+ARG BASE_IMAGE="localhost/kasm-core-ubuntu-resolute:test"
+FROM $BASE_IMAGE
+
+USER 0
+ARG KASMVNC_STORE_PATH
+
+# The whole KasmVNC Nix closure (binaries need their store deps present).
+COPY nix-closure/nix /nix
+
+RUN set -eu; \
+    kv="${KASMVNC_STORE_PATH}"; \
+    test -x "$kv/bin/Xkasmvnc" || { echo "KASMVNC_STORE_PATH invalid: $kv"; exit 1; }; \
+    # Binaries → symlink to the store (keep their nix interpreter/RPATH).
+    ln -sf "$kv/bin/Xkasmvnc" /usr/bin/Xkasmvnc; \
+    ln -sf "$kv/bin/Xkasmvnc" /usr/bin/Xvnc; \
+    for b in kasmvncserver kasmvncconfig kasmvncpasswd kasmxproxy; do \
+        [ -e "$kv/bin/$b" ] && ln -sf "$kv/bin/$b" "/usr/bin/$b"; \
+    done; \
+    # Web assets + config → writable copy (boot adds www/Downloads).
+    rm -rf /usr/share/kasmvnc; cp -a "$kv/share/kasmvnc" /usr/share/kasmvnc; \
+    [ -d "$kv/lib/kasmvncserver" ] && { rm -rf /usr/lib/kasmvncserver; cp -a "$kv/lib/kasmvncserver" /usr/lib/kasmvncserver; } || true; \
+    # Post-install (mirrors src/ubuntu/install/kasm_vnc/install_kasm_vnc.sh tail).
+    mkdir -p /usr/share/kasmvnc/www/Downloads; \
+    chown -R 0:0 /usr/share/kasmvnc; chmod -R og-w /usr/share/kasmvnc; \
+    ln -sf /home/kasm-user/Downloads /usr/share/kasmvnc/www/Downloads/Downloads; \
+    chown -R 1000:0 /usr/share/kasmvnc/www/Downloads; \
+    mkdir -p /etc/kasm; \
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout /etc/kasm/self-default.pem -out /etc/kasm/self-default.pem \
+        -subj "/C=US/ST=VA/L=None/O=None/OU=DoFu/CN=kasm/emailAddress=none@none.none"; \
+    chown 0:1000 /etc/kasm/self-default.pem; chmod 0640 /etc/kasm/self-default.pem; \
+    echo "nix KasmVNC wired: $(/usr/bin/Xvnc -version 2>&1 | head -1)"
