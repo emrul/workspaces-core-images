@@ -64,9 +64,17 @@ elif [[ "${DISTRO}" == @(debian|parrotos7|kali) ]]; then
   done
 else
   apt-get update
+  # Some language packs aren't in every Ubuntu release (e.g. language-pack-ga/ia
+  # are absent on resolute/26.04), and a single missing package fails the whole
+  # apt-get install. Install only the ones this release actually ships so the
+  # build is release-independent (identical result where all are present).
+  AVAIL_LOCALES=""
+  for _lp in ${LOCALES_UBUNTU}; do
+    if apt-cache show "${_lp}" >/dev/null 2>&1; then AVAIL_LOCALES="${AVAIL_LOCALES} ${_lp}"; fi
+  done
   apt-get install -y \
     fonts-noto-core \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
-    ${LOCALES_UBUNTU}
+    ${AVAIL_LOCALES}
 fi
