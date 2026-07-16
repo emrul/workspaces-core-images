@@ -1,6 +1,9 @@
 *
 !src
 !kasm-desktop-kde
+# Transient: the Nix KasmVNC closure staged by the resolute finish build
+# (dockerfile-nix-ubuntu-resolute); absent in normal builds.
+!nix-closure
 
 # Strip Go build artefacts so a developer's local `make` doesn't
 # inflate the build context or leak host-built binaries into the
