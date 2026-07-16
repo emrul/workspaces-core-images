@@ -44,7 +44,7 @@ chmod 700 /usr/local/squid/etc/ssl_cert -R
 cd /usr/local/squid/etc/ssl_cert
 /usr/local/squid/libexec/security_file_certgen -c -s /usr/local/squid/var/logs/ssl_db -M 4MB
 chown proxy:proxy /usr/local/squid/var/logs/ssl_db -R
-chown -R proxy:proxy /usr/local/squid -R
+chown -R proxy:proxy /usr/local/squid
 mkdir -p /etc/squid/
 
 # Trick so we can auto re-direct blocked urls to a special page
