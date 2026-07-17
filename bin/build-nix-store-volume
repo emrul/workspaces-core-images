@@ -576,7 +576,13 @@ while IFS= read -r p; do
     if [ -n "$p_prevkey" ] && [ "$p_key" = "$p_prevkey" ]; then
       echo "  [eval-gate] $p unchanged (inputKey match) — keeping warm profile, skipping reinstall" >&2
       ln -sfn "${KASM_PROFILE_DIR}/$p" "${KASM_GCROOT_DIR}/$p"
-      echo "$p" >> "${STAGE_IN}/built.txt"   # (deliberately NOT in changed.txt)
+      echo "$p" >> "${STAGE_IN}/built.txt"
+      # The nix STORE is unchanged, but if the BASE LAYER changed this run
+      # (shared wiring like nix-launch, baked into nix-ubuntu), the per-app
+      # image must still be RE-ASSEMBLED onto the new base — otherwise it keeps
+      # the old base layer and the wiring fix never ships (edge --password-store,
+      # 2026-07-17). Cheap: assembly only re-stacks layers, no reinstall.
+      [ "${NIX_BASE_AFFECTED:-0}" = "1" ] && echo "$p" >> "${STAGE_IN}/changed.txt"
       p_sp="$(readlink -f "${KASM_PROFILE_DIR}/$p" 2>/dev/null || true)"
       p_ver="$(jq -r --arg a "$p" '.apps[$a].version // ""' \
                  "${OUTPUT_IN}/labels.prev.json" 2>/dev/null || true)"
