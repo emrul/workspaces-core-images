@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -ex
-START_COMMAND="/usr/local/bin/nix-app-launch retroarch"
+START_COMMAND="/usr/local/bin/nix-gpu-app-launch retroarch"
 PGREP="retroarch"
 export MAXIMIZE="false"
 export MAXIMIZE_NAME="retroarch"

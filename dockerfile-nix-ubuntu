@@ -47,9 +47,10 @@ COPY src/ubuntu/install/nix/scripts/nix-activate \
      src/ubuntu/install/nix/scripts/nix-bwrap-run \
      src/ubuntu/install/nix/scripts/nix-gpu-run \
      src/ubuntu/install/nix/scripts/nix-gpu-setup \
+     src/ubuntu/install/nix/scripts/nix-gpu-app-launch \
      /usr/local/bin/
 
-RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app /usr/local/bin/nix-launch /usr/local/bin/nix-bwrap-run /usr/local/bin/nix-gpu-run /usr/local/bin/nix-gpu-setup && \
+RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app /usr/local/bin/nix-launch /usr/local/bin/nix-bwrap-run /usr/local/bin/nix-gpu-run /usr/local/bin/nix-gpu-setup /usr/local/bin/nix-gpu-app-launch && \
     /usr/local/bin/container-init \
         --units /etc/container-init/units \
         --drop-in /etc/container-init.d \

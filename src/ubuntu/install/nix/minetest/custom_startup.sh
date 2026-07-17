@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -ex
-START_COMMAND="/usr/local/bin/nix-app-launch minetest"
+START_COMMAND="/usr/local/bin/nix-gpu-app-launch minetest"
 PGREP="minetest"
 export MAXIMIZE="true"
 export MAXIMIZE_NAME="Minetest"

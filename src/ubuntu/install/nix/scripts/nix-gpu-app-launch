@@ -1,0 +1,83 @@
+#!/bin/sh
+# nix-gpu-app-launch <profile> [args...] — GPU-aware launcher for native-GL
+# catalog apps (minetest, retroarch, …).
+#
+# Like nix-app-launch it resolves the profile's primary binary, but when the
+# Kasm platform has allocated a GPU it runs the app under Nix VirtualGL
+# (`vglrun -d egl`, via nix-gpu-run) so the app's GL context lands on the REAL
+# GPU. A native-GL app under headless KasmVNC (Xvnc) gets NO hardware GL context
+# without VirtualGL — it either falls back to software (llvmpipe) or, for apps
+# that hard-require a modern GL context (Irrlicht/minetest, RetroArch), fails at
+# context creation. Falls back to nix-launch (software GL) when no GPU is free.
+#
+# Two things this handles that a bare `nix-gpu-run` call does not:
+#   - dbus/XDG_RUNTIME_DIR fixups (container-init services don't source
+#     /etc/profile.d), same as nix-launch/blender-launch.
+#   - a CLEAN LD_LIBRARY_PATH (the profile's own lib dir only). nix-gpu-run
+#     PREPENDS the nvidia/vulkan dirs and keeps this; it must stay Nix-store-only
+#     — inheriting Kasm's baked system LD_LIBRARY_PATH triggers the loader's
+#     "__vdso_gettimeofday: invalid mode for dlopen()" trap. See blender/launch.
+#
+# Binary resolution mirrors nix-app-launch so upstream custom_startup.sh works
+# unchanged (START_COMMAND="/usr/local/bin/nix-gpu-app-launch <profile>").
+set -u
+
+PROFILE_NAME="${1:?usage: nix-gpu-app-launch <profile> [args...]}"
+shift
+PROFILE="/nix/var/nix/profiles/${PROFILE_NAME}"
+
+[ -d "${PROFILE}" ] || { echo "nix-gpu-app-launch: no profile ${PROFILE}" >&2; exit 1; }
+
+# 1. Prefer the profile's primary visible .desktop Exec (first token, field codes
+#    dropped). Nix .desktop files carry an absolute /nix/store path.
+BIN=""
+for d in "${PROFILE}"/share/applications/*.desktop; do
+  [ -e "${d}" ] || continue
+  grep -qiE '^(NoDisplay|Hidden)[[:space:]]*=[[:space:]]*true' "${d}" && continue
+  exec_line="$(sed -n 's/^Exec=//p' "${d}" | head -n1)"
+  [ -z "${exec_line}" ] && continue
+  cand="$(printf '%s' "${exec_line}" | awk '{print $1}')"
+  case "${cand}" in
+    /*) BIN="${cand}" ;;
+    *)  BIN="${PROFILE}/bin/${cand}" ;;
+  esac
+  [ -x "${BIN}" ] && break
+  BIN=""
+done
+
+# 2. Fallbacks: bin/<profile-name>, else the sole bin/ entry.
+if [ -z "${BIN}" ]; then
+  if [ -x "${PROFILE}/bin/${PROFILE_NAME}" ]; then
+    BIN="${PROFILE}/bin/${PROFILE_NAME}"
+  else
+    BIN="$(ls "${PROFILE}"/bin/* 2>/dev/null | head -n1)"
+  fi
+fi
+
+[ -n "${BIN}" ] && [ -x "${BIN}" ] || {
+  echo "nix-gpu-app-launch: could not resolve a binary for profile '${PROFILE_NAME}'" >&2
+  exit 1
+}
+
+if /usr/local/bin/nix-gpu-run --available; then
+  # dbus/XDG env fixups (container-init services don't source /etc/profile.d);
+  # nix-gpu-run sets the nvidia/vulkan LD_LIBRARY_PATH itself.
+  [ -f /tmp/kasm-dbus.env ] && {
+    . /tmp/kasm-dbus.env 2>/dev/null
+    [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && export DBUS_SESSION_BUS_ADDRESS
+  }
+  if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+    uid=$(id -u); XDG_RUNTIME_DIR="/run/user/${uid}"
+    [ -d "${XDG_RUNTIME_DIR}" ] || mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null
+    export XDG_RUNTIME_DIR
+  fi
+  # CLEAN LD_LIBRARY_PATH: the app's own profile lib dir only (for runtime dlopen
+  # deps not on the binary's RUNPATH). nix-gpu-run PREPENDS nvidia/vulkan and
+  # keeps this. Must stay Nix-store-only — NEVER the Kasm-baked system path.
+  export LD_LIBRARY_PATH="${PROFILE}/lib"
+  echo "nix-gpu-app-launch: ${PROFILE_NAME} → ${BIN} (GPU: vglrun -d egl)" >&2
+  exec /usr/local/bin/nix-gpu-run "${BIN}" "$@"
+fi
+
+echo "nix-gpu-app-launch: ${PROFILE_NAME} → ${BIN} (no GPU — software GL via nix-launch)" >&2
+exec /usr/local/bin/nix-launch "${BIN}" "$@"
