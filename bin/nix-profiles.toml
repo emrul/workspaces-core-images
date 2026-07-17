@@ -362,8 +362,12 @@ pkgs = ["nixpkgs#qbittorrent"]
 
 # ── Games / emulators (GPU; some need i386 multilib) ──────────────────
 [profiles.retroarch]
-# GPU app — VirtualGL launcher gate for acceleration.
-pkgs = ["nixpkgs#retroarch"]
+# GPU app via nix-gpu-app-launch (vglrun). sdl3^lib: RetroArch dlopens
+# libSDL3.so.0 at startup (like blender/super-tux-kart) but it's NOT in the
+# closure — without it it aborts "Failed loading SDL3 library" and no window
+# appears (testbench 2026-07-17). The lib output lands in the profile's /lib,
+# which nix-gpu-app-launch puts on LD_LIBRARY_PATH.
+pkgs = ["nixpkgs#retroarch", "nixpkgs#sdl3^lib"]
 
 [profiles.minetest]
 # Renamed upstream: minetest → luanti. GPU app.
