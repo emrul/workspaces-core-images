@@ -406,6 +406,14 @@ apply_single_app_desktop() {
     cp -f "${src}"/*.xml "${dst}"/ 2>/dev/null || true
     chown -R "${KASM_OS_USER}:${KASM_OS_GROUP}" "${dst}" 2>/dev/null || true
   done
+  # No panel / tray / launcher — a true single-app session, like Kasm's stock
+  # single-app images (which apt-remove xfce4-panel; we can't, the base is
+  # shared). The single-application layout's xfce4-session.xml omits xfce4-panel
+  # from the session's managed-client list, so xfce4-session simply never starts
+  # it. This works because nix-activate.service is ordered Before=
+  # window-manager.service (which runs startxfce4 → xfce4-session), so the
+  # no-panel config is in place before the session reads it — no killing a
+  # running panel, no race.
   log "single app active; applied no-panel XFCE layout"
 }
 
