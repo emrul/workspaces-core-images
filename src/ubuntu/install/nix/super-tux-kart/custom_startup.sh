@@ -6,7 +6,7 @@ build=64bit
 if [ "${ARCH}" == "arm64" ] ; then
     build=arm64
 fi
-START_COMMAND="/usr/local/bin/nix-app-launch super-tux-kart"
+START_COMMAND="/usr/local/bin/nix-gpu-app-launch super-tux-kart"
 PGREP="supertuxkart"
 export MAXIMIZE="false"
 export MAXIMIZE_NAME="SuperTuxKart"

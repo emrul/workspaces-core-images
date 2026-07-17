@@ -367,8 +367,12 @@ pkgs = ["nixpkgs#retroarch"]
 pkgs = ["nixpkgs#luanti"]
 
 [profiles.super-tux-kart]
-# GPU app.
-pkgs = ["nixpkgs#superTuxKart"]
+# GPU app (Irrlicht/Antarctica — needs a real GL context; no software fallback
+# under headless Xvnc, launched via nix-gpu-app-launch → vglrun). sdl3^lib: STK
+# dlopens libSDL3.so.0 at startup (like blender) but it's NOT in the closure —
+# without it STK aborts "Failed loading SDL3 library". The lib output lands in
+# the profile's /lib, which nix-gpu-app-launch puts on LD_LIBRARY_PATH.
+pkgs = ["nixpkgs#superTuxKart", "nixpkgs#sdl3^lib"]
 
 [profiles.steam]
 # nixpkgs ships steam as an FHS-wrapped derivation (its own chroot env).
