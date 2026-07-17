@@ -80,11 +80,36 @@ local_label()  { "${DOCKER}" image inspect --format "{{ index .Config.Labels \"$
 remote_label() { command -v skopeo >/dev/null 2>&1 && skopeo inspect --format "{{ index .Labels \"$2\" }}" "docker://$1" 2>/dev/null || true; }
 
 # Classify by comparing published (prev) store-path to this build's (new).
+# Used for the human REPORT (which packages moved); the PUSH decision uses
+# layer-content comparison below (content_state) so it can't miss non-store
+# changes (nix-launch in the base layer, per-app wiring).
 classify() { # $1=prevSP $2=newSP → new|updated|unchanged
   if   [[ -z "$1" ]];      then echo new
   elif [[ "$1" == "$2" ]]; then echo unchanged
   else                          echo updated
   fi
+}
+
+# Uncompressed layer hashes (rootfs.diff_ids) are the image's true content
+# fingerprint: any layer change — nix store, base layer (nix-launch et al.),
+# or the per-app wiring layer — changes a diff_id, while churning config labels
+# (built-at, revision) and ENV do NOT. Comparing them against the published
+# image catches every content change the store-path label alone would miss
+# (e.g. the edge --password-store fix baked into the base, 2026-07-17).
+local_diffids()  { "${DOCKER}" image inspect --format '{{json .RootFS.Layers}}' "$1" 2>/dev/null | tr -d ' ' || true; }
+remote_diffids() { # config blob carries rootfs.diff_ids; needs skopeo+jq
+  command -v skopeo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
+  skopeo inspect --config "docker://$1" 2>/dev/null | jq -c '.rootfs.diff_ids' 2>/dev/null || true
+}
+# → same | changed | new | unknown  (unknown/new/changed all push; only same skips)
+content_state() { # $1=local-img $2=remote-ref
+  local lo re
+  lo="$(local_diffids "$1")"
+  [[ -z "${lo}" || "${lo}" == "null" ]] && { echo unknown; return; }
+  re="$(remote_diffids "$2")"
+  [[ -z "${re}" ]]        && { echo unknown; return; }   # no skopeo/jq → fail safe to push
+  [[ "${re}" == "null" ]] && { echo new; return; }       # not yet published
+  [[ "${lo}" == "${re}" ]] && echo same || echo changed
 }
 
 # record <profile> <kasm> <dest> <status> <action> <rev> <ver> <newSP> <prevSP>
@@ -210,6 +235,10 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
 fi
 
 ensure_skopeo || echo "[nix-publish] WARN skopeo unavailable — every image will show status=new" >&2
+# jq is needed for the content-based push decision (remote rootfs.diff_ids);
+# without it content_state returns 'unknown' and every app is re-pushed (safe,
+# but loses the dedup skip). ensure it up front so the skip stays effective.
+ensure_jq || echo "[nix-publish] WARN jq unavailable — content compare degraded; images may re-push" >&2
 
 pushed=0; failed=()
 for img in "${imgs[@]}"; do
@@ -227,18 +256,23 @@ for img in "${imgs[@]}"; do
   fi
   # Compare against the currently-published image BEFORE we overwrite it.
   prev_sp="$(remote_label "${dest}" dev.kasm.nix.store-path)"
-  status_="$(classify "${prev_sp}" "${new_sp}")"
-  # Unchanged = identical store-path already published. Re-pushing would only
-  # churn the manifest + provenance labels (every layer already dedups), so skip
-  # it. Changed/new apps still push below, and the fat store ALWAYS pushes (it
-  # carries every app's store, so its content changes whenever any app does —
-  # gating it on status would reopen the dedup gap; see design/nix-dedup-gap.md).
-  if [[ "${status_}" == "unchanged" ]]; then
-    echo "[nix-publish] ${profile} → ${dest}  [unchanged] — already published, skip push"
+  status_="$(classify "${prev_sp}" "${new_sp}")"   # report label (store-path move)
+  # PUSH DECISION is content-based, not store-path-based: skip only when the
+  # assembled image's layers are byte-identical to what's published. A store-
+  # path match with different layers (nix-launch fix in the base, changed
+  # per-app wiring) MUST still push — the old store-path-only skip silently
+  # dropped those (edge --password-store, 2026-07-17). Re-pushing identical
+  # content would only churn labels (every layer already dedups), so skip that.
+  cstate="$(content_state "${img}" "${dest}")"
+  if [[ "${cstate}" == "same" ]]; then
+    echo "[nix-publish] ${profile} → ${dest}  [unchanged: layers identical] — skip push"
     record "${profile}" "${kn}" "${dest}" unchanged skipped "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}"
     continue
   fi
-  echo "[nix-publish] ${profile} → ${dest}  [${status_}]"
+  # Layers differ but store-path matched ⇒ a wiring/base-layer change; surface
+  # it as "updated" rather than the misleading "unchanged".
+  [[ "${status_}" == "unchanged" ]] && status_=updated
+  echo "[nix-publish] ${profile} → ${dest}  [${status_}: content ${cstate}]"
   if run "${DOCKER}" tag "${img}" "${dest}" && run "${DOCKER}" push "${dest}"; then
     pushed=$((pushed+1)); action=pushed
   else
