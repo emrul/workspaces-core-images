@@ -9,7 +9,10 @@ Type=simple
 User=${KASM_OS_USER:-kasm-user}
 Group=${KASM_OS_GROUP:-kasm-user}
 WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
-ExecStart=/dockerstartup/audio_input/kasm_audio_input_server --ssl --port 14901 --auth-token ${KASM_AUDIO_AUTH:-${KASM_OS_USER:-kasm-user}:${VNC_PW}} --cert ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.vnc/self.pem --certkey ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.vnc/self.pem
+# --auth-token MUST use the literal KasmVNC web username `kasm_user` (underscore)
+# — Kasm's nginx injects `kasm_user:$VNC_PW` when proxying the mic websocket, so
+# $KASM_OS_USER (`kasm-user`, hyphen) would 401. See audio-out-ws.service.
+ExecStart=/dockerstartup/audio_input/kasm_audio_input_server --ssl --port 14901 --auth-token ${KASM_AUDIO_AUTH:-kasm_user:${VNC_PW}} --cert ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.vnc/self.pem --certkey ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.vnc/self.pem
 Restart=on-failure
 RestartSec=1s
 StartLimitBurst=3
