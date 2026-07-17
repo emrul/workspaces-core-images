@@ -225,6 +225,7 @@ build:
   # so the bump ships even though the shell executor re-checks-out CI_COMMIT_SHA.
   needs:
     - prepare
+    - base-check           # for NIX_BASES_REBUILD (which bases actually rebuilt)
     - job: nix-update
       optional: true
     - job: base            # wait for any base rebuild so apps build on the fresh base
@@ -237,13 +238,23 @@ build:
   script:
     - |
       if [ "${NIX_PROFILES:-}" = "__none__" ]; then echo "no image-relevant changes — skipping build"; exit 0; fi
-      echo "building profiles: ${NIX_PROFILES:-<all>}  (per-app parallel=${BUILD_PARALLEL}, eval-gate=${NIX_EVAL_GATE:-0})"
+      # Re-assembly trigger: whether the ubuntu base actually rebuilt this run
+      # (base-check's NIX_BASES_REBUILD, or a manual BASE_DISTROS override) — the
+      # signal that eval-gated/warm apps must be re-stacked onto the new base.
+      # This is source-agnostic: it fires for commit base-file changes AND for a
+      # schedule that rebuilt ubuntu on upstream-digest staleness (where
+      # NIX_BASE_AFFECTED is 0), unlike the commit-diff-only NIX_BASE_AFFECTED
+      # (which stays the base-freshness GUARD signal in dind-build.sh).
+      _reb="${BASE_DISTROS:-${NIX_BASES_REBUILD:-}}"
+      case " ${_reb} " in *" ubuntu "*) NIX_BASE_REBUILT=1 ;; *) NIX_BASE_REBUILT=0 ;; esac
+      echo "building profiles: ${NIX_PROFILES:-<all>}  (per-app parallel=${BUILD_PARALLEL}, eval-gate=${NIX_EVAL_GATE:-0}, ubuntu-base-rebuilt=${NIX_BASE_REBUILT})"
       bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/root/.cache/nix-build-output" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e PROFILES="$NIX_PROFILES" -e BUILD_PARALLEL="$BUILD_PARALLEL" \
-        -e NIX_BASE_AFFECTED="$NIX_BASE_AFFECTED" -e CI_COMMIT_SHA="$CI_COMMIT_SHA" \
+        -e NIX_BASE_AFFECTED="$NIX_BASE_AFFECTED" -e NIX_BASE_REBUILT="$NIX_BASE_REBUILT" \
+        -e CI_COMMIT_SHA="$CI_COMMIT_SHA" \
         -e ALLOW_STALE_BASE="$ALLOW_STALE_BASE" -e NIX_EVAL_GATE="$NIX_EVAL_GATE" \
         -e DISK_MIN_GB="$DISK_MIN_GB" -e NIX_STAGE_CAP_G="$NIX_STAGE_CAP_G" \
         "$DIND_IMG" /work/runs/nix-portal/dind-build.sh

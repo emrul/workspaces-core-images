@@ -577,12 +577,13 @@ while IFS= read -r p; do
       echo "  [eval-gate] $p unchanged (inputKey match) — keeping warm profile, skipping reinstall" >&2
       ln -sfn "${KASM_PROFILE_DIR}/$p" "${KASM_GCROOT_DIR}/$p"
       echo "$p" >> "${STAGE_IN}/built.txt"
-      # The nix STORE is unchanged, but if the BASE LAYER changed this run
-      # (shared wiring like nix-launch, baked into nix-ubuntu), the per-app
-      # image must still be RE-ASSEMBLED onto the new base — otherwise it keeps
-      # the old base layer and the wiring fix never ships (edge --password-store,
-      # 2026-07-17). Cheap: assembly only re-stacks layers, no reinstall.
-      [ "${NIX_BASE_AFFECTED:-0}" = "1" ] && echo "$p" >> "${STAGE_IN}/changed.txt"
+      # The nix STORE is unchanged, but if the ubuntu BASE actually rebuilt this
+      # run (shared wiring like nix-launch baked into nix-ubuntu — from a commit
+      # change OR a scheduled upstream-digest rebuild), the per-app image must
+      # still be RE-ASSEMBLED onto the new base — otherwise it keeps the old base
+      # layer and the wiring fix never ships (edge --password-store, 2026-07-17).
+      # Cheap: assembly only re-stacks layers, no reinstall.
+      [ "${NIX_BASE_REBUILT:-0}" = "1" ] && echo "$p" >> "${STAGE_IN}/changed.txt"
       p_sp="$(readlink -f "${KASM_PROFILE_DIR}/$p" 2>/dev/null || true)"
       p_ver="$(jq -r --arg a "$p" '.apps[$a].version // ""' \
                  "${OUTPUT_IN}/labels.prev.json" 2>/dev/null || true)"
@@ -1174,12 +1175,14 @@ inner_run_args=(
     -e "APP_TAG=${APP_TAG}"
     -e "APP_BASE_REF=${APP_BASE_IMAGE}"
     -e "NIX_EVAL_GATE=${NIX_EVAL_GATE:-0}"
-    # When the base layer changed, eval-gated (warm, store-unchanged) apps must
-    # still be RE-ASSEMBLED onto the new base — the inner build reads this to add
-    # them to changed.txt. Without it the inner container always saw 0 and warm
-    # apps kept the old base layer, so base/wiring fixes (nix-launch, the panel
-    # drop, nix-gpu-app-launch) built into the base never reached per-app images.
-    -e "NIX_BASE_AFFECTED=${NIX_BASE_AFFECTED:-0}"
+    # When the ubuntu base actually rebuilt this run, eval-gated (warm, store-
+    # unchanged) apps must still be RE-ASSEMBLED onto the new base — the inner
+    # build reads this to add them to changed.txt. Without it the inner container
+    # always saw 0 and warm apps kept the old base layer, so base/wiring fixes
+    # (nix-launch, the single-app panel drop, nix-gpu-app-launch) built into the
+    # base never reached per-app images. Source-agnostic (commit change OR a
+    # schedule digest-staleness rebuild), unlike commit-diff NIX_BASE_AFFECTED.
+    -e "NIX_BASE_REBUILT=${NIX_BASE_REBUILT:-0}"
 )
 # Mount the GPU overlay flake (trimmed VirtualGL) so a [gpu] profile entry can
 # reference it as `path:/config/gpu-overlay#…`. Pinned to the same nixpkgs rev as
