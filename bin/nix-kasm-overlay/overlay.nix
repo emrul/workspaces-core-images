@@ -48,6 +48,15 @@ in
     pin = loadPin "chrome" ./pkgs/chrome;
   };
 
+  # Kind A (override): Discord tracked ahead of nixpkgs. Discord hard-expires
+  # old clients (forced in-app update that can't write the read-only store), and
+  # unstable lags upstream by a few releases — so override version+src from the
+  # pin, refreshed twice-daily. See pkgs/discord/package.nix.
+  discord = import ./pkgs/discord/package.nix {
+    inherit prev;
+    pin = loadPin "discord" ./pkgs/discord;
+  };
+
   # Kind A (override): Vivaldi with proprietary media codecs. Plain
   # nixpkgs#vivaldi ships without libffmpeg.so; the browser crash-loops at
   # startup trying to self-install it into the read-only store (testbench

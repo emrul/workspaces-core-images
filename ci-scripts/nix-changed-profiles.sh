@@ -91,16 +91,16 @@ while IFS= read -r f; do
       a="${f#src/ubuntu/install/nix/}"; a="${a%%/*}"; apps="${apps} ${a}" ;;
     # Self-hosted overlay shared machinery (loadPin, flake inputs, lib). It only
     # feeds consumers that reference path:/config/kasm-overlay# — i.e. the
-    # overlay-backed CATALOG app(s) + the baked base components — NOT the whole
-    # catalog (the other ~49 apps use plain nixpkgs and are unaffected). So scope
-    # to those: currently `chrome` is the only overlay-backed app (grep
+    # overlay-backed CATALOG apps + the baked base components — NOT the whole
+    # catalog (the other ~48 apps use plain nixpkgs and are unaffected). So scope
+    # to those: overlay-backed apps are chrome, discord, vivaldi (grep
     # bin/nix-profiles.toml for kasm-overlay# — extend this list if that changes),
     # plus the resolute base (kasmvnc/profile_sync/audio_input/recorder/webcam/
-    # gamepad are baked from the overlay). eval-gate no-ops chrome if unchanged.
+    # gamepad are baked from the overlay). eval-gate no-ops any unchanged app.
     # A per-app dir (pkgs/<x>/pin.json|package.nix) is handled by the arms below.
     bin/nix-kasm-overlay/flake.nix|bin/nix-kasm-overlay/flake.lock|\
     bin/nix-kasm-overlay/overlay.nix|bin/nix-kasm-overlay/lib/*)
-      apps="${apps} chrome"; BASES_AFFECTED="${BASES_AFFECTED} resolute" ;;
+      apps="${apps} chrome discord vivaldi"; BASES_AFFECTED="${BASES_AFFECTED} resolute" ;;
     # These Nix-packaged services are BASE components (baked into the resolute
     # base via nix-bake-closure), NOT catalog apps — a pin/package change
     # rebuilds the resolute base, not an app profile. Matched before the generic

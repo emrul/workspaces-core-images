@@ -150,6 +150,35 @@ chrome_pin_hash() {
   printf 'sha256-%s' "$(openssl dgst -sha256 -binary "${deb}" | openssl base64 -A)"
 }
 
+# ── discoverer: Discord stable (discord-distro) ─────────────────────────────
+# Discord's download endpoint 302-redirects to the current versioned artifact;
+# the version is in the Location URL. The build consumes the `full.distro`
+# artifact from Discord's official CDN (same URL nixpkgs uses). Provenance is
+# HTTPS to Discord's CDN + the pinned SRI hash (Discord publishes no signed
+# index, unlike Google), so the hash IS the integrity anchor.
+DISCORD_DOWNLOAD="https://discord.com/api/download?platform=linux&format=tar.gz"
+DISCORD_DISTRO_BASE="https://stable.dl2.discordapp.net/distro/app/stable/linux/x64"
+
+discover_discord_distro() {
+  curl -fsSI "${DISCORD_DOWNLOAD}" \
+    | awk 'tolower($1)=="location:"{print $2}' \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+
+# Download the full.distro for a version and emit its SRI hash (sha256 → base64).
+discord_pin_hash() {
+  ver="$1"
+  url="${DISCORD_DISTRO_BASE}/${ver}/full.distro"
+  tmp="$(mktemp -d)"; trap 'rm -rf "${tmp}"' RETURN
+  art="${tmp}/full.distro"
+  curl -fsSL "${url}" -o "${art}" || fail "discord: could not download ${url}"
+  # sanity: the distro artifact is a (possibly compressed) tar; refuse an HTML
+  # error page slipping through as a "valid" pin.
+  head -c 512 "${art}" | grep -qiE '<html|<!doctype' \
+    && fail "discord: ${url} returned HTML, not the distro artifact (version not published?)"
+  printf 'sha256-%s' "$(openssl dgst -sha256 -binary "${art}" | openssl base64 -A)"
+}
+
 # ── per-app update ──────────────────────────────────────────────────────────
 update_app() {
   app="$1"
@@ -167,6 +196,21 @@ update_app() {
       fi
       log "${app}: ${cur} -> ${latest}"
       sri="$(chrome_pin_hash "${latest}")"
+      tmp="$(mktemp)"
+      jq --arg v "${latest}" --arg h "${sri}" --arg d "${STAMP}" \
+         '.version=$v | .hashes."x86_64-linux"=$h | .updated=$d' "${pin}" > "${tmp}"
+      mv "${tmp}" "${pin}"
+      log "${app}: pinned ${latest} (${sri})"
+      CHANGED+=("${app}:${cur}:${latest}")
+      ;;
+    discord-distro)
+      latest="$(discover_discord_distro)"
+      [[ -n "${latest}" ]] || fail "${app}: version discovery returned nothing"
+      if [[ "${latest}" == "${cur}" ]]; then
+        log "${app}: up to date (${cur})"; return 0
+      fi
+      log "${app}: ${cur} -> ${latest}"
+      sri="$(discord_pin_hash "${latest}")"
       tmp="$(mktemp)"
       jq --arg v "${latest}" --arg h "${sri}" --arg d "${STAMP}" \
          '.version=$v | .hashes."x86_64-linux"=$h | .updated=$d' "${pin}" > "${tmp}"

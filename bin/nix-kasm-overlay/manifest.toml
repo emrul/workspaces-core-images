@@ -19,6 +19,15 @@ discover  = "chrome-version-api"
 cadence   = "twice-daily"
 platforms = ["amd64"]
 
+# Discord hard-expires old clients (forced in-app update that can't write the
+# read-only store); nixpkgs-unstable lags upstream by a few releases. Track
+# Discord's stable distro directly, twice-daily, same override model as chrome.
+[apps.discord]
+kind      = "override"
+discover  = "discord-distro"
+cadence   = "twice-daily"
+platforms = ["amd64"]
+
 # KasmVNC is a Kasm SERVICE (not an app-catalog entry): a from-scratch Nix build
 # of the KasmVNC server so the runtime base is distro-independent (no per-distro
 # .deb). Bumped by hand when tracking the KasmVNC fork (pin.json rev/version).

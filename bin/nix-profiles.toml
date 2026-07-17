@@ -254,11 +254,13 @@ kasm_name = "tor-browser"
 pkgs = ["nixpkgs#slack"]
 
 [profiles.discord]
-# Track unstable: Discord refuses to run when the client falls behind the
-# server's minimum version (it launches its updater — which cannot work
-# against the read-only store; nix-launch seeds SKIP_HOST_UPDATE). Unstable
-# + the twice-daily refresh keeps the pinned client current.
-pkgs = ["nixpkgs#discord"]
+# Overlay build (chrome treatment): Discord refuses to run when the client
+# falls behind the server's minimum version (forced in-app updater, which can't
+# write the read-only store — nix-launch seeds SKIP_HOST_UPDATE too). nixpkgs
+# lags upstream by a few releases, so track Discord's stable distro directly via
+# the overlay, refreshed twice-daily by nix-kasm-update. ref pins the rev the
+# override builds its deps against (deduped with peers). See package.nix.
+pkgs = ["path:/config/kasm-overlay#discord"]
 ref  = "github:NixOS/nixpkgs/nixos-unstable"
 
 [profiles.signal]
@@ -387,5 +389,12 @@ pkgs = ["nixpkgs#superTuxKart", "nixpkgs#sdl3^lib"]
 # bootstrap; vglrun is required.) Mounted at /config/steam-overlay by
 # bin/build-nix-store-volume; pinned to the same nixpkgs rev as [nixpkgs].ref so
 # the faker's glibc matches the FHS. See [[nix-app-gpu-and-launch]].
+#
+# NB: no chrome-style fast-update overlay for steam (deliberate). Unlike Discord,
+# steam's client SELF-UPDATES its bootstrap at runtime (~/.local/share/Steam),
+# so the pinned nixpkgs version is only the first-run installer — it never goes
+# "stale" in a breaking way. Tracking [nixpkgs].ref (the build's floating rev) is
+# the right regime; a dedicated version-pin overlay would add maintenance for no
+# functional gain.
 pkgs      = ["path:/config/steam-overlay#steam-vgl"]
 platforms = ["amd64"]
