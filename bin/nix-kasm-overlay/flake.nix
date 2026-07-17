@@ -30,7 +30,6 @@
           };
         in {
           chrome       = pkgs.chrome;
-          discord      = pkgs.discord;
           vivaldi      = pkgs.vivaldi;
           kasmvnc      = pkgs.kasmvnc;
           profile_sync = pkgs.profile_sync;

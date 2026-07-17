@@ -254,13 +254,14 @@ kasm_name = "tor-browser"
 pkgs = ["nixpkgs#slack"]
 
 [profiles.discord]
-# Overlay build (chrome treatment): Discord refuses to run when the client
-# falls behind the server's minimum version (forced in-app updater, which can't
-# write the read-only store — nix-launch seeds SKIP_HOST_UPDATE too). nixpkgs
-# lags upstream by a few releases, so track Discord's stable distro directly via
-# the overlay, refreshed twice-daily by nix-kasm-update. ref pins the rev the
-# override builds its deps against (deduped with peers). See package.nix.
-pkgs = ["path:/config/kasm-overlay#discord"]
+# Track unstable: Discord force-updates when the client falls behind the
+# server minimum (its updater can't write the read-only store — nix-launch
+# seeds SKIP_HOST_UPDATE). A version-override overlay (chrome-style) does NOT
+# work for Discord: overriding src to a newer full.distro breaks nixpkgs'
+# per-version module wiring ("Cannot find module discord_desktop_core",
+# testbench 2026-07-17). nixpkgs#discord bundles the module correctly, so track
+# unstable + the twice-daily nixos-unstable advance. See design/known_issues.md.
+pkgs = ["nixpkgs#discord"]
 ref  = "github:NixOS/nixpkgs/nixos-unstable"
 
 [profiles.signal]
