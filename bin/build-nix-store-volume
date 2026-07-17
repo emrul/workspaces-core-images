@@ -1174,6 +1174,12 @@ inner_run_args=(
     -e "APP_TAG=${APP_TAG}"
     -e "APP_BASE_REF=${APP_BASE_IMAGE}"
     -e "NIX_EVAL_GATE=${NIX_EVAL_GATE:-0}"
+    # When the base layer changed, eval-gated (warm, store-unchanged) apps must
+    # still be RE-ASSEMBLED onto the new base — the inner build reads this to add
+    # them to changed.txt. Without it the inner container always saw 0 and warm
+    # apps kept the old base layer, so base/wiring fixes (nix-launch, the panel
+    # drop, nix-gpu-app-launch) built into the base never reached per-app images.
+    -e "NIX_BASE_AFFECTED=${NIX_BASE_AFFECTED:-0}"
 )
 # Mount the GPU overlay flake (trimmed VirtualGL) so a [gpu] profile entry can
 # reference it as `path:/config/gpu-overlay#…`. Pinned to the same nixpkgs rev as
