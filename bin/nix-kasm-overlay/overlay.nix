@@ -48,6 +48,13 @@ in
     pin = loadPin "chrome" ./pkgs/chrome;
   };
 
+  # Kind A (override): Vivaldi with proprietary media codecs. Plain
+  # nixpkgs#vivaldi ships without libffmpeg.so; the browser crash-loops at
+  # startup trying to self-install it into the read-only store (testbench
+  # catch 2026-07-17). The override symlinks vivaldi-ffmpeg-codecs'
+  # libffmpeg.so into opt/vivaldi/lib — verified live on .140.
+  vivaldi = prev.vivaldi.override { proprietaryCodecs = true; };
+
   # Kind B (from scratch): KasmVNC server built under Nix (fork of TigerVNC), so
   # the runtime base no longer needs a per-distro .deb/.rpm/.apk — unblocks new
   # distros (Resolute) and thins the base. SPIKE: iterate the build on the .140

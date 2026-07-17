@@ -54,8 +54,30 @@ fi
 unset LD_LIBRARY_PATH
 
 prog="${1:-}"
+
+# ── per-app pre-launch config ─────────────────────────────────────────────────
+# Discord must not self-update at launch: images publish on a regular cadence
+# and the Nix store is read-only, so the updater can only fail (or loop) and
+# it blocks startup behind a "Discord Updater" window. Seeded here (not in
+# the single-app custom_startup) so select-apps desktops get it too.
 case "$(basename "${prog}" 2>/dev/null)" in
-  *chrome*|*chromium*|*brave*|electron|electron[0-9]*|code) is_chromium=1 ;;
+  discord|Discord)
+    _dcfg="${HOME}/.config/discord/settings.json"
+    mkdir -p "${_dcfg%/*}" 2>/dev/null || true
+    if [ -s "${_dcfg}" ] && command -v jq >/dev/null 2>&1; then
+        jq '.SKIP_HOST_UPDATE = true' "${_dcfg}" > "${_dcfg}.tmp" 2>/dev/null \
+            && mv "${_dcfg}.tmp" "${_dcfg}" || true
+    elif [ ! -s "${_dcfg}" ]; then
+        printf '{\n  "SKIP_HOST_UPDATE": true\n}\n' > "${_dcfg}" 2>/dev/null || true
+    fi
+    ;;
+esac
+
+case "$(basename "${prog}" 2>/dev/null)" in
+  # keep in sync with the catalog: microsoft-edge and vivaldi are chromium
+  # too — missing them costs --password-store=basic (gnome-keyring prompt
+  # blocks the app; testbench catches it as a first-run-prompt finding)
+  *chrome*|*chromium*|*brave*|*vivaldi*|*msedge*|microsoft-edge*|electron|electron[0-9]*|code) is_chromium=1 ;;
   *) is_chromium=0 ;;
 esac
 

@@ -30,6 +30,7 @@
           };
         in {
           chrome       = pkgs.chrome;
+          vivaldi      = pkgs.vivaldi;
           kasmvnc      = pkgs.kasmvnc;
           profile_sync = pkgs.profile_sync;
           audio_input  = pkgs.audio_input;

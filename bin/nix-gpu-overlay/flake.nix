@@ -1,11 +1,12 @@
 {
   description = "Trimmed VirtualGL: drop FLTK vglconfig GUI so gcc/binutils/python3 leave the closure";
 
-  # Pinned to the current HEAD of nixos-25.05 — which is what bin/nix-profiles.toml
-  # [nixpkgs].ref (the floating branch) resolves to today. The trimmed VirtualGL's
-  # deps (glibc, libjpeg-turbo, libglvnd, …) must match the rest of the build or it
-  # ships a second glibc, so when the branch advances, re-pin this to the new HEAD
-  # (nix flake update) in the same change. See design/nix-dedup-gap.md.
+  # Default pin only — the BUILD ALWAYS overrides this input to its pinned base
+  # rev (build-nix-store-volume _gpu section, --override-input nixpkgs), so
+  # vglrun/faker are glibc-matched to the apps they LD_PRELOAD into. The old
+  # manual re-pin scheme drifted to an unstable rev and shipped a glibc-2.42
+  # faker next to 2.40 apps — every GPU launch crashed with
+  # "GLIBC_ABI_DT_X86_64_PLT not found" (testbench/blender 2026-07-17).
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/d407951447dcd00442e97087bf374aad70c04cea";
 
   outputs = { self, nixpkgs }:
@@ -54,13 +55,21 @@
           });
 
           # Re-wrap with the trimmed lib. On x86_64 the stock virtualgl pulls in
-          # pkgsi686Linux.virtualglLib (usei686VirtualglLib defaults true) — a full
-          # i686 gcc/FLTK closure just for 32-bit .vglrun.vars32 support. We only run
-          # 64-bit EGL apps, so disable it.
-          virtualglMin = pkgs.virtualgl.override {
+          # pkgsi686Linux.virtualglLib — a full i686 gcc/FLTK closure just for
+          # 32-bit .vglrun.vars32 support. We only run 64-bit EGL apps, so
+          # disable it. The knob is `usei686VirtualglLib` on unstable and
+          # `virtualglLib32` on nixos-25.05 — pick whichever this nixpkgs has
+          # (the build --override-input's nixpkgs to its pinned base rev so
+          # vglrun is glibc-matched to the apps it LD_PRELOADs into; a NEWER
+          # faker in an OLDER process dies with GLIBC_ABI_DT_X86_64_PLT).
+          overrideArgs = pkgs.virtualgl.override.__functionArgs or {};
+          no32 =
+            if overrideArgs ? usei686VirtualglLib then { usei686VirtualglLib = false; }
+            else if overrideArgs ? virtualglLib32 then { virtualglLib32 = null; }
+            else {};
+          virtualglMin = pkgs.virtualgl.override ({
             virtualglLib = virtualglLibMin;
-            usei686VirtualglLib = false;
-          };
+          } // no32);
         in {
           virtualgl-min = virtualglMin;
           default = virtualglMin;

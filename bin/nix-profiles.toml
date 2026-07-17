@@ -58,8 +58,11 @@ pkgs = [
 # inner build at /config/gpu-overlay) that drops the FLTK-based `vglconfig` GUI
 # and the 32-bit variant. Stock virtualgl drags the FULL gcc ×2 + binutils +
 # python3 (~1GB) into the base via fltk-config; we only ever run `vglrun -d egl`.
-# The overlay is pinned to the same nixpkgs rev as [nixpkgs].ref above so its
-# deps dedup with the rest of the build. See design/nix-dedup-gap.md.
+# The build --override-input's the overlay's nixpkgs to the run's pinned base
+# rev (same as kasm-overlay), so virtualgl-min is always glibc-matched to the
+# apps it wraps AND dedups with the build. (The old manual-flake.lock scheme
+# drifted to an unstable rev: 2.42-glibc vglrun × 2.40 apps broke every GPU
+# launch — testbench/blender 2026-07-17.) See design/nix-dedup-gap.md.
 pkgs = [
     "path:/config/gpu-overlay#virtualgl-min",
     "nixpkgs#vulkan-loader",
@@ -233,7 +236,9 @@ pkgs = ["nixpkgs#brave"]
 ref  = "github:NixOS/nixpkgs/nixos-unstable"
 
 [profiles.vivaldi]
-pkgs = ["nixpkgs#vivaldi"]
+# Overlay build: proprietaryCodecs = true (libffmpeg.so). Plain
+# nixpkgs#vivaldi crash-loops at startup on the missing codec lib.
+pkgs = ["path:/config/kasm-overlay#vivaldi"]
 ref  = "github:NixOS/nixpkgs/nixos-unstable"
 
 [profiles.edge]
@@ -249,10 +254,20 @@ kasm_name = "tor-browser"
 pkgs = ["nixpkgs#slack"]
 
 [profiles.discord]
+# Track unstable: Discord refuses to run when the client falls behind the
+# server's minimum version (it launches its updater — which cannot work
+# against the read-only store; nix-launch seeds SKIP_HOST_UPDATE). Unstable
+# + the twice-daily refresh keeps the pinned client current.
 pkgs = ["nixpkgs#discord"]
+ref  = "github:NixOS/nixpkgs/nixos-unstable"
 
 [profiles.signal]
+# Track unstable: signal-desktop builds HARD-EXPIRE ~90 days after release
+# ("build expired, not connecting provisioning socket") — the 25.05 pin aged
+# out and the app refused all connections (testbench catch 2026-07-17). The
+# twice-daily refresh keeps the unstable pin inside its validity window.
 pkgs = ["nixpkgs#signal-desktop"]
+ref  = "github:NixOS/nixpkgs/nixos-unstable"
 
 [profiles.telegram]
 pkgs = ["nixpkgs#telegram-desktop"]

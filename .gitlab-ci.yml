@@ -353,6 +353,9 @@ publish:
 testbench:
   stage: test
   needs: [publish]
+  # a bridge that cannot even CREATE the downstream (e.g. its rules yield no
+  # jobs) must not redden this pipeline — the testbench is report-only
+  allow_failure: true
   rules:
     - if: '$NIX_GC == "1"'
       when: never

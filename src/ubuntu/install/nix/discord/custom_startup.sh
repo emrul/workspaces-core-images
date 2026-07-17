@@ -7,6 +7,8 @@ export MAXIMIZE_NAME="Discord"
 MAXIMIZE_SCRIPT=$STARTUPDIR/maximize_window.sh
 DEFAULT_ARGS="--no-sandbox"
 ARGS=${APP_ARGS:-$DEFAULT_ARGS}
+# (SKIP_HOST_UPDATE seeding lives in nix-launch so the select-apps
+# desktops get it too — this script only runs in the single-app image.)
 
 options=$(getopt -o gau: -l go,assign,url: -n "$0" -- "$@") || exit
 eval set -- "$options"

@@ -481,7 +481,20 @@ if jq -e '.gpu.pkgs | length > 0' "${STAGE_IN}/profiles.json" >/dev/null 2>&1; t
   # with "existing package already provides …". The profile is a cheap symlink
   # tree over the persistent store, so rebuild it fresh.
   reset_profile _gpu
-  collect_attrs '.gpu.pkgs[]' "${DEFAULT_REF}" \
+  # Overlay-path packages (path:/config/gpu-overlay#…) get --override-input to
+  # the build's pinned rev — the same treatment kasm-overlay gets in the app
+  # loop — so virtualgl-min is ALWAYS glibc-matched to the apps it wraps. The
+  # previous manual-flake.lock scheme drifted to an unstable rev and shipped a
+  # glibc-2.42 vglrun next to 2.40 apps: every GPU launch died with
+  # "GLIBC_ABI_DT_X86_64_PLT not found" (testbench catch, blender 2026-07-17).
+  _gpu_all="$(collect_attrs '.gpu.pkgs[]' "${DEFAULT_REF}")"
+  _gpu_overlay="$(printf '%s\n' "${_gpu_all}" | grep '^path:' || true)"
+  _gpu_plain="$(printf '%s\n' "${_gpu_all}" | grep -v '^path:' || true)"
+  [ -n "${_gpu_overlay}" ] && printf '%s\n' "${_gpu_overlay}" \
+    | xargs nix --extra-experimental-features 'nix-command flakes' \
+        profile install --impure --override-input nixpkgs "${DEFAULT_REF}" \
+        --profile "${KASM_PROFILE_DIR}/_gpu"
+  [ -n "${_gpu_plain}" ] && printf '%s\n' "${_gpu_plain}" \
     | xargs nix --extra-experimental-features 'nix-command flakes' \
         profile install --impure --profile "${KASM_PROFILE_DIR}/_gpu"
   ln -sfn "${KASM_PROFILE_DIR}/_gpu" "${KASM_GCROOT_DIR}/_gpu"
