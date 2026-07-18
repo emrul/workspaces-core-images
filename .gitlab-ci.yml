@@ -63,6 +63,12 @@ default:
     # after_script runs on cancel/timeout/failure and force-removes the named
     # container so it can't keep building and holding the podman store lock.
     - sudo nerdctl rm -f "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" >/dev/null 2>&1 || true
+    # Root-owned-artifact guard: a cancelled scan/publish job skips its
+    # in-container chown-back, leaving root-owned files (sboms/, grype/, …)
+    # that fail the NEXT job's `git clean` at checkout (seen: pipeline
+    # 2687485367 prepare). Runner sudo is nerdctl-scoped, so un-root the
+    # workdir via a container. Idempotent, best-effort.
+    - sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w" quay.io/podman/stable chown -R "$(id -u):$(id -g)" /w >/dev/null 2>&1 || true
 
 stages:
   - prepare
