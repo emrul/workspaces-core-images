@@ -92,15 +92,16 @@ mapfile -t all_apps < <("${DOCKER}" images --format '{{.Repository}}:{{.Tag}}' \
   | sed -E "s|^${NIX_APP_REPO}-||; s|:dev\$||" | sort)
 apps=(); missing_requested=()
 for a in "${all_apps[@]}"; do in_filter "${a}" && apps+=("${a}"); done
-# Per-app :dev images only reliably exist right after the build job (prune/GC
-# removes them between pipelines). An EXPLICITLY requested profile with no
-# image is therefore an error — the build was supposed to have produced it —
-# not a silent skip (same fail-open fix as nix-scan-base.sh).
+# Per-app :dev images are BUILD PRODUCTS — the eval-gate skips reassembling
+# unchanged apps, so a requested profile with no image usually means "unchanged
+# this run" (nix-publish.sh treats it the same way). Record it in the report
+# (no silent skip) but do NOT fail: the fat store + the scheduled SBOM re-scan
+# cover unchanged apps' store paths.
 if [ -n "${FILTER}" ]; then
   for want in ${FILTER}; do
     found=0; for a in "${apps[@]}"; do [ "${a}" = "${want}" ] && found=1 && break; done
     if [ "${found}" = 0 ]; then
-      log "ERROR requested profile '${want}' has no ${NIX_APP_REPO}-${want}:dev image"
+      log "WARN requested profile '${want}' has no ${NIX_APP_REPO}-${want}:dev image — not built this run (unchanged?)"
       missing_requested+=("${want}")
     fi
   done
@@ -157,7 +158,7 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
 }
 
 # ── bounded-parallel app scans ────────────────────────────────────────────────
-failed=("${missing_requested[@]}")
+failed=()
 for a in "${apps[@]}"; do
   while [ "$(jobs -rp | wc -l)" -ge "${PARALLEL}" ]; do
     if ! wait -n; then :; fi     # collect one; failure detected via rows below
@@ -228,8 +229,9 @@ fi
 jq -s --arg syft "${SYFT_VERSION}" --arg grype "${GRYPE_VERSION}" \
       --arg db_built "${DB_BUILT}" --arg sha "${CI_COMMIT_SHA:-}" \
       --argjson failed "$(printf '%s\n' "${failed[@]:-}" | jq -R . | jq -s 'map(select(length>0))')" \
+      --argjson not_built "$(printf '%s\n' "${missing_requested[@]:-}" | jq -R . | jq -s 'map(select(length>0))')" \
       '{scanners:{syft:$syft,grype:$grype,grype_db_built:$db_built},
-        commit:$sha, failed:$failed, images:.}' \
+        commit:$sha, failed:$failed, not_built:$not_built, images:.}' \
       "${WORK}/rows/"*.json > "${OUT_DIR}/nix-scan-report.json" 2>/dev/null \
   || echo '{"images":[],"failed":["<no rows produced>"]}' > "${OUT_DIR}/nix-scan-report.json"
 {
@@ -241,6 +243,7 @@ jq -s --arg syft "${SYFT_VERSION}" --arg grype "${GRYPE_VERSION}" \
   echo "|---|---|---|---|---|"
   jq -r '.images[] | "| \(.name) | \(.packages.total) (\(.packages.nix)) | \(.cves.unique) | \(.cves.critical) | \(.cves.fixed_critical) |"' \
     "${OUT_DIR}/nix-scan-report.json"
+  if [ "${#missing_requested[@]}" -gt 0 ]; then echo; echo "**Not built this run (unchanged):** ${missing_requested[*]}"; fi
   if [ "${#failed[@]}" -gt 0 ]; then echo; echo "**FAILED scans:** ${failed[*]}"; fi
 } > "${OUT_DIR}/nix-scan-report.md"
 
