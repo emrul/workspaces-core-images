@@ -6,13 +6,15 @@ download_dir=$( mktemp -td )
 curl -fsSLO --output-dir "$download_dir" "https://${S3_BUCKET}.s3.amazonaws.com/trivy/trivy-${arch}.tar.gz"
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-trivy_dir="${SCRIPT_DIR}/trivy"
+# TRIVY_HOME lets callers put the binary in a writable dir when SCRIPT_DIR is on
+# a read-only mount (e.g. the nix pipeline's /work:ro) — see nix-scan-base.sh.
+trivy_dir="${TRIVY_HOME:-${SCRIPT_DIR}/trivy}"
 rm -rf $trivy_dir
-mkdir $trivy_dir
+mkdir -p $trivy_dir
 cd $trivy_dir
 tar -zxvf "${download_dir}/trivy-${arch}.tar.gz"
 echo "Using trivy $( ./trivy --version )"
 
 if [[ -e "${SCRIPT_DIR}/junit.tpl" ]]; then
-    cp -v "${SCRIPT_DIR}/junit.tpl" "${SCRIPT_DIR}/trivy/contrib/"
+    cp -v "${SCRIPT_DIR}/junit.tpl" "${trivy_dir}/contrib/"
 fi

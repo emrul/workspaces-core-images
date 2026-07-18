@@ -69,6 +69,7 @@ stages:
   - base
   - build
   - publish
+  - scan
   - test
   - maintenance
 
@@ -354,6 +355,91 @@ publish:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+# ── scan: Trivy CVE scan of the rebuilt Nix base/core images ────────────────
+# Covers L1 (distro base) + L2 (KasmVNC / upload / squid / … Kasm core
+# additions); /nix/store (L3) is NOT covered — Trivy has no nix analyzer, that
+# needs Syft/vulnix (see design/cve-scanning.md). Report-only: JUnit → the
+# pipeline Tests tab, plus a CVE table in the job log; findings never fail the
+# job. Scoped to the bases that actually rebuilt this run (same NIX_BASES_REBUILD
+# map as publish-base); scans nothing when no base changed. To baseline-scan all
+# current bases without a rebuild, run a web pipeline with NIX_BASES set (the
+# podman store is persistent, so the local :dev base images are already present).
+scan-base:
+  stage: scan
+  needs: [base-check, base]
+  rules:
+    - if: '$NIX_GC == "1"'
+      when: never
+    - if: '$FORCE_PUBLISH == "1"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - |
+      set -euo pipefail
+      reb="${BASE_DISTROS:-${NIX_BASES_REBUILD:-}}"
+      # Map rebuilt distro names → published base repo names, unless NIX_BASES was
+      # set explicitly (manual override). Mirrors publish-base's mapping.
+      if [ -z "${NIX_BASES:-}" ]; then
+        filt=""
+        for d in ${reb}; do case "$d" in
+          ubuntu)   filt="${filt} kasm-core-ubuntu kasm-core-ubuntu-minimal" ;;
+          fedora)   filt="${filt} kasm-core-fedora" ;;
+          alpine)   filt="${filt} kasm-core-alpine" ;;
+          resolute) filt="${filt} kasm-core-ubuntu-resolute" ;;
+        esac; done
+        NIX_BASES="$(printf '%s' "${filt}" | sed 's/^ *//;s/ *$//')"
+      fi
+      if [ -z "$(printf '%s' "${NIX_BASES}" | tr -d '[:space:]')" ]; then
+        echo "no base rebuilt this run — nothing to scan"; exit 0
+      fi
+      echo "scanning rebuilt bases: ${NIX_BASES}"
+      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+        -v "$DIND_ROOT/containers:/var/lib/containers" \
+        -v "$CI_PROJECT_DIR:/work:ro" \
+        -v "$CI_PROJECT_DIR:/artifacts" \
+        -e NIX_BASES="$NIX_BASES" -e S3_BUCKET="$S3_BUCKET" \
+        -e OUT_DIR=/artifacts -e DOCKER=podman \
+        -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+        "$DIND_IMG" bash /work/ci-scripts/nix-scan-base.sh
+  artifacts:
+    when: always
+    expire_in: 30 days
+    reports:
+      junit:
+        - trivy-report-*.xml
+    paths:
+      - trivy-report-*.xml
+
+# ── sbom-attach-test: THROWAWAY registry capability test ────────────────────
+# design/cve-scanning.md § 7 step 2 item 4 — exercises cosign attach/discover/
+# download/sign/verify with the job token against a scratch repo (sbom-spike)
+# in this project's registry; no app repos touched, contents synthetic.
+# Trigger: web pipeline with SBOM_ATTACH_TEST=1. Remove once the real SBOM
+# pipeline lands.
+sbom-attach-test:
+  stage: scan
+  needs: []
+  rules:
+    - if: '$NIX_GC == "1"'
+      when: never
+    - if: '$SBOM_ATTACH_TEST == "1"'
+  script:
+    - |
+      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+        -v "$CI_PROJECT_DIR:/work:ro" \
+        -v "$CI_PROJECT_DIR:/artifacts" \
+        -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
+        -e REGISTRY_NS="$REGISTRY_NS" -e OUT_DIR=/artifacts \
+        -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+        "$DIND_IMG" bash /work/ci-scripts/sbom-attach-test.sh
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - sbom-attach-test.md
 
 # ── testbench: post-publish app assurance (downstream pipeline) ──────────────
 # Fire-and-forget trigger of kasm-nix-testbench: it fetches this pipeline's
