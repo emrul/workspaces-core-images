@@ -445,6 +445,7 @@ scan-nix:
         -v "$CI_PROJECT_DIR:/artifacts" \
         -e NIX_PROFILES="$NIX_PROFILES" -e OUT_DIR=/artifacts -e DOCKER=podman \
         -e SCAN_MAX_APPS="${SCAN_MAX_APPS:-0}" -e SKIP_VULNIX="${SKIP_VULNIX:-0}" \
+        -e SCAN_ALL="${SCAN_ALL:-0}" \
         -e CI_COMMIT_SHA="$CI_COMMIT_SHA" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         "$DIND_IMG" bash /work/ci-scripts/nix-scan-l3.sh
