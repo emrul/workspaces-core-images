@@ -336,6 +336,13 @@ jq -s --arg syft "${SYFT_VERSION}" --arg grype "${GRYPE_VERSION}" \
   echo "|---|---|---|---|---|"
   jq -r '.images[] | "| \(.name) | \(.packages.total) (\(.packages.nix)) | \(.cves.unique) | \(.cves.critical) | \(.cves.fixed_critical) |"' \
     "${OUT_DIR}/nix-scan-report.json"
+  echo
+  echo "Key: **pkgs (nix)** = catalogued packages (nix-store subset) · **CVEs** ="
+  echo "unique CVE ids matched, all severities · **crit** = unique Critical-severity"
+  echo "CVEs, fixable or not · **fixed-crit** = the subset of crit where the vuln DB"
+  echo "records an upstream fixed version (Grype fix.state=fixed) — the actionable"
+  echo "set a pin bump can remove, and the metric the future publication gate keys on."
+  echo "All counts are raw scanner output before false-positive/VEX triage."
   if [ "${#missing_requested[@]}" -gt 0 ]; then echo; echo "**Not built this run (unchanged):** ${missing_requested[*]}"; fi
   if [ "${#failed[@]}" -gt 0 ]; then echo; echo "**FAILED scans:** ${failed[*]}"; fi
 } > "${OUT_DIR}/nix-scan-report.md"
