@@ -471,6 +471,12 @@ scan-nix:
 #   cosign verify --key security/cosign.pub --insecure-ignore-tlog=true <ref>
 # Consumes nix-build-report.json (publish) + sboms/ (scan-nix) artifacts.
 # Signing key: COSIGN_PRIVATE_KEY / COSIGN_PASSWORD project CI variables.
+# BACKFILL (initial rollout / key rotation): trigger a pipeline with
+#   SBOM_BACKFILL=1 SCAN_ALL=1 NIX_EVAL_GATE=""
+# The NIX_EVAL_GATE="" matters: dind-build prunes all localhost/nix-<app>:dev
+# at build start, and a warm no-change build reassembles nothing — publish
+# then reports only the fat store, so there is nothing to attach to
+# (pipeline 2687556526). Gate off = every app reassembles = full coverage.
 sbom-publish:
   stage: scan
   needs: [publish, scan-nix]
