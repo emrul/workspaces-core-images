@@ -321,12 +321,17 @@ publish:
       # the (root) container can drop the report there and chown it to the runner
       # UID — GitLab then captures it and the next checkout can still clean it.
       # (Runner sudo is scoped to nerdctl, so the copy MUST happen in-container.)
+      # NIX_PROFILES="" (not $NIX_PROFILES): builds are FULL-selection now, so
+      # publish must consider every assembled image — the content compare
+      # skips unchanged ones; a gated filter here would strand images that
+      # rebuilt beyond the git-gated set (pin drift) and break fat↔app layer
+      # dedup on the registry. The __none__ early-exit above still applies.
       bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/root/.cache/nix-build-output" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -v "$CI_PROJECT_DIR:/artifacts" \
-        -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" -e NIX_PROFILES="$NIX_PROFILES" \
+        -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" -e NIX_PROFILES="" \
         -e NIX_BASE_AFFECTED="$NIX_BASE_AFFECTED" -e CI_COMMIT_SHA="$CI_COMMIT_SHA" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \

@@ -35,6 +35,7 @@
 #   OUT_DIR        artifact dir (default /artifacts)
 #   DOCKER         container CLI (default podman)
 #   PARALLEL       concurrent app scans (default 2)
+#   SCAN_ALL       1 = scan every built app image (ignore assembled.txt/filter)
 #   SKIP_VULNIX    1 = skip the advisory vulnix pass
 #   SKIP_FAT       1 = allow a missing fat store (otherwise absence = failure)
 #   SYFT_VERSION / GRYPE_VERSION  pinned scanner releases
@@ -105,12 +106,33 @@ mapfile -t all_apps < <("${DOCKER}" images --format '{{.Repository}}:{{.Tag}}' \
   | grep -E "^${NIX_APP_REPO}-[a-z0-9][a-z0-9-]*:dev$" \
   | grep -vE "^${NIX_APP_REPO}-(ubuntu|store|fedora|alpine)" \
   | sed -E "s|^${NIX_APP_REPO}-||; s|:dev\$||" | sort)
-apps=(); missing_requested=()
-for a in "${all_apps[@]}"; do in_filter "${a}" && apps+=("${a}"); done
+# Scan scope, in priority order:
+#   1. SCAN_ALL=1            → every built app image (manual baselines)
+#   2. assembled.txt sidecar → exactly what THIS build reassembled (includes
+#                              wiring/pin movers beyond the git-gated set;
+#                              written by nix-crane-assemble)
+#   3. NIX_PROFILES filter   → manual runs without the sidecar
+#   4. everything present    → last resort
+apps=(); missing_requested=(); scan_scope="all-images"
+if [ "${SCAN_ALL:-0}" = "1" ]; then
+  apps=("${all_apps[@]}"); scan_scope="SCAN_ALL"
+elif [ -f "${BUILD_OUTPUT}/assembled.txt" ]; then
+  scan_scope="assembled.txt"
+  while IFS= read -r a; do
+    [ -n "${a}" ] || continue
+    for b in "${all_apps[@]}"; do [ "${b}" = "${a}" ] && { apps+=("${a}"); break; }; done
+  done < "${BUILD_OUTPUT}/assembled.txt"
+elif [ -n "${FILTER}" ]; then
+  scan_scope="NIX_PROFILES"
+  for a in "${all_apps[@]}"; do in_filter "${a}" && apps+=("${a}"); done
+else
+  apps=("${all_apps[@]}")
+fi
+log "scan scope: ${scan_scope} (${#apps[@]} apps)"
 # Per-app :dev images are BUILD PRODUCTS — the eval-gate skips reassembling
-# unchanged apps, so a requested profile with no image can mean "unchanged
-# this run" (normal; nix-publish treats zero images the same way) OR "its
-# build failed" (an error). Disambiguate via the build sidecar
+# unchanged apps, so a requested profile that is not in scope can mean
+# "unchanged this run" (normal; nix-publish treats zero images the same way)
+# OR "its build failed" (an error). Disambiguate via the build sidecar
 # closure-diffs.json (status: new|changed|unchanged): unchanged → recorded
 # as not_built; anything else (or absent from the sidecar) → the image
 # should exist → counted as a failure. Sidecar unavailable → not_built with
@@ -136,7 +158,8 @@ if [ -n "${FILTER}" ]; then
     esac
   done
 fi
-if [ -z "${FILTER}" ] && [ "${SCAN_MAX_APPS}" -gt 0 ] && [ "${#apps[@]}" -gt "${SCAN_MAX_APPS}" ]; then
+if { [ "${scan_scope}" = "SCAN_ALL" ] || [ "${scan_scope}" = "all-images" ]; } \
+   && [ "${SCAN_MAX_APPS}" -gt 0 ] && [ "${#apps[@]}" -gt "${SCAN_MAX_APPS}" ]; then
   log "CAP: ${#apps[@]} app images present, scanning first ${SCAN_MAX_APPS} per-app;"
   log "CAP: dropped: ${apps[*]:${SCAN_MAX_APPS}}"
   log "CAP: (fat store still covers the union at store-path level, but dropped apps get NO per-image SBOM)"

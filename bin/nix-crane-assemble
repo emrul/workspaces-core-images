@@ -155,6 +155,38 @@ if [[ "${CHANGED_ONLY:-0}" == "1" && -f "${STAGING}/changed.txt" ]]; then
   mapfile -t apps < <(grep -v '^$' "${STAGING}/changed.txt" 2>/dev/null || true)
   log "CHANGED_ONLY: ${#apps[@]} changed app(s) to assemble (unchanged apps keep their published image)"
 fi
+# Wiring-digest supplement (full-selection builds, 2026-07-18): changed.txt only
+# reflects STORE-input changes (the eval-gate's inputKey) — an app whose
+# src/ubuntu/install/nix/<app>/ wiring alone changed would never re-assemble and
+# the fix would never ship. Wiring tars are deterministic (sort/mtime@0), so:
+# stage every app's wiring tar (KBs), compare sha256 against the previous run's
+# record (WIRING_STATE_DIR/wiring-digests.json), and pull any mover into the
+# assembly set. The record is rewritten only after the assembly loop, so a
+# failed run re-detects the same movers next time. No record yet → fail-safe:
+# assemble everything once to seed it.
+declare -A wiring_dig
+if [[ "${CHANGED_ONLY:-0}" == "1" && -n "${WIRING_STATE_DIR:-}" ]]; then
+  mapfile -t _all_apps < <(grep -v '^$' "${STAGING}/apps.txt" 2>/dev/null || true)
+  for p in "${_all_apps[@]}"; do
+    [[ -f "${NIXSRC}/${p}/custom_startup.sh" ]] || continue  # fat-store-only extra
+    stage_wiring_tar "${p}" || { log "WARN wiring tar failed for ${p} (digest skipped)"; continue; }
+    wiring_dig["${p}"]="$(sha256sum "${BLOBS}/wiring-${p}.tar" | awk '{print $1}')"
+  done
+  if [[ -f "${WIRING_STATE_DIR}/wiring-digests.tsv" ]]; then
+    wiring_extra=()
+    for p in "${_all_apps[@]}"; do
+      [[ -n "${wiring_dig[$p]:-}" ]] || continue
+      prev="$(awk -F'\t' -v p="${p}" '$1==p{print $2}' "${WIRING_STATE_DIR}/wiring-digests.tsv" 2>/dev/null || true)"
+      if [[ "${prev}" != "${wiring_dig[$p]}" ]]; then
+        case " ${apps[*]:-} " in *" $p "*) ;; *) wiring_extra+=("$p"); apps+=("$p") ;; esac
+      fi
+    done
+    [[ "${#wiring_extra[@]}" -gt 0 ]] && log "wiring changed → also assembling: ${wiring_extra[*]}"
+  else
+    log "no wiring-digest record — assembling ALL apps once to seed it"
+    apps=( "${_all_apps[@]}" )
+  fi
+fi
 [[ -n "${ONLY_APPS:-}" ]] && apps=( ${ONLY_APPS} )
 RESULTS="${STAGING}/.crane-results"; rm -rf "${RESULTS}"; mkdir -p "${RESULTS}"
 
@@ -230,6 +262,21 @@ if [[ "${#apps[@]}" -gt 0 ]]; then
   done
   log "per-app: ok=${ok} skipped=${#skipped[@]} failed=${#failed[@]} ${failed[*]:-}"
   [[ "${#skipped[@]}" -gt 0 ]] && log "per-app skipped (fat-store-only, no custom_startup.sh): ${skipped[*]}"
+fi
+
+# Persist the wiring-digest record + the assembled-app list (scan/publish scope)
+# AFTER the assembly loop, so an interrupted run re-detects the same wiring
+# movers on the next attempt. assembled.txt is written whenever a state dir is
+# available — downstream (nix-scan-l3.sh) uses it as the exact
+# "what did this build reassemble" answer.
+if [[ -n "${WIRING_STATE_DIR:-}" ]]; then
+  mkdir -p "${WIRING_STATE_DIR}"
+  if [[ "${#wiring_dig[@]}" -gt 0 ]]; then
+    { for p in "${!wiring_dig[@]}"; do printf '%s\t%s\n' "${p}" "${wiring_dig[$p]}"; done; } \
+      | sort > "${WIRING_STATE_DIR}/wiring-digests.tsv" \
+      || log "WARN could not write wiring-digests.tsv"
+  fi
+  printf '%s\n' "${apps[@]:-}" | grep -v '^$' > "${WIRING_STATE_DIR}/assembled.txt" || true
 fi
 
 # also push the fat store if requested

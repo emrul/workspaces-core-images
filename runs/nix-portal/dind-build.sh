@@ -144,10 +144,24 @@ echo "[driver] disk OK: ${free_final}G free (floor ${DISK_MIN_GB}G, cache cap ${
 args=(--keep-output --app-base-image localhost/nix-ubuntu:dev)
 # EMIT_APPS=0 → fat store only (don't re-assemble per-app images we already have).
 [ "${EMIT_APPS:-1}" = "0" ] || args=(--emit-app-images "${args[@]}")
-if [ -n "${PROFILES:-}" ]; then
+# FULL-SELECTION builds (2026-07-18): PROFILES no longer narrows the build.
+# A subset-selected build stages a PARTIAL fat store; publishing that overwrote
+# the registry's full-catalog nix-store tag (see design/nix-dedup-gap.md
+# incident). Every build now selects the whole catalog: the eval-gate keeps
+# unchanged profiles cheap (skips reinstall), changed.txt + the wiring-digest
+# check (nix-crane-assemble) scope per-app assembly, and the fat store is
+# complete every run — an app update swaps just its layer in the fat store.
+# PROFILES still short-circuits no-op runs (__none__, handled by the caller)
+# and scopes the scan stage downstream. SCOPED_BUILD=1 restores the old
+# narrowing for local single-app dev builds ONLY — a scoped build's fat store
+# must never be published (nix-publish's completeness guard will skip it).
+if [ "${SCOPED_BUILD:-0}" = "1" ] && [ -n "${PROFILES:-}" ]; then
+  echo "[driver] SCOPED_BUILD=1: narrowing to PROFILES='${PROFILES}' (dev only — partial fat store)"
   for p in $(printf '%s' "$PROFILES" | tr ',' ' '); do
     [ -n "$p" ] && args+=(--profile "$p")
   done
+elif [ -n "${PROFILES:-}" ]; then
+  echo "[driver] PROFILES='${PROFILES}' noted (gating/scan scope) — building FULL selection"
 fi
 [ -n "${PUSH:-}" ] && args+=(--push "$PUSH")
 

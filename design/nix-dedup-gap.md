@@ -168,3 +168,16 @@ so it wrongly skipped a genuinely-full fat store (pipeline 2687365634);
 labels.json is the ground truth. Detected by the L3 scan report, of all
 things — the fat-store row's package count collapsed between two chrome-only
 runs.
+
+**Build-side fix (Option A, 2026-07-18):** builds are now **full-selection
+always** — `dind-build.sh` no longer narrows via `--profile` (that was the
+partial-fat source; `SCOPED_BUILD=1` keeps it for local dev). The eval-gate
+scopes reinstalls, and per-app assembly is scoped by `changed.txt` **plus a
+wiring-digest check** in `nix-crane-assemble` (deterministic wiring tars
+sha256-compared against `wiring-digests.tsv` in the output dir) so wiring-only
+changes still reassemble their app — the guarantee subset builds used to
+provide. Crane also writes `assembled.txt` (what this build actually
+reassembled): the scan stage scopes to it, and publish now runs unfiltered
+(`NIX_PROFILES=""` — content compare decides), so pin-drift rebuilds beyond
+the git-gated set are pushed and fat↔app dedup holds. The publish-side
+completeness guard stays as the safety net.

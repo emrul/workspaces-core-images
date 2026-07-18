@@ -1232,6 +1232,10 @@ asm_env=(
   # changed this run (STAGING/changed.txt, written on full builds). The fat store
   # is always assembled in full. Unchanged apps keep their published image.
   "CHANGED_ONLY=${NIX_EVAL_GATE:-0}"
+  # Persistent state for the wiring-digest supplement + assembled.txt (what this
+  # build actually reassembled — consumed by the scan stage). Lives in the kept
+  # output dir next to labels.prev.json.
+  "WIRING_STATE_DIR=${OUTPUT_DIR}"
 )
 [[ "${EMIT_APP_IMAGES}" == 1 ]] && asm_env+=( "APP_BASE_IMAGE=${APP_BASE_IMAGE}" )
 [[ -n "${PUSH_REGISTRY}" ]] && asm_env+=( "PUSH_REGISTRY=${PUSH_REGISTRY}" )
