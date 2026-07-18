@@ -258,7 +258,7 @@ if [ "${SKIP_VULNIX}" != "1" ] && [ "${#apps[@]}" -gt 0 ]; then
       -v "${VULNIX_DIR}:/out" \
       "${NIX_IMAGE}" bash -c '
         set -u
-        nix run "${VULNIX_REF}" -- --version > /out/vulnix-version.txt 2>/dev/null || echo unknown > /out/vulnix-version.txt
+        nix eval "${VULNIX_REF}.version" --raw > /out/vulnix-version.txt 2>/dev/null || echo unknown > /out/vulnix-version.txt
         for app in ${APPS}; do
           prof="/nix/var/nix/profiles/${app}"
           if [ ! -e "${prof}" ]; then

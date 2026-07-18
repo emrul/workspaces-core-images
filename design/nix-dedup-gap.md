@@ -142,3 +142,24 @@ store partitions + wiring. The fat store has **no OS** (scratch). So:
 - `nix-store:nix` created 2026-07-06T21:52Z; `zoom:nix` 2026-07-06T18:10Z.
 - `PUBLISH_FAT_STORE` present only in `ci-scripts/nix-publish.sh` (gated), absent
   from `.gitlab-ci.yml`.
+
+---
+
+## Incident 2026-07-18: partial fat store published (and the guard that now prevents it)
+
+`PUBLISH_FAT_STORE=1` (the fix above) had a hole in the other direction: a
+**profile-scoped build** (`NIX_PROFILES=<app>` → `dind-build.sh` passes
+`--profile` → `build-nix-store-volume` stages ONLY the selected profiles)
+emits a fat store containing just those profiles — and publish happily pushed
+it. Two chrome-only pipelines (2687314252, 2687341067) overwrote the
+registry's full-catalog `nix-store:nix` with a **chrome-only** fat store;
+fat-store desktops image-mount that tag and lost every other app until a
+full-catalog rebuild (pipeline 2687356344) republished it.
+
+Guard (in `nix-publish.sh`): before pushing, compare the fat image's
+`dev.kasm.nix.profile-refs` label keys against the `[profiles.*]` set in
+`bin/nix-profiles.toml`. Any missing profile → **skip the push**
+(`skipped-partial` in the build report), keep the last-known-good tag, and
+say how to republish (full build, or `FORCE_FAT_PUSH=1` for an intentional
+catalog shrink). Detected by the L3 scan report, of all things — the
+fat-store row's package count collapsed between two chrome-only runs.

@@ -293,6 +293,27 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
     | grep -E "^localhost/nix-store-(amd64|arm64):dev$" | sort -u | head -1)"
   if [[ -n "${fat_local}" ]]; then
     fat_dest="${REGISTRY_NS}/nix-store:${KASM_TAG}"
+    # COMPLETENESS GUARD: a profile-scoped build (--profile via NIX_PROFILES)
+    # stages ONLY the selected profiles, so its fat store is PARTIAL. Pushing
+    # that overwrites the registry's full-catalog fat store — fat-store
+    # desktops image-mount nix-store:<tag> and would lose every other app
+    # (this happened 2026-07-18; two chrome-only pipelines shipped a
+    # chrome-only fat store). Compare the image's profile-refs label against
+    # the full profile set in nix-profiles.toml; on a partial fat store keep
+    # the last-known-good tag and record `skipped-partial`.
+    # FORCE_FAT_PUSH=1 overrides (e.g. intentionally shrinking the catalog).
+    fat_profiles="$(local_label "${fat_local}" dev.kasm.nix.profile-refs \
+                     | jq -r 'keys[]' 2>/dev/null | sort)"
+    cfg_profiles="$(grep -E '^\[profiles\.[a-z0-9-]+\]' "${CONFIG}" \
+                     | sed -E 's/^\[profiles\.([a-z0-9-]+)\]/\1/' | sort)"
+    fat_missing="$(comm -23 <(printf '%s\n' "${cfg_profiles}") <(printf '%s\n' "${fat_profiles}") | tr '\n' ' ')"
+    if [[ -n "${fat_missing// /}" && "${FORCE_FAT_PUSH:-0}" != "1" ]]; then
+      echo "[nix-publish] SKIP fat store: PARTIAL build (missing: ${fat_missing})" >&2
+      echo "[nix-publish]   registry keeps the last-known-good nix-store:${KASM_TAG};" >&2
+      echo "[nix-publish]   run a full-catalog build to republish, or FORCE_FAT_PUSH=1 to override." >&2
+      record "nix-store" "nix-store" "${fat_dest}" partial skipped-partial \
+             "$(local_label "${fat_local}" dev.kasm.nix.base-rev)" "" "" ""
+    else
     # Classify the fat store on its base-rev: "updated" = the base nixpkgs
     # commit moved (a world-rebuild); "unchanged" = base layers still dedupe.
     fnew="$(local_label "${fat_local}" dev.kasm.nix.base-rev)"
@@ -305,6 +326,7 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
       echo "[nix-publish] WARN fat store push failed" >&2; failed+=("nix-store"); faction=failed; fstat=failed
     fi
     record "nix-store" "nix-store" "${fat_dest}" "${fstat}" "${faction}" "${fnew}" "" "${fnew}" "${fprev}"
+    fi
   else
     echo "[nix-publish] PUBLISH_FAT_STORE=1 but no localhost/nix-store-<arch>:dev found" >&2
   fi
