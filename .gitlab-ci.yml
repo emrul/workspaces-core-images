@@ -458,6 +458,39 @@ scan-nix:
       - grype/
       - vulnix/
 
+# ── sbom-publish: attach + key-sign SBOMs on the images this run pushed ─────
+# Build order step 4 (design/cve-scanning.md): end users verify with
+#   cosign download sbom <ref>
+#   cosign verify --key security/cosign.pub --insecure-ignore-tlog=true <ref>
+# Consumes nix-build-report.json (publish) + sboms/ (scan-nix) artifacts.
+# Signing key: COSIGN_PRIVATE_KEY / COSIGN_PASSWORD project CI variables.
+sbom-publish:
+  stage: scan
+  needs: [publish, scan-nix]
+  rules:
+    - if: '$NIX_GC == "1"'
+      when: never
+    - if: '$FORCE_PUBLISH == "1"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  script:
+    - |
+      if [ "${NIX_PROFILES:-}" = "__none__" ]; then echo "nothing published — skipping"; exit 0; fi
+      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+        -v "$CI_PROJECT_DIR:/work:ro" \
+        -v "$CI_PROJECT_DIR:/artifacts" \
+        -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
+        -e COSIGN_PRIVATE_KEY="$COSIGN_PRIVATE_KEY" -e COSIGN_PASSWORD="$COSIGN_PASSWORD" \
+        -e OUT_DIR=/artifacts \
+        -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+        "$DIND_IMG" bash /work/ci-scripts/nix-sbom-attach.sh
+  artifacts:
+    when: always
+    expire_in: 90 days
+    paths:
+      - sbom-attach-report.md
+
 # ── sbom-attach-test: THROWAWAY registry capability test ────────────────────
 # design/cve-scanning.md § 7 step 2 item 4 — exercises cosign attach/discover/
 # download/sign/verify with the job token against a scratch repo (sbom-spike)
