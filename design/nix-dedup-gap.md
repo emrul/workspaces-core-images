@@ -154,12 +154,17 @@ emits a fat store containing just those profiles — and publish happily pushed
 it. Two chrome-only pipelines (2687314252, 2687341067) overwrote the
 registry's full-catalog `nix-store:nix` with a **chrome-only** fat store;
 fat-store desktops image-mount that tag and lost every other app until a
-full-catalog rebuild (pipeline 2687356344) republished it.
+full-catalog rebuild republished it.
 
-Guard (in `nix-publish.sh`): before pushing, compare the fat image's
-`dev.kasm.nix.profile-refs` label keys against the `[profiles.*]` set in
-`bin/nix-profiles.toml`. Any missing profile → **skip the push**
-(`skipped-partial` in the build report), keep the last-known-good tag, and
-say how to republish (full build, or `FORCE_FAT_PUSH=1` for an intentional
-catalog shrink). Detected by the L3 scan report, of all things — the
-fat-store row's package count collapsed between two chrome-only runs.
+Guard (in `nix-publish.sh`): before pushing, compare the **build sidecar
+`labels.json` app set** (every app staged into this build) against the
+`[profiles.*]` set in `bin/nix-profiles.toml`. Any missing profile → **skip
+the push** (`skipped-partial` in the build report), keep the last-known-good
+tag, and say how to republish (full build, or `FORCE_FAT_PUSH=1` for an
+intentional catalog shrink). Missing sidecar = fail closed (skip).
+NOTE: the first guard version compared the `dev.kasm.nix.profile-refs` image
+label instead — that label only lists apps with explicit ref pins (12 of 47),
+so it wrongly skipped a genuinely-full fat store (pipeline 2687365634);
+labels.json is the ground truth. Detected by the L3 scan report, of all
+things — the fat-store row's package count collapsed between two chrome-only
+runs.
