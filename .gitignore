@@ -6,3 +6,4 @@ target
 # Editor swap files
 *.swp
 *.swo
+.env.cosign
