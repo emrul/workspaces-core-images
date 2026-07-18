@@ -22,19 +22,23 @@
 #
 # Env:
 #   NIX_PROFILES   space list of app profiles to scan (change-gating, same
-#                  semantics as nix-publish.sh); "" = every built app image
-#                  (capped, see SCAN_MAX_APPS); "__none__" = exit 0.
-#   SCAN_MAX_APPS  cap on app scans for NIX_PROFILES="" runs (default 8).
-#                  Truncation is LOGGED — the fat store still L3-covers the
-#                  union of all apps' store paths, so nothing is silently
-#                  unscanned at the store-path level.
+#                  semantics as nix-publish.sh); "" = every built app image;
+#                  "__none__" = exit 0.
+#   SCAN_MAX_APPS  optional cap on app scans for NIX_PROFILES="" runs
+#                  (default 0 = unlimited — step 4 needs an SBOM per image;
+#                  a full-catalog run is ~1 min/app). Truncation is LOGGED.
+#   BUILD_OUTPUT   the build's output/sidecar dir (labels.json,
+#                  closure-diffs.json), mounted ro; used to classify a
+#                  requested-but-unbuilt app as unchanged vs build-failed.
 #   NIX_APP_REPO   local repo prefix (default localhost/nix)
 #   ARCH           amd64|arm64 (default: uname -m mapping)
 #   OUT_DIR        artifact dir (default /artifacts)
 #   DOCKER         container CLI (default podman)
 #   PARALLEL       concurrent app scans (default 2)
 #   SKIP_VULNIX    1 = skip the advisory vulnix pass
+#   SKIP_FAT       1 = allow a missing fat store (otherwise absence = failure)
 #   SYFT_VERSION / GRYPE_VERSION  pinned scanner releases
+#   VULNIX_NIXPKGS_REV  nixpkgs rev vulnix is run from (pinned; recorded)
 #   NIX_IMAGE      inner nix container (default docker.io/nixos/nix:2.28.4)
 #   HOST_UID/HOST_GID  chown artifacts back to the runner UID
 set -euo pipefail
@@ -43,7 +47,9 @@ NIX_APP_REPO="${NIX_APP_REPO:-localhost/nix}"
 DOCKER="${DOCKER:-podman}"
 OUT_DIR="${OUT_DIR:-/artifacts}"
 PARALLEL="${PARALLEL:-2}"
-SCAN_MAX_APPS="${SCAN_MAX_APPS:-8}"
+SCAN_MAX_APPS="${SCAN_MAX_APPS:-0}"
+BUILD_OUTPUT="${BUILD_OUTPUT:-/build-output}"
+VULNIX_NIXPKGS_REV="${VULNIX_NIXPKGS_REV:-753cc8a3a87467296ddd1fa93f0cc3e81120ee46}"
 SYFT_VERSION="${SYFT_VERSION:-1.46.0}"
 GRYPE_VERSION="${GRYPE_VERSION:-0.115.0}"
 NIX_IMAGE="${NIX_IMAGE:-docker.io/nixos/nix:2.28.4}"
@@ -56,8 +62,17 @@ if [ "${FILTER}" = "__none__" ]; then
 fi
 
 WORK="$(mktemp -d /tmp/l3-scan.XXXXXX)"
-cleanup() { chmod -R u+w "${WORK}" 2>/dev/null || true; rm -rf "${WORK}"; }
-trap cleanup EXIT INT TERM
+# Export containers get a predictable name prefix so a cancellation between
+# `podman create` and `podman rm` can't leak them past the trap.
+CTR_PREFIX="l3scan-$$"
+cleanup() {
+  "${DOCKER}" ps -aq --filter "name=^${CTR_PREFIX}-" 2>/dev/null \
+    | xargs -r "${DOCKER}" rm -f >/dev/null 2>&1 || true
+  chmod -R u+w "${WORK}" 2>/dev/null || true; rm -rf "${WORK}"
+}
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap cleanup EXIT
 
 SBOM_DIR="${OUT_DIR}/sboms"; GRYPE_DIR="${OUT_DIR}/grype"; VULNIX_DIR="${OUT_DIR}/vulnix"
 mkdir -p "${SBOM_DIR}" "${GRYPE_DIR}" "${VULNIX_DIR}" "${WORK}/rows" "${WORK}/logs"
@@ -93,29 +108,52 @@ mapfile -t all_apps < <("${DOCKER}" images --format '{{.Repository}}:{{.Tag}}' \
 apps=(); missing_requested=()
 for a in "${all_apps[@]}"; do in_filter "${a}" && apps+=("${a}"); done
 # Per-app :dev images are BUILD PRODUCTS — the eval-gate skips reassembling
-# unchanged apps, so a requested profile with no image usually means "unchanged
-# this run" (nix-publish.sh treats it the same way). Record it in the report
-# (no silent skip) but do NOT fail: the fat store + the scheduled SBOM re-scan
-# cover unchanged apps' store paths.
+# unchanged apps, so a requested profile with no image can mean "unchanged
+# this run" (normal; nix-publish treats zero images the same way) OR "its
+# build failed" (an error). Disambiguate via the build sidecar
+# closure-diffs.json (status: new|changed|unchanged): unchanged → recorded
+# as not_built; anything else (or absent from the sidecar) → the image
+# should exist → counted as a failure. Sidecar unavailable → not_built with
+# a warning. Note: unchanged apps' store paths ARE in the fat-store scan,
+# but per-app coverage for them only arrives with the scheduled re-scan
+# (build order step 6) — until then this is a recorded coverage gap.
+build_failed=()
 if [ -n "${FILTER}" ]; then
   for want in ${FILTER}; do
     found=0; for a in "${apps[@]}"; do [ "${a}" = "${want}" ] && found=1 && break; done
-    if [ "${found}" = 0 ]; then
-      log "WARN requested profile '${want}' has no ${NIX_APP_REPO}-${want}:dev image — not built this run (unchanged?)"
-      missing_requested+=("${want}")
+    [ "${found}" = 1 ] && continue
+    st="sidecar-unavailable"
+    if [ -f "${BUILD_OUTPUT}/closure-diffs.json" ]; then
+      st="$(jq -r --arg a "${want}" '.[$a].status // "absent-from-sidecar"' "${BUILD_OUTPUT}/closure-diffs.json")"
     fi
+    case "${st}" in
+      unchanged|sidecar-unavailable)
+        log "WARN requested profile '${want}' has no image — not built (${st})"
+        missing_requested+=("${want}") ;;
+      *)
+        log "ERROR requested profile '${want}' has no image but sidecar status='${st}' — build failure?"
+        build_failed+=("${want}") ;;
+    esac
   done
 fi
-if [ -z "${FILTER}" ] && [ "${#apps[@]}" -gt "${SCAN_MAX_APPS}" ]; then
+if [ -z "${FILTER}" ] && [ "${SCAN_MAX_APPS}" -gt 0 ] && [ "${#apps[@]}" -gt "${SCAN_MAX_APPS}" ]; then
   log "CAP: ${#apps[@]} app images present, scanning first ${SCAN_MAX_APPS} per-app;"
   log "CAP: dropped: ${apps[*]:${SCAN_MAX_APPS}}"
-  log "CAP: (fat store still covers the union; raise SCAN_MAX_APPS or set NIX_PROFILES to target)"
+  log "CAP: (fat store still covers the union at store-path level, but dropped apps get NO per-image SBOM)"
   apps=("${apps[@]:0:${SCAN_MAX_APPS}}")
 fi
+# The fat store is emitted by EVERY build (PUBLISH_FAT_STORE contract) — its
+# absence is an infrastructure failure, not a skip. SKIP_FAT=1 opts out.
 FAT_IMG="localhost/nix-store-${ARCH}:dev"
-"${DOCKER}" image inspect "${FAT_IMG}" >/dev/null 2>&1 || FAT_IMG=""
+if ! "${DOCKER}" image inspect "${FAT_IMG}" >/dev/null 2>&1; then
+  if [ "${SKIP_FAT:-0}" = "1" ]; then FAT_IMG=""; else
+    log "ERROR fat store ${FAT_IMG} absent (every build emits it; set SKIP_FAT=1 to opt out)"
+    build_failed+=("nix-store"); FAT_IMG=""
+  fi
+fi
 log "scanning apps: ${apps[*]:-<none>}   fat store: ${FAT_IMG:-absent}"
-if [ "${#apps[@]}" -eq 0 ] && [ -z "${FAT_IMG}" ] && [ "${#missing_requested[@]}" -eq 0 ]; then
+if [ "${#apps[@]}" -eq 0 ] && [ -z "${FAT_IMG}" ] \
+   && [ "${#missing_requested[@]}" -eq 0 ] && [ "${#build_failed[@]}" -eq 0 ]; then
   log "nothing to scan"; exit 0
 fi
 
@@ -124,27 +162,47 @@ label() { "${DOCKER}" image inspect --format "{{ index .Config.Labels \"$2\" }}"
 # ── one image: export → normalize → syft → grype → stats row ─────────────────
 scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   local name="$1" img="$2" symlinks="$3"
-  local d="${WORK}/${name}" c
+  local d="${WORK}/${name}" c image_id
+  image_id="$("${DOCKER}" image inspect --format '{{.Id}}' "${img}")" || return 1
   mkdir -p "${d}/rootfs"
-  c="$("${DOCKER}" create "${img}" true)" || return 1
+  c="$("${DOCKER}" create --name "${CTR_PREFIX}-${name}" "${img}" true)" || return 1
   "${DOCKER}" export "${c}" | tar -C "${d}/rootfs" -xf - || { "${DOCKER}" rm "${c}" >/dev/null; return 1; }
   "${DOCKER}" rm "${c}" >/dev/null
   if [ "${symlinks}" = "1" ]; then rm -f "${d}/rootfs/nix/store" "${d}/rootfs/nix/var"; fi
   mkdir -p "${d}/rootfs/nix"
   mv "${d}/rootfs/store" "${d}/rootfs/nix/store"
   mv "${d}/rootfs/var"   "${d}/rootfs/nix/var"
+  # IMAGE cataloger set, not the dir: defaults — directory scans enable
+  # declared-dependency catalogers (lockfiles/manifests inside the rootfs
+  # would inflate the inventory with software that isn't installed). The
+  # nix cataloger is pinned by name so a tag-set change can't drop it.
+  # Source identity: the SBOM must name the image, not the temp export dir
+  # (provenance + VEX product matching depend on it).
   "${SYFT}" -q "dir:${d}/rootfs" \
-      -o "syft-json=${d}/syft.json" \
+      --override-default-catalogers image \
+      --select-catalogers "+nix-cataloger" \
+      --source-name "${img}" \
+      --source-version "${image_id}" \
+      -o "syft-json=${SBOM_DIR}/${name}.syft.json" \
       -o "cyclonedx-json=${SBOM_DIR}/${name}.cdx.json" || return 1
-  "${GRYPE}" -q "sbom:${d}/syft.json" -o "json=${GRYPE_DIR}/${name}.grype.json" || return 1
+  local pkgs_nix
+  pkgs_nix="$(jq '[.artifacts[]|select(.type=="nix")]|length' "${SBOM_DIR}/${name}.syft.json")"
+  if [ "${pkgs_nix}" -eq 0 ]; then
+    echo "ASSERT FAILED: 0 nix packages catalogued for ${name} — cataloger set wrong?" >&2
+    return 1
+  fi
+  # Grype scans the syft-json; that SAME file is kept as the canonical SBOM
+  # artifact (CycloneDX is emitted alongside for interop/attachment, but the
+  # re-scan input of record is the lossless syft-json).
+  "${GRYPE}" -q "sbom:${SBOM_DIR}/${name}.syft.json" -o "json=${GRYPE_DIR}/${name}.grype.json" || return 1
   # stats row (dedup CVEs by id; severity sets are unique-by-id too)
   jq -n --arg name "${name}" \
         --arg image "${img}" \
-        --arg image_id "$("${DOCKER}" image inspect --format '{{.Id}}' "${img}")" \
+        --arg image_id "${image_id}" \
         --arg store_path "$(label "${img}" dev.kasm.nix.store-path)" \
         --arg rev "$(label "${img}" dev.kasm.nix.rev)" \
-        --argjson pkgs_total "$(jq '.artifacts|length' "${d}/syft.json")" \
-        --argjson pkgs_nix   "$(jq '[.artifacts[]|select(.type=="nix")]|length' "${d}/syft.json")" \
+        --argjson pkgs_total "$(jq '.artifacts|length' "${SBOM_DIR}/${name}.syft.json")" \
+        --argjson pkgs_nix   "${pkgs_nix}" \
         --argjson cves "$(jq '[.matches[].vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
         --argjson crit "$(jq '[.matches[]|select(.vulnerability.severity=="Critical").vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
         --argjson high "$(jq '[.matches[]|select(.vulnerability.severity=="High").vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
@@ -153,12 +211,12 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
           packages:{total:$pkgs_total,nix:$pkgs_nix},
           cves:{unique:$cves,critical:$crit,high:$high,fixed_critical:$fixed_crit}}' \
         > "${WORK}/rows/${name}.json" || return 1
-  gzip -f "${SBOM_DIR}/${name}.cdx.json" "${GRYPE_DIR}/${name}.grype.json"
+  gzip -f "${SBOM_DIR}/${name}.syft.json" "${SBOM_DIR}/${name}.cdx.json" "${GRYPE_DIR}/${name}.grype.json"
   chmod -R u+w "${d}"; rm -rf "${d}"
 }
 
 # ── bounded-parallel app scans ────────────────────────────────────────────────
-failed=()
+failed=("${build_failed[@]}")
 for a in "${apps[@]}"; do
   while [ "$(jobs -rp | wc -l)" -ge "${PARALLEL}" ]; do
     if ! wait -n; then :; fi     # collect one; failure detected via rows below
@@ -195,10 +253,12 @@ if [ "${SKIP_VULNIX}" != "1" ] && [ "${#apps[@]}" -gt 0 ]; then
     "${DOCKER}" run --rm \
       -e NIX_CONFIG="experimental-features = nix-command flakes" \
       -e APPS="${apps[*]}" \
+      -e VULNIX_REF="github:NixOS/nixpkgs/${VULNIX_NIXPKGS_REV}#vulnix" \
       -v "nix-build-stage-${ARCH}:/nix" \
       -v "${VULNIX_DIR}:/out" \
       "${NIX_IMAGE}" bash -c '
         set -u
+        nix run "${VULNIX_REF}" -- --version > /out/vulnix-version.txt 2>/dev/null || echo unknown > /out/vulnix-version.txt
         for app in ${APPS}; do
           prof="/nix/var/nix/profiles/${app}"
           if [ ! -e "${prof}" ]; then
@@ -209,7 +269,7 @@ if [ "${SKIP_VULNIX}" != "1" ] && [ "${#apps[@]}" -gt 0 ]; then
           if [ -z "${reqs}" ]; then
             echo "{\"app\":\"${app}\",\"status\":\"closure-error\"}" > "/out/${app}.vulnix.json"; continue
           fi
-          if nix run nixpkgs#vulnix -- --no-requisites --json ${reqs} > "/out/${app}.raw.json" 2>"/out/${app}.err"; then rc=0; else rc=$?; fi
+          if nix run "${VULNIX_REF}" -- --no-requisites --json ${reqs} > "/out/${app}.raw.json" 2>"/out/${app}.err"; then rc=0; else rc=$?; fi
           # vulnix exit: 0 = clean, 2 = findings, else = error.
           # No jq in nixos/nix — the raw output is a JSON array, embed it verbatim
           # (app/store-path values are shell-safe: no quotes/backslashes possible).
@@ -226,14 +286,24 @@ if [ "${SKIP_VULNIX}" != "1" ] && [ "${#apps[@]}" -gt 0 ]; then
 fi
 
 # ── report ────────────────────────────────────────────────────────────────────
+# Zero rows despite attempted scans = every scan failed → an infra failure
+# even if the per-scan bookkeeping somehow missed it.
+attempted=$(( ${#apps[@]} + $([ -n "${FAT_IMG}" ] && echo 1 || echo 0) ))
+rows_count="$(ls "${WORK}/rows/" 2>/dev/null | wc -l)"
+if [ "${attempted}" -gt 0 ] && [ "${rows_count}" -eq 0 ]; then
+  failed+=("no-result-rows")
+fi
+VULNIX_VER="$(cat "${VULNIX_DIR}/vulnix-version.txt" 2>/dev/null || echo n/a)"
 jq -s --arg syft "${SYFT_VERSION}" --arg grype "${GRYPE_VERSION}" \
+      --arg vulnix "${VULNIX_VER}" \
       --arg db_built "${DB_BUILT}" --arg sha "${CI_COMMIT_SHA:-}" \
       --argjson failed "$(printf '%s\n' "${failed[@]:-}" | jq -R . | jq -s 'map(select(length>0))')" \
       --argjson not_built "$(printf '%s\n' "${missing_requested[@]:-}" | jq -R . | jq -s 'map(select(length>0))')" \
-      '{scanners:{syft:$syft,grype:$grype,grype_db_built:$db_built},
+      '{scanners:{syft:$syft,grype:$grype,vulnix:$vulnix,grype_db_built:$db_built},
         commit:$sha, failed:$failed, not_built:$not_built, images:.}' \
       "${WORK}/rows/"*.json > "${OUT_DIR}/nix-scan-report.json" 2>/dev/null \
-  || echo '{"images":[],"failed":["<no rows produced>"]}' > "${OUT_DIR}/nix-scan-report.json"
+  || echo "{\"images\":[],\"failed\":$(printf '%s\n' "${failed[@]:-}" | jq -R . | jq -s 'map(select(length>0))')}" \
+       > "${OUT_DIR}/nix-scan-report.json"
 {
   echo "# L3 nix scan — report-only"
   echo
