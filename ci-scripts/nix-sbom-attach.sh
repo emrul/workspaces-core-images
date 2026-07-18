@@ -42,7 +42,16 @@ log() { printf '%s %s\n' "[nix-sbom-attach]" "$*" >&2; }
 command -v curl >/dev/null || dnf install -y --setopt=install_weak_deps=False curl >/dev/null
 command -v jq   >/dev/null || dnf install -y --setopt=install_weak_deps=False jq   >/dev/null
 
-mapfile -t pushed < <(jq -r '.images[] | select(.action=="pushed") | "\(.profile)\t\(.dest)"' "${REPORT}")
+# SBOM_BACKFILL=1: also attach+sign images that were content-identical this run
+# ("skipped" — already on the registry). One-off initial rollout / key-rotation
+# mode: with a full-catalog scan (SCAN_ALL=1) this signs the whole catalog.
+if [ "${SBOM_BACKFILL:-0}" = "1" ]; then
+  sel='.action=="pushed" or .action=="skipped"'
+  log "BACKFILL mode: covering pushed + already-published (skipped) images"
+else
+  sel='.action=="pushed"'
+fi
+mapfile -t pushed < <(jq -r ".images[] | select(${sel}) | \"\(.profile)\t\(.dest)\"" "${REPORT}")
 if [ "${#pushed[@]}" -eq 0 ]; then log "no images were pushed this run — nothing to attach"; exit 0; fi
 
 # pinned cosign (checksum-verified)

@@ -482,7 +482,7 @@ sbom-publish:
         -v "$CI_PROJECT_DIR:/artifacts" \
         -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
         -e COSIGN_PRIVATE_KEY="$COSIGN_PRIVATE_KEY" -e COSIGN_PASSWORD="$COSIGN_PASSWORD" \
-        -e OUT_DIR=/artifacts \
+        -e SBOM_BACKFILL="${SBOM_BACKFILL:-0}" -e OUT_DIR=/artifacts \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         "$DIND_IMG" bash /work/ci-scripts/nix-sbom-attach.sh
   artifacts:
