@@ -120,6 +120,10 @@ if "${COSIGN}" verify --key /tmp/cosign.pub --insecure-ignore-tlog=true \
      "${REGISTRY_NS}/sbom-spike@${DIGEST}" >/dev/null 2>&1; then
   ok "cosign verify (image, no tlog)"
 else bad "cosign verify (image)"; fi
+if [ -n "${SBOM_DIG}" ] && "${COSIGN}" verify --key /tmp/cosign.pub --insecure-ignore-tlog=true \
+     "${REGISTRY_NS}/sbom-spike@${SBOM_DIG}" >/dev/null 2>&1; then
+  ok "cosign verify (SBOM artifact, no tlog)"
+else bad "cosign verify (SBOM artifact)"; fi
 
 # ── 6. enumerate (the scheduled-re-scan discovery path) ──────────────────────
 step "enumerate tags"

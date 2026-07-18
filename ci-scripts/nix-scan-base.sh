@@ -6,9 +6,11 @@
 #
 # Scope: covers layer L1 (distro base) + L2 (KasmVNC / upload / squid / … the
 # Kasm core additions) — the nix bases ARE core-minimal + nix activation, and
-# per-app / fat-store images inherit this same OS layer (dockerfile-nix-app-
-# finish is wiring-only). It does NOT see /nix/store (L3): Trivy has no nix
-# analyzer; that needs Syft/vulnix. See design/cve-scanning.md.
+# per-app images inherit this same OS layer (dockerfile-nix-app-finish is
+# wiring-only). The fat store is FROM scratch (no OS layer; its L1/L2 exposure
+# is the consuming desktop's base image, covered here). Nothing here sees
+# /nix/store (L3): Trivy has no nix analyzer; that needs Syft/vulnix. See
+# design/cve-scanning.md.
 #
 # Report-only: writes one JUnit trivy-report-<repo>.xml per base to $OUT_DIR
 # (GitLab captures them as reports.junit → pipeline Tests tab) and prints a CVE
