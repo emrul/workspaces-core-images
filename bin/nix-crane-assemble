@@ -164,13 +164,17 @@ fi
 # assembly set. The record is rewritten only after the assembly loop, so a
 # failed run re-detects the same movers next time. No record yet → fail-safe:
 # assemble everything once to seed it.
-declare -A wiring_dig
+# NB: bash 5.3 + set -u treats ${#assoc[@]} / ${!assoc[@]} on a declared-but-
+# EMPTY associative array as unbound (failed pipeline 2687593748) — track the
+# entry count in a plain variable and only expand the array when it's > 0.
+declare -A wiring_dig; wiring_count=0
 if [[ "${CHANGED_ONLY:-0}" == "1" && -n "${WIRING_STATE_DIR:-}" ]]; then
   mapfile -t _all_apps < <(grep -v '^$' "${STAGING}/apps.txt" 2>/dev/null || true)
   for p in "${_all_apps[@]}"; do
     [[ -f "${NIXSRC}/${p}/custom_startup.sh" ]] || continue  # fat-store-only extra
     stage_wiring_tar "${p}" || { log "WARN wiring tar failed for ${p} (digest skipped)"; continue; }
     wiring_dig["${p}"]="$(sha256sum "${BLOBS}/wiring-${p}.tar" | awk '{print $1}')"
+    wiring_count=$((wiring_count+1))
   done
   if [[ -f "${WIRING_STATE_DIR}/wiring-digests.tsv" ]]; then
     wiring_extra=()
@@ -271,7 +275,7 @@ fi
 # "what did this build reassemble" answer.
 if [[ -n "${WIRING_STATE_DIR:-}" ]]; then
   mkdir -p "${WIRING_STATE_DIR}"
-  if [[ "${#wiring_dig[@]}" -gt 0 ]]; then
+  if [[ "${wiring_count}" -gt 0 ]]; then
     { for p in "${!wiring_dig[@]}"; do printf '%s\t%s\n' "${p}" "${wiring_dig[$p]}"; done; } \
       | sort > "${WIRING_STATE_DIR}/wiring-digests.tsv" \
       || log "WARN could not write wiring-digests.tsv"
