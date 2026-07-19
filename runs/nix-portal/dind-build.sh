@@ -45,18 +45,24 @@ if [ "${PROFILES:-}" = "__none__" ]; then
   exit 0
 fi
 
-# ── 1. ensure the nix-ubuntu base is present in the podman store ──────────
-if ! podman image exists localhost/nix-ubuntu:dev; then
-  if [ -f "$OUT/nix-ubuntu.tar" ]; then
+# ── 1. ensure the app base is present in the podman store ─────────────────
+# APP_BASE_IMAGE overrides the default Noble base — used by the TraceLabs
+# Phase-0 spike to build on localhost/nix-ubuntu-resolute:dev (the reviewer-
+# sanctioned "separate invocation"; per-profile app_base is later work). The
+# tar-load fallback only applies to the default Noble base (that's the only
+# one staged to $OUT/nix-ubuntu.tar).
+APP_BASE_IMAGE="${APP_BASE_IMAGE:-localhost/nix-ubuntu:dev}"
+if ! podman image exists "$APP_BASE_IMAGE"; then
+  if [ "$APP_BASE_IMAGE" = "localhost/nix-ubuntu:dev" ] && [ -f "$OUT/nix-ubuntu.tar" ]; then
     echo "[driver] loading nix-ubuntu:dev from $OUT/nix-ubuntu.tar"
     podman load -i "$OUT/nix-ubuntu.tar"
   else
-    echo "[driver] FATAL: localhost/nix-ubuntu:dev absent and no $OUT/nix-ubuntu.tar to load"
+    echo "[driver] FATAL: app base '$APP_BASE_IMAGE' absent (and no tar fallback)"
     status "FAILED no-base $(date -u +%FT%TZ)"
     exit 1
   fi
 fi
-echo "[driver] base image OK: $(podman image inspect -f '{{.Id}}' localhost/nix-ubuntu:dev)"
+echo "[driver] base image OK: $APP_BASE_IMAGE $(podman image inspect -f '{{.Id}}' "$APP_BASE_IMAGE")"
 
 # ── 1a. base-freshness guard ──────────────────────────────────────────────
 # If this commit changed files baked INTO the base image (NIX_BASE_AFFECTED=1,
@@ -141,7 +147,11 @@ echo "[driver] disk OK: ${free_final}G free (floor ${DISK_MIN_GB}G, cache cap ${
 # ── 2. assemble args ──────────────────────────────────────────────────────
 # --keep-output preserves app-*.tar after the run so the checker can verify
 # per-app artifacts post-build (the script otherwise cleans them on exit).
-args=(--keep-output --app-base-image localhost/nix-ubuntu:dev)
+args=(--keep-output --app-base-image "$APP_BASE_IMAGE")
+# NIX_CONFIG_FILE overrides the profiles TOML (default: build-nix-store-volume's
+# own bin/nix-profiles.toml). The TraceLabs spike points this at an isolated
+# config so a scoped, non-pushed build can't perturb the catalog fat store.
+[ -n "${NIX_CONFIG_FILE:-}" ] && args+=(--config "$NIX_CONFIG_FILE")
 # EMIT_APPS=0 → fat store only (don't re-assemble per-app images we already have).
 [ "${EMIT_APPS:-1}" = "0" ] || args=(--emit-app-images "${args[@]}")
 # FULL-SELECTION builds (2026-07-18): PROFILES no longer narrows the build.
