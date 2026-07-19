@@ -3,7 +3,7 @@
 
   # Same nixpkgs rev as the base ([nixpkgs].ref) so the faker's glibc matches
   # steam's FHS. Re-pin (nix flake update) when the base ref advances.
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/d407951447dcd00442e97087bf374aad70c04cea";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/293d6abedf0478e681a4dfcfcb35b30fc796a32f";
 
   outputs = { self, nixpkgs }:
     let

@@ -38,6 +38,15 @@
 #   SCAN_ALL       1 = scan every built app image (ignore assembled.txt/filter)
 #   SKIP_VULNIX    1 = skip the advisory vulnix pass
 #   SKIP_FAT       1 = allow a missing fat store (otherwise absence = failure)
+#   VEX_FILE       OpenVEX statement file (default /work/security/vex/
+#                  kasm-nix.openvex.json — the repo mount). Statements with
+#                  status not_affected/false_positive are converted to grype
+#                  ignore rules (vulnerability id + subcomponent package
+#                  name). NOTE: grype's native --vex is NOT used — its product
+#                  matching keys on OCI digests/purls that our dir-sourced
+#                  SBOMs don't carry, so it would silently no-op. Suppressed
+#                  matches land in grype's ignoredMatches and are reported as
+#                  the "vexed" count; crit/fixed-crit are AFTER suppression.
 #   SYFT_VERSION / GRYPE_VERSION  pinned scanner releases
 #   VULNIX_NIXPKGS_REV  nixpkgs rev vulnix is run from (pinned; recorded)
 #   NIX_IMAGE      inner nix container (default docker.io/nixos/nix:2.28.4)
@@ -99,6 +108,37 @@ export GRYPE_DB_CACHE_DIR=/tmp/grype-db
 log "updating grype vulnerability DB"
 "${GRYPE}" db update -q || fail "grype db update failed"
 DB_BUILT="$("${GRYPE}" db status -o json 2>/dev/null | jq -r '.built // .Built // "unknown"' 2>/dev/null || echo unknown)"
+
+# ── OpenVEX → grype ignore rules ──────────────────────────────────────────────
+# security/vex/kasm-nix.openvex.json is the canonical triage record (OpenVEX,
+# portable). Grype consumes it as generated ignore rules — see the VEX_FILE
+# note in the header for why --vex is not used. A malformed VEX file is a
+# FATAL error: silently scanning without suppressions would misreport, and
+# silently suppressing wrongly would be worse.
+VEX_FILE="${VEX_FILE:-/work/security/vex/kasm-nix.openvex.json}"
+GRYPE_CFG=""; VEX_RULES=0
+if [ -f "${VEX_FILE}" ]; then
+  jq -e '.statements | type == "array"' "${VEX_FILE}" >/dev/null \
+    || fail "VEX file ${VEX_FILE} is not valid OpenVEX (no statements array)"
+  {
+    echo "ignore:"
+    jq -r '.statements[]
+           | select(.status=="not_affected" or .status=="false_positive")
+           | .vulnerability.name as $v
+           | .products[].subcomponents[]."@id"
+           | capture("^pkg:[^/]+/(?<n>[^@]+)").n
+           | "  - vulnerability: \($v)\n    package:\n      name: \(.)"' "${VEX_FILE}"
+  } > "${WORK}/grype-vex.yaml" || fail "VEX→grype rule conversion failed"
+  VEX_RULES="$(grep -c '^  - vulnerability:' "${WORK}/grype-vex.yaml" || true)"
+  if [ "${VEX_RULES}" -gt 0 ]; then
+    GRYPE_CFG="${WORK}/grype-vex.yaml"
+    log "VEX: ${VEX_RULES} suppression rule(s) from ${VEX_FILE}"
+  else
+    log "VEX: file present but no not_affected/false_positive statements"
+  fi
+else
+  log "VEX: no statement file at ${VEX_FILE} (raw counts only)"
+fi
 
 # ── target list: changed apps (or capped all) + fat store ────────────────────
 in_filter() { [ -z "${FILTER}" ] && return 0; local x; for x in ${FILTER}; do [ "${x}" = "$1" ] && return 0; done; return 1; }
@@ -216,8 +256,11 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   fi
   # Grype scans the syft-json; that SAME file is kept as the canonical SBOM
   # artifact (CycloneDX is emitted alongside for interop/attachment, but the
-  # re-scan input of record is the lossless syft-json).
-  "${GRYPE}" -q "sbom:${SBOM_DIR}/${name}.syft.json" -o "json=${GRYPE_DIR}/${name}.grype.json" || return 1
+  # re-scan input of record is the lossless syft-json). VEX suppressions ride
+  # in as ignore rules; suppressed matches stay visible in ignoredMatches.
+  local -a gargs=()
+  [ -n "${GRYPE_CFG}" ] && gargs+=(-c "${GRYPE_CFG}")
+  "${GRYPE}" -q "${gargs[@]}" "sbom:${SBOM_DIR}/${name}.syft.json" -o "json=${GRYPE_DIR}/${name}.grype.json" || return 1
   # stats row (dedup CVEs by id; severity sets are unique-by-id too)
   jq -n --arg name "${name}" \
         --arg image "${img}" \
@@ -230,9 +273,12 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
         --argjson crit "$(jq '[.matches[]|select(.vulnerability.severity=="Critical").vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
         --argjson high "$(jq '[.matches[]|select(.vulnerability.severity=="High").vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
         --argjson fixed_crit "$(jq '[.matches[]|select(.vulnerability.severity=="Critical" and .vulnerability.fix.state=="fixed").vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
+        --argjson vexed "$(jq '[.ignoredMatches[]?.vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
+        --argjson fixed_crit_raw "$(jq '[(.matches[],(.ignoredMatches[]?))|select(.vulnerability.severity=="Critical" and .vulnerability.fix.state=="fixed").vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
         '{name:$name,image:$image,image_id:$image_id,store_path:$store_path,rev:$rev,
           packages:{total:$pkgs_total,nix:$pkgs_nix},
-          cves:{unique:$cves,critical:$crit,high:$high,fixed_critical:$fixed_crit}}' \
+          cves:{unique:$cves,critical:$crit,high:$high,fixed_critical:$fixed_crit,
+                vexed:$vexed,fixed_critical_raw:$fixed_crit_raw}}' \
         > "${WORK}/rows/${name}.json" || return 1
   gzip -f "${SBOM_DIR}/${name}.syft.json" "${SBOM_DIR}/${name}.cdx.json" "${GRYPE_DIR}/${name}.grype.json"
   chmod -R u+w "${d}"; rm -rf "${d}"
@@ -320,9 +366,12 @@ VULNIX_VER="$(cat "${VULNIX_DIR}/vulnix-version.txt" 2>/dev/null || echo n/a)"
 jq -s --arg syft "${SYFT_VERSION}" --arg grype "${GRYPE_VERSION}" \
       --arg vulnix "${VULNIX_VER}" \
       --arg db_built "${DB_BUILT}" --arg sha "${CI_COMMIT_SHA:-}" \
+      --arg vex_file "$([ -f "${VEX_FILE}" ] && basename "${VEX_FILE}" || echo "")" \
+      --argjson vex_rules "${VEX_RULES}" \
       --argjson failed "$(printf '%s\n' "${failed[@]:-}" | jq -R . | jq -s 'map(select(length>0))')" \
       --argjson not_built "$(printf '%s\n' "${missing_requested[@]:-}" | jq -R . | jq -s 'map(select(length>0))')" \
       '{scanners:{syft:$syft,grype:$grype,vulnix:$vulnix,grype_db_built:$db_built},
+        vex:{file:$vex_file,rules:$vex_rules},
         commit:$sha, failed:$failed, not_built:$not_built, images:.}' \
       "${WORK}/rows/"*.json > "${OUT_DIR}/nix-scan-report.json" 2>/dev/null \
   || echo "{\"images\":[],\"failed\":$(printf '%s\n' "${failed[@]:-}" | jq -R . | jq -s 'map(select(length>0))')}" \
@@ -330,11 +379,11 @@ jq -s --arg syft "${SYFT_VERSION}" --arg grype "${GRYPE_VERSION}" \
 {
   echo "# L3 nix scan — report-only"
   echo
-  echo "syft ${SYFT_VERSION} · grype ${GRYPE_VERSION} (DB built ${DB_BUILT})"
+  echo "syft ${SYFT_VERSION} · grype ${GRYPE_VERSION} (DB built ${DB_BUILT}) · VEX rules: ${VEX_RULES}"
   echo
-  echo "| image | pkgs (nix) | CVEs | crit | fixed-crit |"
-  echo "|---|---|---|---|---|"
-  jq -r '.images[] | "| \(.name) | \(.packages.total) (\(.packages.nix)) | \(.cves.unique) | \(.cves.critical) | \(.cves.fixed_critical) |"' \
+  echo "| image | pkgs (nix) | CVEs | crit | fixed-crit | vexed |"
+  echo "|---|---|---|---|---|---|"
+  jq -r '.images[] | "| \(.name) | \(.packages.total) (\(.packages.nix)) | \(.cves.unique) | \(.cves.critical) | \(.cves.fixed_critical) | \(.cves.vexed // 0) |"' \
     "${OUT_DIR}/nix-scan-report.json"
   echo
   echo "Key: **pkgs (nix)** = catalogued packages (nix-store subset) · **CVEs** ="
@@ -342,7 +391,10 @@ jq -s --arg syft "${SYFT_VERSION}" --arg grype "${GRYPE_VERSION}" \
   echo "CVEs, fixable or not · **fixed-crit** = the subset of crit where the vuln DB"
   echo "records an upstream fixed version (Grype fix.state=fixed) — the actionable"
   echo "set a pin bump can remove, and the metric the future publication gate keys on."
-  echo "All counts are raw scanner output before false-positive/VEX triage."
+  echo "**vexed** = unique CVE ids suppressed by the OpenVEX statement file"
+  echo "(security/vex/kasm-nix.openvex.json — every suppression carries a written"
+  echo "justification). CVEs/crit/fixed-crit are AFTER VEX suppression; the raw"
+  echo "pre-VEX actionable count is kept as cves.fixed_critical_raw in the JSON."
   if [ "${#missing_requested[@]}" -gt 0 ]; then echo; echo "**Not built this run (unchanged):** ${missing_requested[*]}"; fi
   if [ "${#failed[@]}" -gt 0 ]; then echo; echo "**FAILED scans:** ${failed[*]}"; fi
 } > "${OUT_DIR}/nix-scan-report.md"

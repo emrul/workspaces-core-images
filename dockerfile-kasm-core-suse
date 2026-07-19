@@ -8,7 +8,7 @@ ARG BASE_IMAGE="opensuse/leap:16.0"
 # https://github.com/emrul/container-init. Bump CONTAINER_INIT_VERSION
 # to update.
 FROM --platform=$BUILDPLATFORM alpine:3 AS containerinit_fetch
-ARG CONTAINER_INIT_VERSION=v1.1.0
+ARG CONTAINER_INIT_VERSION=v1.1.1
 ARG TARGETARCH
 ADD https://github.com/emrul/container-init/releases/download/${CONTAINER_INIT_VERSION}/container-init.linux-${TARGETARCH} /out/container-init
 ADD https://github.com/emrul/container-init/releases/download/${CONTAINER_INIT_VERSION}/systemd1-shim.linux-${TARGETARCH} /out/systemd1-shim

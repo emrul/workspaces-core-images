@@ -9,10 +9,14 @@
 #     base layer's digest stays stable across their bumps.
 
 [nixpkgs]
-# NB: this is the FLOATING nixos-25.05 branch. bin/nix-gpu-overlay/flake.lock is
-# pinned to a specific rev (currently the branch HEAD, d407951447…) so its trimmed
-# VirtualGL deps dedup with the build. When the branch advances, bump the overlay
-# lock to match (else virtualgl-min ships a second glibc).
+# NB: this is the FLOATING nixos-26.05 branch (bumped from EOL nixos-25.05
+# 2026-07-19 — the old branch stopped receiving fixes ~Dec 2025 and its frozen
+# openssl 3.4.3 / sqlite 3.48.0 / freerdp 3.15.0 / libarchive 3.8.2 were the
+# bulk of the catalog's fixed-crit CVEs; see design/cve-triage-playbook.md).
+# The gpu/kasm overlays follow this ref automatically via --override-input;
+# bin/nix-steam-overlay/flake.{nix,lock} is the one MANUAL re-pin — update it
+# to the new branch HEAD whenever this ref changes (else steam's FHS ships a
+# mismatched glibc).
 #
 # Reproducibility: this floating ref is the INPUT. Each build resolves it to a
 # concrete commit ONCE, installs every profile against that pinned commit (so
@@ -21,7 +25,7 @@
 # To reproduce or roll back a build, set this ref to the recorded commit hash.
 # The per-run pin needs every profile reset before install — build-nix-store-volume
 # does this (reset_profile). See design/nix-dedup-gap.md and nix-crane-assemble.
-ref = "github:NixOS/nixpkgs/nixos-25.05"
+ref = "github:NixOS/nixpkgs/nixos-26.05"
 
 # Packages that go in the base OCI layer. The build script also includes
 # the closures of these packages — glibc pulls in its own deps, etc.
