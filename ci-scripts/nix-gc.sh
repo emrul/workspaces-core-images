@@ -60,6 +60,35 @@ for v in $(podman volume ls --format '{{.Name}}' 2>/dev/null | grep -vE '^nix-bu
   podman volume rm "$v" >/dev/null 2>&1 || true
 done
 
+# 3b. In-place Nix GC on the staging volume(s). Old profile GENERATIONS are
+# the real accumulator: every nixpkgs bump strands the previous closure set
+# (the 25.05→26.05 ref bump orphaned an entire catalog's worth), and nothing
+# below the 250G nuke ever reclaimed it. Drop every non-current generation
+# link, then nix-store --gc — which also deletes the orphans' db.sqlite
+# registrations (the same registered-but-unshipped ghosts that polluted the
+# fat-store SBOM, pipeline 2688148353). Safe by construction: the gc job runs
+# alone (builds skip on NIX_GC=1), current generations are kept, and
+# eval-gate warm profiles ARE current generations. Profiles for apps REMOVED
+# from nix-profiles.toml still pin their closures (rare; handled manually).
+# This makes step 4's cap reset a backstop, not the reclaim mechanism.
+NIX_IMG="${NIX_IMG:-docker.io/nixos/nix:2.28.4}"
+for sv in $(podman volume ls --format '{{.Name}}' 2>/dev/null | grep -E '^nix-build-stage-'); do
+  echo "[gc] nix GC on ${sv} (old generations + nix-store --gc)"
+  podman run --rm -v "${sv}:/nix" "$NIX_IMG" sh -c '
+    set -u
+    cd /nix/var/nix/profiles 2>/dev/null || exit 0
+    dropped=0
+    for link in *-[0-9]*-link; do
+      [ -e "$link" ] || continue
+      name="${link%-[0-9]*-link}"
+      if [ ! -e "$name" ]; then rm -f "$link"; dropped=$((dropped+1)); continue; fi
+      cur="$(readlink "$name")"
+      [ "$link" = "$cur" ] || { rm -f "$link"; dropped=$((dropped+1)); }
+    done
+    echo "[gc]   dropped ${dropped} old generation link(s)"
+    nix-store --gc 2>&1 | tail -2' || echo "[gc] WARN nix GC failed on ${sv} (cap reset still applies)"
+done
+
 # 4. size-guarded reset of the Nix cache (rare; next build re-seeds)
 for sv in $(podman volume ls --format '{{.Name}}' 2>/dev/null | grep -E '^nix-build-stage-'); do
   mp=$(podman volume inspect "$sv" --format '{{.Mountpoint}}' 2>/dev/null) || continue

@@ -504,6 +504,41 @@ sbom-publish:
     paths:
       - sbom-attach-report.md
 
+# ── security-page: refresh the registry site's security.json ────────────────
+# Auto-updates https://kasm-nix-registry.emrul.dev/1.1/security.json after
+# every successful scan+publish on the default branch. UPSERT semantics
+# (ci-scripts/nix-security-page.py): change-gated pipelines merge just their
+# scanned rows into the live file, so incremental runs (e.g. the twice-daily
+# chrome schedule) refresh their rows without clobbering the catalog. The
+# runner lives on the forge host, so the docroot is a local bind mount —
+# writes go through sudo-nerdctl containers (the runner's sudo surface).
+# Manual full regeneration stays in the registry repo (gen_security.py +
+# deploy.sh), which now pulls the live file first so it can't clobber this.
+security-page:
+  stage: scan
+  needs: [scan-nix, publish]
+  rules:
+    - if: '$NIX_GC == "1"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - |
+      sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w" "$DIND_IMG" \
+        python3 /w/ci-scripts/nix-security-page.py /w/nix-scan-report.json /w/security.json
+      if [ -f security.json ]; then
+        sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w:ro" \
+          -v /srv/portal/kasm-nix-registry/1.1:/site \
+          "$DIND_IMG" cp /w/security.json /site/security.json
+        echo "security.json published to the registry docroot"
+      else
+        echo "nothing to publish (skip reason in the log above)"
+      fi
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - security.json
+
 # ── sbom-attach-test: THROWAWAY registry capability test ────────────────────
 # design/cve-scanning.md § 7 step 2 item 4 — exercises cosign attach/discover/
 # download/sign/verify with the job token against a scratch repo (sbom-spike)
