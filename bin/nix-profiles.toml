@@ -180,10 +180,12 @@ pkgs = ["nixpkgs#ptyxis"]
 # PIPX_HOME are exported by nix-activate so installs go to
 # ~/.local/share/{npm,pipx}).
 [profiles.node]
+# corepack is NOT listed: nodejs_22 bundles bin/corepack on nixos-26.05, so a
+# separate nixpkgs#corepack collides ("existing package already provides
+# corepack") and aborts the profile install (ref-bump pipeline 2688148353).
 pkgs = [
     "nixpkgs#nodejs_22",
     "nixpkgs#pnpm",
-    "nixpkgs#corepack",
 ]
 
 [profiles.python]
@@ -192,6 +194,11 @@ pkgs = [
     "nixpkgs#uv",
     "nixpkgs#pipx",
 ]
+# nixos-26.05's pipx 1.8.0 fails its check phase (test_package_specifier
+# assertions) and has NO hydra cache entry — the branch package is broken at
+# rev 293d6abe. unstable ships pipx 1.14.0, cached. Drop this override once a
+# 26.05 rev builds pipx again (or at the next base-ref bump).
+ref = "github:NixOS/nixpkgs/nixos-unstable"
 
 # ─────────────────────────────────────────────────────────────────────
 # Application catalog (Phase 1)
