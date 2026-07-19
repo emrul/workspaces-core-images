@@ -1,6 +1,6 @@
 # Trace Labs OSINT — a Nix-pipeline workspace image
 
-Status: **draft for review, rev 4 — approved for the Phase-0 spike**. Owner:
+Status: **draft for review, rev 5 — approved for the Phase-0 spike**. Owner:
 emrul. Requested 2026-07-19.
 
 Rev 4 (external review round 3): reviewer approves starting Phase 0 once the
@@ -15,10 +15,18 @@ the **three dependency-graph sets** (`requestedRoots` / `buildProfiles` /
 store-path/rev labels, add `profile-set-digest`); a concrete
 **candidate→test→promote** sequence; and doc fixes (drop nmap, drop the
 eval-gate wording, §5 subheadings, launcher scope, concrete layer-digest
-compare). Also, owner decision mid-review: **Maltego is now included**
-(unfree in nix, but covered by the Kasm–Maltego partnership / existing
-`kasmweb/maltego`), added as a new `allowUnfree` catalog profile composed via
-`requires` — reversing rev 2's drop.
+compare).
+
+Rev 5 (review round 4 + owner steer): **Maltego included as a TraceLabs-only
+`pkgs` entry** (`nixpkgs#maltego`), *not* a standalone catalog profile or a
+fat-store app — Maltego has never shipped via this repo's Nix packaging (the
+`kasmweb/maltego` stock image is apt-based and unrelated) and stays that way.
+Corrected: `allowUnfree` is already global (`build-nix-store-volume:251`, no
+per-profile work); nixpkgs marks Maltego `binaryBytecode` and ships the
+**ZIP** (Kasm ships the DEB — a different artifact to clear); redistribution
+turns on the EULA/partnership, not the provenance tag. Maltego added to
+Phase-0 validation (JVM / first-run login / `$HOME` persistence differ from
+the browsers).
 
 Rev 3 (review round 2) established the **composition model** — TraceLabs is a
 thin unique profile + wiring that declares the existing app profiles through
@@ -88,12 +96,15 @@ The tools-script inventory, mapped to delivery mechanism, verified against
   `firefox-esr` recorded — §3.3), `brave`, `torbrowser`, `obsidian`. These
   are *not* listed in TraceLabs' `pkgs`; their existing delta blobs are
   referenced, giving the three-way dedup that is the whole point.
-- **New `maltego` catalog profile, also composed via `requires`:** added to
-  the catalog with `allowUnfree` (§6) so it becomes a first-class app that
-  dedups like the browsers — and gives Kasm a nix-native standalone Maltego
-  alongside the existing apt-based `kasmweb/maltego`. (Alternative if a
-  standalone nix Maltego isn't wanted yet: carry it in TraceLabs' own `pkgs`,
-  accepting no dedup. Recommend the catalog profile.)
+- **`nixpkgs#maltego` in TraceLabs' own `pkgs`** (owner steer 2026-07-19 —
+  *not* a standalone catalog profile, *not* in the fat store). Kasm's
+  existing `kasmweb/maltego` is an apt-based **stock** image, unrelated to
+  this repo's Nix packaging, and Maltego has never shipped via Nix here — it
+  stays that way. So Maltego is just another TraceLabs-unique tool: it lives
+  in `profile-tracelabs`'s delta (already `fat_store=false`), launched from
+  the desktop like SpiderFoot. No dedup applies (there is no other Nix
+  Maltego to share with) and none is claimed. `allowUnfree` is already global
+  (§6), so this is literally one `pkgs` entry.
 - **TraceLabs `pkgs` — from nixpkgs, unique to this profile:** `sherlock`,
   `sn0int`, `translate-shell` (`trans`), `exiftool`, `steghide`, `stegseek`,
   `tor` (CLI; not auto-started — §5.4), `python3Packages.shodan`.
@@ -126,8 +137,11 @@ Rev 1 proposed skipping `profile-tracelabs` in the crane store-delta glob.
 (`bin/build-nix-store-volume` `copy_meta_profile` loop ~808), so the fat
 store would still advertise a `tracelabs` profile whose closure is absent;
 and all named `[layers.*]` are placed in the fat store unconditionally
-(`bin/nix-crane-assemble:125`), so promoting a Maltego JVM layer would bloat
-fat even though no fat-store profile uses it.
+(`bin/nix-crane-assemble:125`). (Rev 2 raised a Maltego JVM layer as the
+worked example here; moot now — Maltego is a TraceLabs-only `pkgs` entry in
+the excluded delta, §2/§6, not a promoted layer, so it never enters the fat
+store. The unconditional-`[layers.*]` point still stands for any *future*
+desktop-only shared layer.)
 
 Replace with a declarative profile property:
 
@@ -197,6 +211,8 @@ platforms = ["amd64"]
 app_base  = "resolute"            # §3.5
 pkgs = [ # TraceLabs-only: the 4 overlay derivations + CLI tools not shared
          # with any other profile (sherlock, sn0int, exiftool, steghide, …)
+         # + maltego (unfree; TraceLabs-only, not a standalone/fat profile — §6)
+         "nixpkgs#maltego",
 ]
 requires = [ "obsidian", "chromium", "firefox", "brave", "torbrowser" ]
 ```
@@ -406,19 +422,23 @@ a populated home; confirm the edit survives and the seed does not overwrite).
 
 ## 6. Licensing & architecture (rev 4 — Maltego included)
 
-- **Maltego — included (owner decision, rev 4).** nixpkgs marks it
-  `unfree = true` / `binaryNativeCode` (verified), so the build must set
-  `allowUnfree` (per-profile config or `NIXPKGS_ALLOW_UNFREE=1`) for the
-  `maltego` profile to evaluate. The redistribution concern that dropped it
-  in rev 2 is settled by the **Kasm–Maltego partnership** — Kasm already
-  ships `kasmweb/maltego` — so shipping a nix Maltego is within existing
-  terms. Two caveats to close before publish: (a) the actual Maltego EULA /
-  redistribution terms should be confirmed by the partnership owner (this
-  design records the *basis*, it does not itself adjudicate the EULA);
-  (b) Maltego CE requires an **account login / licensing step on first run**
-  — validated in §7, and it must not block a fresh desktop from starting.
-  Because it is `binaryNativeCode` there is no corresponding-source
-  obligation to us.
+- **Maltego — included as a TraceLabs-only `pkgs` entry (owner decision,
+  rev 4/5).** nixpkgs 26.05 marks it `unfree = true`, `sourceProvenance =
+  binaryBytecode` (verified — it's a JVM app), and ships **Maltego's Linux
+  ZIP** (`Maltego.v4.11.1.linux.zip`), whereas Kasm's stock installer
+  consumes the DEB — a *different artifact*. `allowUnfree` needs no new work:
+  the builder already exports `NIXPKGS_ALLOW_UNFREE=1`
+  (`bin/build-nix-store-volume:251`), so the profile just lists
+  `nixpkgs#maltego`.
+  **Redistribution basis is the licence/EULA + the Kasm–Maltego
+  partnership**, *not* the source-provenance tag (provenance describes how
+  it's built, it does not determine corresponding-source obligations).
+  Caveats to close before publish: (a) confirm the partnership/EULA covers
+  redistributing **the nixpkgs ZIP artifact specifically** (Kasm ships the
+  DEB today, so this is a genuinely different artifact to clear); (b) Maltego
+  CE requires an **account login on first run** — validated in §7, and it
+  must not block a fresh desktop from starting. This design records the
+  *basis*; it does not itself adjudicate the EULA.
 - **amd64-only for v1.** `tor-browser`'s nixpkgs platforms are
   `x86_64-linux`/`i686-linux` only (verified) — an arm64 build fails to eval
   it. Declare `platforms = ["amd64"]`; arm64 needs `tor-browser`
@@ -515,6 +535,11 @@ implemented.
   under the real seccomp profile with no GPU, and (b) the `profile-firefox`
   layer blob digest in the spike image **equals** the standalone `firefox:nix`
   layer digest (proves composition dedup before we build anything else).
+  **Include `nixpkgs#maltego` in the spike `pkgs`** and check it too — the JVM
+  launch, amd64-only story, CE first-run account login, and `$HOME`
+  persistence differ meaningfully from the browsers and should be proven
+  before Phase 1 (also measure its closure's contribution to the standalone
+  image size).
 - **Phase 1:** the four overlay derivations (§4) with owners + tests; the
   full `tracelabs` profile with `requires` at the recorded upstream commit
   (§2 inventory); `requires` dependency propagation (§3.4: selection,
@@ -559,9 +584,13 @@ implemented.
 - Real publication gating: hard-fail on a failed `tracelabs` profile;
   `build → scan → candidate → synchronous testbench → promote digest →
   attach/sign`, fail-closed, TraceLabs-specific initially.
-- **Maltego included** as a new `allowUnfree` catalog profile (owner
-  decision; Kasm–Maltego partnership, already ships `kasmweb/maltego`);
-  EULA confirmation + CE first-run login to close before publish.
+- **Maltego included as a TraceLabs-only `pkgs` entry** — `nixpkgs#maltego`
+  in `profile-tracelabs`; **not** a standalone Nix app, **not** in the fat
+  store (owner steer: Maltego has never shipped via this repo's Nix packaging
+  and stays that way). `allowUnfree` already global — one `pkgs` line, no new
+  schema. Redistribution basis = EULA + Kasm–Maltego partnership; confirm the
+  nixpkgs **ZIP** artifact (not Kasm's DEB) is covered, and CE first-run login
+  before publish.
 
 ## 11. Open questions
 
