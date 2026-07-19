@@ -500,10 +500,15 @@ scan-nix:
       - grype/
       - vulnix/
 
-# ── sbom-publish: attach + key-sign SBOMs on the images this run pushed ─────
+# ── sbom-publish: attest + key-sign SBOMs on the images this run pushed ─────
 # Build order step 4 (design/cve-scanning.md): end users verify with
-#   cosign download sbom <ref>
+#   cosign verify-attestation --key security/cosign.pub \
+#     --insecure-ignore-tlog=true --type cyclonedx <ref> \
+#     | jq -r '.payload' | base64 -d | jq '.predicate'     # the CycloneDX SBOM
 #   cosign verify --key security/cosign.pub --insecure-ignore-tlog=true <ref>
+# (in-toto attestation replaced the deprecated `cosign attach sbom`,
+# 2026-07-19 — one signed DSSE artifact instead of attach+sign+sign,
+# bounded-parallel via ATTEST_PARALLEL.)
 # Consumes nix-build-report.json (publish) + sboms/ (scan-nix) artifacts.
 # Signing key: COSIGN_PRIVATE_KEY / COSIGN_PASSWORD project CI variables.
 # BACKFILL (initial rollout / key rotation): trigger a pipeline with
