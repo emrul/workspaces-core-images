@@ -116,14 +116,31 @@ DB_BUILT="$("${GRYPE}" db status -o json 2>/dev/null | jq -r '.built // .Built /
 # FATAL error: silently scanning without suppressions would misreport, and
 # silently suppressing wrongly would be worse.
 VEX_FILE="${VEX_FILE:-/work/security/vex/kasm-nix.openvex.json}"
+# Grype ignore rules are CATALOG-WIDE (vulnerability id + package name) —
+# they cannot express per-image scope. So only statements whose product is
+# the whole-catalog IRI are representable; a statement scoped to anything
+# narrower is REJECTED (fail-loud), not silently over-applied to every
+# image. Suppression statuses per the OpenVEX spec: only not_affected (a
+# scanner false positive is not_affected + justification; "false_positive"
+# is not an OpenVEX status).
+VEX_CATALOG_PRODUCT="https://kasm-nix-registry.emrul.dev/catalog"
 GRYPE_CFG=""; VEX_RULES=0
 if [ -f "${VEX_FILE}" ]; then
   jq -e '.statements | type == "array"' "${VEX_FILE}" >/dev/null \
     || fail "VEX file ${VEX_FILE} is not valid OpenVEX (no statements array)"
+  bad_status="$(jq -r '[.statements[].status]
+    | map(select(. != "not_affected" and . != "affected" and . != "fixed" and . != "under_investigation"))
+    | join(" ")' "${VEX_FILE}")"
+  [ -z "${bad_status}" ] || fail "VEX file has non-OpenVEX status(es): ${bad_status}"
+  narrow="$(jq -r --arg cat "${VEX_CATALOG_PRODUCT}" '.statements[]
+    | select(.status=="not_affected")
+    | select([.products[]."@id"] | all(. == $cat) | not)
+    | .vulnerability.name' "${VEX_FILE}")"
+  [ -z "${narrow}" ] || fail "VEX statement(s) not catalog-scoped (grype ignore rules cannot express narrower products): ${narrow}"
   {
     echo "ignore:"
     jq -r '.statements[]
-           | select(.status=="not_affected" or .status=="false_positive")
+           | select(.status=="not_affected")
            | .vulnerability.name as $v
            | .products[].subcomponents[]."@id"
            | capture("^pkg:[^/]+/(?<n>[^@]+)").n
@@ -134,7 +151,7 @@ if [ -f "${VEX_FILE}" ]; then
     GRYPE_CFG="${WORK}/grype-vex.yaml"
     log "VEX: ${VEX_RULES} suppression rule(s) from ${VEX_FILE}"
   else
-    log "VEX: file present but no not_affected/false_positive statements"
+    log "VEX: file present but no suppressing statements"
   fi
 else
   log "VEX: no statement file at ${VEX_FILE} (raw counts only)"
