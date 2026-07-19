@@ -391,18 +391,32 @@ Not a respawn loop. Starts nothing on connect (the user opens tools from the
 XFCE menu / desktop entries). Honours `DISABLE_CUSTOM_STARTUP` and the
 `kasm_exec` contract for `docker exec` opens, but has no single `START_COMMAND`.
 
-**Panel gotcha (found in the Phase-0 spike, 2026-07-20).** `nix-activate`'s
-`apply_single_app_desktop()` swaps XFCE to the **no-panel** "single
-application" layout whenever *exactly one profile is active* — it counts
-active profiles, and TraceLabs ships as **one** active profile (its
+**Panel gotcha (found + fixed in the Phase-0 spike, 2026-07-20).**
+`nix-activate`'s `apply_single_app_desktop()` swaps XFCE to the **no-panel**
+"single application" layout whenever *exactly one profile is active* — it
+counts active profiles, and TraceLabs ships as **one** active profile (its
 `requires` are composed into the image, not counted active). So a multi-tool
 desktop is misread as single-app and `xfce4-panel` is dropped → blank screen
-(WM + xfdesktop run, but no panel/menu). **Fix: set `NIX_SINGLE_APP_DESKTOP=0`**
-(the code's documented toggle) in the workspace's `run_config.environment`
-(done for the registry entry). Phase-1 improvement: have `nix-activate` treat
-a profile that declares itself a desktop (e.g. has `requires` + a desktop
-marker, or `fat_store=false` desktop profiles) as multi-app automatically, so
-the toggle isn't a per-workspace footgun.
+(WM + xfdesktop run, but no panel/menu).
+
+The documented toggle `NIX_SINGLE_APP_DESKTOP=0` only works if it is set
+**before** `nix-activate` runs (`Before=window-manager.service`). In practice
+that's unreliable: Kasm's `run_config.environment` did not inject it into the
+container (it wasn't present on relaunch), and a post-boot `export` is too
+late. **Actual fix: `custom_startup.sh` ensures `xfce4-panel` is running**
+(it runs after the WM via `custom-startup.service`, is idempotent via
+`pgrep`, and `xfce4-panel` launches fine — proven in the spike). The
+`run_config.environment` toggle is kept as harmless belt-and-suspenders.
+Phase-1 improvement: have `nix-activate` treat a profile that declares itself
+a desktop (`requires` + a marker, or `fat_store=false` desktop profiles) as
+multi-app automatically, and bake `NIX_SINGLE_APP_DESKTOP=0` into the image
+ENV for such profiles so the session config is right from boot (menu/panel
+started by the session, not a post-hoc launch).
+
+**Open sub-issue: desktop/panel icons don't render** (`glycin-image-rs`
+image loader fails under bwrap — the known nix+glycin/LD_LIBRARY_PATH trap).
+Folders/menu entries work; only the icon glyphs are missing. Cosmetic, to
+fix after the panel is confirmed usable.
 
 ### 5.2 post-build.sh — installs the desktop experience
 Firefox `policies.json` + OSINT bookmarks; Brave managed policy (+ forced
