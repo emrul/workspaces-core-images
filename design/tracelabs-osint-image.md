@@ -1,263 +1,348 @@
 # Trace Labs OSINT — a Nix-pipeline workspace image
 
-Status: **draft for review, rev 1**. Owner: emrul. Requested 2026-07-19.
+Status: **draft for review, rev 2**. Owner: emrul. Requested 2026-07-19.
+
+Rev 2 closes an external review (2026-07-19, 8 findings, all verified
+against the code/nixpkgs/upstream): corrects the product definition (the
+VM does not run the optional tools script), fixes change-gating
+(reverse-dependency selection), replaces the fat-store store-delta exclude
+with a declarative `fat_store=false` applied at every construction point,
+specifies the full-desktop startup/wiring contract, drops Maltego (unfree
+binary) and declares amd64-only for v1 (tor-browser is x86_64/i686), and
+corrects the layer-dedup claims (same-ref requirement; 80% heuristic won't
+flag a 2-profile browser; "no rebuild" is warm-cache-conditional).
 
 ## 1. Goal
 
 Deliver a Trace Labs OSINT desktop as a single Kasm workspace image, built
 on our Nix pipeline rather than the upstream imperative installer. Trace
 Labs is the OSINT CTF org (search-party CTF, missing-persons); their
-distributable is a full VM, historically Kali-based. Kasm's previous port
-(`kasmtech/workspaces-images` `src/ubuntu/install/tracelabs`) tracked the
-Kali era. Trace Labs has since rebased onto **Debian 13** with a *focused
-OSINT toolset* — `scripts/tlosint-tools.sh` in `tracelabs/tlosint-vm` — and
-dropped the Kali kitchen-sink. We follow the new, focused set.
+distributable is a full VM, historically Kali-based, now rebased onto
+**Debian 13**.
 
-The upstream `tlosint-tools.sh` is ~980 lines of `apt` + `pipx` +
-`go install` + `rustup`/`cargo`, wrapped in self-heal loops
-(`apt_self_heal`, `ensure_shodan_available`, `ensure_rust_cargo_available`),
-four-shell PATH persistence, and a runtime "OSINT Updater" that re-runs the
-whole thing. That machinery exists *because the imperative install is
-flaky*. Moving to a Nix profile pins the whole toolset to one nixpkgs
-revision, puts every tool on PATH by construction, updates atomically on a
-ref bump, and rides the update/eval-gate/testbench cadence we already run.
-The "unpick and keep up to date" cost is a one-time packaging investment
-that then disappears into existing machinery.
+Moving to a Nix profile pins the whole toolset to one nixpkgs revision, puts
+every tool on PATH by construction, updates atomically on a ref bump, and
+rides the update/eval-gate/testbench cadence we already run. The upstream
+tools script is ~980 lines of `apt`/`pipx`/`go`/`cargo` wrapped in self-heal
+loops that exist *because the imperative install is flaky*; Nix removes the
+need for all of it.
 
-## 2. Scope decisions (settled with the requester 2026-07-19)
+## 2. Product definition (v1 scope) — settled rev 2
 
-- **Drop Docker + docker-compose + Owlculus.** Nested Docker inside a Kasm
-  workspace is a non-starter by default, and Owlculus is a web-app stack,
-  not a desktop tool. Document it as an optional external add-on; not in v1.
-- **Follow the new Debian-13 focused OSINT set, not the Kali arsenal.** The
-  old port's `kali-tools-top10`, autopsy, hydra, fern-wifi, ophcrack, etc.
-  are pentest tooling Trace Labs itself moved away from. Excluding them
-  gives a much smaller closure.
-- **Standalone image, NOT in the fat store.** The fat store is one shared
-  partitioned `/nix` that every fat-store desktop mounts and picks a single
-  app from via the launch form. Trace Labs is the opposite shape — a whole
-  desktop of tools present together — and folding its closure into the
-  shared store would bloat every other fat-store desktop. It is its own
-  image: a nix-ubuntu core base (full XFCE + KasmVNC already) + a
-  `tracelabs` Nix profile + desktop wiring, published under its own name.
-  Base variant discussed in §4.5.
-- **Package the 4 nixpkgs-missing tools properly in the overlay** (not a
-  thin imperative fallback layer). A temporary imperative layer reintroduces
-  exactly the flakiness we are escaping. GPLv3 is acceptable and we will
-  publish our build/package scripts, so custom derivations are unencumbered.
+**A review finding corrected a conflation in rev 1.** Two different upstream
+artifacts exist, and they are NOT the same tool set:
 
-## 3. Tool inventory → delivery mechanism
+- `scripts/tlosint-tools.sh` — an **optional** "customize your own system
+  with our tools" utility. Upstream's README explicitly states it is *not*
+  executed during the VM build. It is Trace Labs' blessed toolset list.
+- `tlosint.yaml` — the actual **VM build recipe**. It installs Obsidian (via
+  `scripts/tl/install-obsidian.sh`), a desktop environment, and the
+  `overlays/tl-overlays` tree (Trace Labs vault, templates, guides,
+  wallpaper, desktop config, branding), plus a `$packages` list. It does not
+  reference the tools script.
 
-Verified against our pinned `nixos-26.05` (and a few `nixos-unstable` for
-fast-movers) on the .140 Nix host, 2026-07-19.
+**v1 = "containerized equivalent of the current Trace Labs VM experience"**,
+defined as:
 
-**In nixpkgs — ship via the `tracelabs` profile (the bulk):**
-`sherlock`, `sn0int`, `theharvester`, `recon-ng`, `maltego`,
-`translate-shell` (`trans`), `exiftool`, `steghide`, `stegseek`, `tor`,
-`tor-browser` (replaces `torbrowser-launcher`), `brave`, `firefox-esr`,
-`chromium`, `python3Packages.shodan`. Plus adjacent OSINT tooling the VM
-installs piecemeal or not at all, all present in nixpkgs and worth
-including: `maigret`, `holehe`, `socialscan`, `photon`, `dnsrecon`,
-`dnstwist`, `subfinder`, `amass`, `mat2`, `outguess`, `zsteg`, `whatweb`,
-`wafw00f`, `nmap`, `ffuf`, `gobuster`.
+1. The exact `tlosint-tools.sh` inventory (Trace Labs' blessed toolset), at
+   a **recorded upstream commit**.
+2. The VM's high-value desktop assets: the **TL Vault / Obsidian workflow**
+   (a defining part of the current VM), wallpaper, OSINT links, and the
+   Firefox/Brave policies.
 
-**Not in nixpkgs — package in `bin/nix-kasm-overlay` (§5):**
-`spiderfoot`, `phoneinfoga`, `sublist3r`, `metagoofil`. Three Python apps
-+ one Go binary. `stegosuite` is also absent but upstream already treats it
-as optional — skip unless asked.
+**Out of v1 core** (into a separately-approved *extension list*, not
+shipped until asked): `theharvester`, `recon-ng`, `maltego`, and the
+adjacent-tool superset (`maigret`, `holehe`, `amass`, …) — none are in the
+tools script. Maltego is additionally blocked on licensing (§8).
 
-**Keep as wiring files, no Nix needed (§6):** Firefox hardening
-`policies.json` + OSINT bookmarks; the Brave managed-policy that
-force-installs the Forensic-OSINT screenshot extension
-(`jojaomahhndmeienhjihojidkddkahcn`); desktop icons; the participant-guide
-PDF shortcut.
+**Deliverable: a manifest** (`design/tracelabs-manifest.tsv` or similar)
+with a row per tool: `upstream-source | v1-included? | mechanism | excluded-reason`,
+pinned to the matched upstream commit. This is the single source of truth
+for what the image claims to be, and what the validator (§9) checks.
 
-**Cut / obviated by Nix:** the OSINT-Updater desktop launcher (update =
-rebuild on a newer ref), all `ensure_*`/`apt_self_heal`/PATH-persistence
-machinery, rustup/GOPATH/pipx bootstrapping, `torbrowser-launcher`, Docker,
-Owlculus.
+The tools-script inventory, mapped to delivery mechanism, verified against
+`nixos-26.05` on the .140 host 2026-07-19:
 
-## 4. Build architecture
+- **From nixpkgs (the `tracelabs` profile):** `sherlock`, `sn0int`,
+  `translate-shell` (`trans`), `exiftool`, `steghide`, `stegseek`, `tor`
+  (CLI; not auto-started — §7.4), `tor-browser` (replaces
+  `torbrowser-launcher`), `brave`, `firefox-esr`, `chromium`,
+  `python3Packages.shodan`.
+- **Overlay derivations (§5):** `spiderfoot`, `phoneinfoga`, `sublist3r`,
+  `metagoofil`. `stegosuite` is absent from nixpkgs and upstream already
+  treats it as optional — skip unless asked.
+- **Obsidian:** already a catalog profile (`[profiles.obsidian]`) — reuse.
+- **Wiring, not Nix (§7):** Firefox policy + OSINT bookmarks, Brave managed
+  policy + forced extension (§9 caveat), TL Vault seed, wallpaper, icons.
+- **Cut / obviated:** the OSINT-Updater launcher (update = rebuild),
+  `ensure_*`/`apt_self_heal`/PATH machinery, rustup/GOPATH/pipx bootstrap,
+  `torbrowser-launcher`, Docker, Owlculus (nested Docker is a non-starter in
+  Kasm), the Kali arsenal from the old port.
 
-### 4.1 A profile in the same store build
+## 3. Build architecture
 
-`tracelabs` becomes a section in `bin/nix-profiles.toml`, built into the
-same partitioned store as every other profile. It differs from existing
-profiles in two ways: it is a *multi-tool desktop* (many `pkgs`, not one
-launchable app), and it is **excluded from the fat store** (§4.3).
+### 3.1 A profile in the same store build, excluded from the fat store
 
-### 4.2 Layer reuse with the apps we already ship (answering requester Q3)
+`tracelabs` is a section in `bin/nix-profiles.toml`, built into the same
+partitioned store as every other profile (so its overlapping closures can
+share layers — §3.3), but it is a *multi-tool desktop*, not a single-app
+launch, and it is **excluded from the fat store** because folding a whole
+OSINT desktop into the shared store would bloat every other fat-store
+desktop.
 
-Decompose "reuse existing app image layers":
+### 3.2 Fat-store exclusion — declarative, applied everywhere (rev 2 fix)
 
-1. **No rebuild of shared apps** — unconditional today. Store paths are
-   content-addressed; the staging volume is warm. A `tracelabs` profile
-   including `firefox`/`chromium`/`tor-browser`/`brave` realizes them *from
-   cache*. No extra build time.
-2. **No extra maintenance** — unconditional. `tracelabs` pins the same
-   ref/overlay, so those apps are the *same derivations* as their
-   standalone profiles; one ref bump moves both.
-3. **Byte-identical layer sharing on the registry** — needs a deliberate
-   step. The partitioner (`bin/build-nix-store-volume` §§6–7) only
-   deduplicates paths that live in `[base]` or a declared `[layers.*]`
-   entry; everything else is copied into each profile's *delta*. Today
-   `firefox`'s unique closure sits entirely in `profile-firefox`, so a
-   naive `tracelabs` would **duplicate** it into `profile-tracelabs`. Fix:
-   promote the heavy overlapping closures into declared `[layers.*]`
-   entries — the browsers (each ~400 MB), and a JVM layer for `maltego`.
-   Then the standalone app image and the tracelabs image both subtract that
-   layer from their deltas and reference the *same blob by digest*. This is
-   exactly what `[layers.electron]`/`[layers.qt6]` already do; the
-   `[promote] threshold_percent` analyzer flags candidates automatically.
+Rev 1 proposed skipping `profile-tracelabs` in the crane store-delta glob.
+**A review finding showed that is incomplete**: the metadata layer and
+`_meta.json` are generated from *every* selected profile
+(`bin/build-nix-store-volume` `copy_meta_profile` loop ~808), so the fat
+store would still advertise a `tracelabs` profile whose closure is absent;
+and all named `[layers.*]` are placed in the fat store unconditionally
+(`bin/nix-crane-assemble:125`), so promoting a Maltego JVM layer would bloat
+fat even though no fat-store profile uses it.
 
-   Scope the promotion to heavy closures only. The 15+ small tools
-   (`sherlock`, `holehe`, `dnstwist`, the Python CLIs) are a few MB each —
-   duplicating them into the delta is cheaper than the layer-count and
-   coordination overhead of declaring a layer per tool.
+Replace with a declarative profile property:
 
-### 4.3 Fat-store exclusion
+```toml
+[profiles.tracelabs]
+fat_store = false
+```
 
-The fat-store assembly (`bin/nix-crane-assemble`, the `fat_args` glob over
-`profile-*`) currently includes every profile's delta. Add an exclude for
-`profile-tracelabs` so the fat-store mountable image does not carry Trace
-Labs' unique closure. The promoted shared browser/JVM layers remain in the
-fat store — those apps are fat-store apps independently — so only the
-`tracelabs` delta (the 4 overlay tools + the OSINT metapackage bundle +
-wiring) is withheld. Mechanically: a `fat_exclude` list (default
-`tracelabs`) filtered out of the `profile-*` loop; keep it data-driven so
-future desktop-style profiles can opt out the same way.
+Applied at **every** fat-store construction point:
 
-### 4.4 Standalone image assembly
+- fat-store **store deltas** (`nix-crane-assemble` `profile-*` glob);
+- fat-store **metadata + `_meta.json`** (`copy_meta_profile` loop and the
+  `.profiles` jq in `build-nix-store-volume`) — omit `fat_store=false`
+  profiles;
+- fat-store **labels / provenance**;
+- **shared layers in the fat store** — include a `[layers.*]` only when an
+  *fat-store-included* profile uses it (so a browser layer stays, a
+  TraceLabs-only JVM layer does not);
+- **scan / report scope** — the fat-store SBOM must not list TraceLabs paths.
 
-The `tracelabs` per-app image is assembled by the existing per-app path:
-base + shared `[layers.*]` it uses + `profile-tracelabs` delta + a wiring
-layer + ENV. No new assembler mode is required beyond the fat-store exclude
-and the `[layers.*]` promotions. Published under its own name (proposed
-`tracelabs-osint`), tagged like the rest of the catalog.
+**Invariant test (must land with the feature):** `tracelabs` is absent from
+fat-store store files, metadata, `_meta.json`, and the fat-store SBOM; the
+standalone `tracelabs-osint` image contains its closure and activates it.
 
-### 4.5 Base variant — independent of Trace Labs' Debian 13
+### 3.3 Layer reuse with existing app images — corrected (rev 2)
 
-Trace Labs' upstream VM is Debian 13 **because their installer is
-`apt`/`pipx`/`go`/`cargo`** — their tools bind to the host libc and Debian's
-package set, so their distro choice is a consequence of the install method.
-Our tools come from nixpkgs: each carries its own closure (its own glibc,
-its own deps) and links against nothing from the host OS. A nixpkgs
-`sherlock`/`spiderfoot`/`tor-browser` behaves identically on Noble,
-Resolute, Alpine or Fedora. **There is no compatibility reason to match
-Debian 13** — we never touch Debian's packages. The base is chosen on our
-own merits.
+Decompose the requester's "reuse existing app image layers":
 
-Recommendation: **Resolute** (Ubuntu 26.04, the multi-store variant where
-even the Kasm services — KasmVNC, profile-sync, audio-input, recorder,
-webcam, gamepad — are Nix stores unioned at boot by `nix-compose`;
-`dockerfile-nix-ubuntu-resolute`). For a fully-Nix OSINT image it is the
-most consistent choice — services and tools are one Nix-delivered surface —
-and 26.04 sits next to our `nixos-26.05` pin (closer glibc). The only reason
-to fall back to **Noble** (24.04, Kasm services from distro packages) is
-maturity: Resolute is the newer path and less battle-tested. Decision left
-open (§11) pending the requester's confidence in Resolute; the profile and
-overlay work is identical either way, so this does not block phase 1.
+1. **No rebuild of shared apps** — true **only on a warm store/cache**
+   (rev 1 overstated this as unconditional). Store paths are
+   content-addressed; when the staging volume already holds the app's
+   closure, a `tracelabs` profile including it realizes it from cache. A cold
+   store rebuilds it once like any other path.
+2. **No extra maintenance** — true **iff the refs match** (see §3.4).
+3. **Byte-identical registry layer sharing** — needs two things, per a
+   review finding:
+   - **Promotion to a declared `[layers.*]`.** The partitioner only dedups
+     paths in `[base]` or a `[layers.*]`; otherwise a shared path is *copied*
+     into each profile's delta. So the heavy overlapping closures (the
+     browsers) must be promoted to declared layers. The `[promote]`
+     auto-analyzer will **not** surface these: a browser used by its
+     standalone profile + TraceLabs is in ~2 of ~48 profiles (~4%), far below
+     the 80% threshold. Promotion is a deliberate manual decision.
+   - **Identical resolved nixpkgs rev.** A layer dedups only if both the
+     layer and both consuming profiles resolve to the *same* store paths,
+     i.e. the same nixpkgs commit. **This is the contradiction rev 1
+     missed:** the standalone browsers pin `nixos-unstable`
+     (`[profiles.firefox]`, `[profiles.brave]`, `[profiles.chromium]` all
+     `ref = nixos-unstable`); pinning TraceLabs' browsers to `26.05` for
+     stability would give them different store paths and share **nothing**.
 
-## 5. The four overlay derivations
+   **Resolution:** if registry dedup is the goal, TraceLabs' browser layers
+   must use the **same refs as the standalone browser profiles** (unstable).
+   The choice is explicit: align refs and dedup, or pin `26.05` and carry
+   own copies. Recommend aligning (dedup is the point of Q3). Do **not**
+   promote a Maltego JVM layer — Maltego is dropped (§8), and fat-store layer
+   selection (§3.2) must be fixed first regardless.
 
-Home: `bin/nix-kasm-overlay/pkgs/<tool>/package.nix`, wired in `overlay.nix`
-(same pattern as the existing `profile_sync`/`kasmvnc` packages), so they
-inherit the overlay's `--override-input` nixpkgs pin and the eval-gate.
+### 3.4 Change-gating — reverse-dependency selection (rev 2 fix)
 
-- **`sublist3r`** — Python (`buildPythonApplication`, pinned upstream rev,
-  deps in nixpkgs: `requests`, `dnspython`, `argparse`).
-- **`metagoofil`** — Python; small, `googlesearch`/`requests` deps.
-- **`spiderfoot`** — Python, the heaviest. Upstream pins `lxml>=4.9,<5`;
-  the VM script hacks that cap out at build time for Python 3.13. In Nix we
-  take `lxml` from nixpkgs and relax the constraint in the derivation (no
-  runtime pip). Ships a `spiderfoot`/`sf.py` launcher; the web UI binds
-  `127.0.0.1:5001` (matches the Firefox bookmark).
-- **`phoneinfoga`** — Go (`buildGoModule`, vendored modhash). The only
-  non-Python of the four.
+**A review finding showed rev 1's update model is broken against the current
+tooling:**
 
-Each gets a smoke test in the profile (the tool answers `--help`/`version`),
-validated by kasm-nix-testbench (§8).
+- `ci-scripts/nix-changed-profiles.sh` maps an overlay change by
+  **directory name** (`pkgs/<x>/*` → app `<x>`) and hardcodes the
+  overlay-consuming app list as `chrome vivaldi`. A change under
+  `pkgs/spiderfoot/` would select a (non-existent) `spiderfoot` profile, and
+  never `tracelabs` — so the profile would not reliably rebuild/publish/scan.
+- `bin/nix-kasm-update` only implements `chrome-version-api`;
+  `github-releases:*` and `nix-update` deliberately `fail "not implemented
+  yet"` (`:177`).
 
-## 6. Desktop wiring
+Required before implementation:
 
-Distro-agnostic files baked into the image's wiring layer (not Nix):
+- **Reverse-dependency selection** derived from `nix-profiles.toml`: build a
+  map from each `kasm-overlay#<attr>` to every profile whose `pkgs`
+  reference it, so a change to `pkgs/phoneinfoga/` selects **every**
+  consuming profile (here, `tracelabs`). Replace the hardcoded `chrome
+  vivaldi` arm with this derived set.
+- **A defined cadence + owner per custom package** (§5) — these are
+  Python/Go apps with no version API; realistically a manual pin bump on a
+  documented schedule, or implement `github-releases` discovery honestly.
+  Do not claim automated discovery that isn't implemented.
+- **A test** proving a `phoneinfoga` pin change selects and rebuilds
+  `tracelabs` (not a `phoneinfoga` profile).
 
-- **Firefox** enterprise `policies.json` — telemetry off, strict tracking
-  protection, resistFingerprinting, sanitize-on-shutdown, geo/mic/camera
-  blocked, and the OSINT bookmarks toolbar (Shodan, Censys, crt.sh,
-  urlscan, VirusTotal, Wayback, HIBP, GreyNoise, OSINT Framework, Trace
-  Labs CTF, local SpiderFoot). Lifted from the upstream script.
-- **Brave** managed policy force-installing the Forensic-OSINT full-page
-  screenshot extension. Brave itself comes from the `brave` layer.
-- **Desktop**: OSINT tool icons, wallpaper, the Trace Labs
-  participant-guide PDF shortcut. Sourced from `tlosint-vm`'s
-  `kali-config/.../includes.chroot` equivalents (Debian 13 branch).
+### 3.5 Standalone image assembly + base variant
 
-No in-container updater, no `pkexec` desktop entry — updates come from the
-pipeline.
+Assembled by the existing per-app path (base + shared `[layers.*]` +
+`profile-tracelabs` delta + wiring + ENV), gated on the §7 startup contract.
+Published as `tracelabs-osint`.
 
-## 7. Registry integration
+**Base is independent of Trace Labs' Debian 13.** Their VM is Debian because
+their installer is apt/pipx/go/cargo; our tools come from nixpkgs with their
+own closures, so the host base is our free choice. **Recommend Resolute**
+(Ubuntu 26.04 multi-store, Kasm services also from Nix). But note (rev 2, a
+review finding): Nix removes libc/package-manager coupling, **not** all host
+coupling — apps still depend on the host kernel, user namespaces, seccomp,
+D-Bus, GPU devices, certificates, `/etc` integration and desktop services,
+so they will *not* necessarily behave identically across Noble/Resolute/
+Alpine/Fedora. Justify Resolute via an **early TraceLabs runtime spike**
+(does the full desktop + browsers + tor-browser actually launch on Resolute
+under the real seccomp profile), not glibc proximity — which is irrelevant
+when the closures are isolated. `amd64-only` for v1 (§8).
 
-New entry in `kasm-nix-registry`, flagged as a **full desktop** rather than
-a single-app launch (no `/tmp/launch_selections.json` app pick). Needs:
+## 4. The four overlay derivations
 
-- **seccomp `run_config`** — TraceLabs bundles multiple Chromium-family
-  browsers (chromium, brave) whose sandbox needs the clone/unshare syscall
-  set. The per-app seccomp profile must be the *union* of the browser
-  requirements, not the default-desktop profile. (See the
-  container-init/Chrome sandbox notes — bwrap/seccomp is a known launch
-  gotcha for Nix Chromium apps.)
-- **GPU** — browsers benefit from `nix-gpu-run`; the standalone image
-  carries the `[gpu]` layer like other browser apps, degrading to software
-  rendering when no GPU is allocated.
-- Pull creds / unsigned-registry conventions as per the existing registry.
+Home: `bin/nix-kasm-overlay/pkgs/<tool>/package.nix`, wired in `overlay.nix`,
+inheriting the overlay's nixpkgs pin and the eval-gate. Each gets an owner
+and a documented update cadence (§3.4) and a smoke test (§9).
 
-## 8. Update & assurance model
+- **`sublist3r`** — Python (`buildPythonApplication`; deps `requests`,
+  `dnspython` in nixpkgs).
+- **`metagoofil`** — Python; `googlesearch`/`requests`.
+- **`spiderfoot`** — Python, heaviest; take `lxml` from nixpkgs and relax the
+  upstream `<5` cap in the derivation (no runtime pip). Web UI binds
+  `127.0.0.1:5001`.
+- **`phoneinfoga`** — Go (`buildGoModule`, vendored modhash).
 
-Replaces the imperative "OSINT Updater":
+## 5. — (folded into §2/§4)
 
-- **Update** = bump the profile's ref in `nix-profiles.toml` (or let the
-  twice-daily updater move the overlay/fast-cadence pins), rebuild. The
-  eval-gate keeps a broken tool from shipping.
-- **Validation** = kasm-nix-testbench launches the workspace, exercises each
-  tool (the §5 smoke checks + browser launch + policy application), and
-  screenshot-baselines the desktop. This is the analogue of the upstream
-  script's built-in `validator()` — but external, reproducible, and gating.
-- **CVE posture** — the image is scanned by the existing `scan-nix` L3 path
-  and appears on the security page like any other catalog image; the OSINT
-  tools' closures are in the SBOM.
+## 6. — (folded into §7)
 
-## 9. Licensing / publishing
+## 7. Full-desktop startup & wiring contract (rev 2 — was missing)
 
-GPLv3 is acceptable to the requester and we will publish the build/package
-scripts. The overlay derivations (§5) and this profile definition are
-publishable; nothing here embeds secrets or proprietary bits. Trace Labs
-branding assets (participant guide, icons) ship under their existing terms —
-confirm redistribution is within Trace Labs' license before publishing the
-image publicly (their VM is openly distributed, so this is expected to be
-fine; flag for a quick check).
+**A review finding: the assembler skips a standalone image entirely if
+`src/ubuntu/install/nix/tracelabs/custom_startup.sh` is absent
+(`nix-crane-assemble:200`), and every existing `custom_startup.sh` is a
+single-application respawn loop** — wrong for a desktop of tools. The wiring
+layer accepts only `custom_startup.sh`, an optional `launch`, and the output
+of `post-build.sh` (`:102`). So we must define:
 
-## 10. Phasing
+### 7.1 custom_startup.sh — full-desktop, no auto-launch
+Not a respawn loop. Starts nothing on connect (the user opens tools from the
+XFCE menu / desktop entries). Honours `DISABLE_CUSTOM_STARTUP` and the
+`kasm_exec` contract for `docker exec` opens, but has no single `START_COMMAND`.
 
-- **Phase 1** — the four overlay derivations + the `tracelabs` profile with
-  the *nixpkgs-available* tools only; standalone image; fat-store exclude;
-  basic desktop wiring. Validate every tool launches. No layer promotion
-  yet (accept per-image duplication of the browser closures).
-- **Phase 2** — promote the heavy shared closures to `[layers.*]` (§4.2.3)
-  and confirm byte-identical dedup with the standalone browser images on the
-  registry (skopeo digest compare, same method as the fat↔app dedup check).
-- **Phase 3** — registry entry + seccomp/GPU run_config + testbench
-  baselines; publish.
+### 7.2 post-build.sh — installs the desktop experience
+Firefox `policies.json` + OSINT bookmarks; Brave managed policy (+ forced
+extension, §9); wallpaper; desktop entries + icons for every tool; the TL
+Vault seed payload staged into the default-profile skel.
 
-## 11. Open questions
+### 7.3 TL Vault seeding — new users only, never clobber a returning profile
+The vault seeds via the Kasm default-profile mechanism
+(`$HOME/kasm-default-profile`), which is copied into a **new** user home and
+left untouched for a returning (profile-synced) home. Explicit requirement:
+a returning investigator's edited vault must survive; the seed must not
+overwrite it. Validated in §9.
 
-- Base variant: **Resolute** recommended (§4.5) — confirm, or fall back to
-  Noble if Resolute isn't yet trusted for a shipped image.
-- Image/profile name: `tracelabs-osint` proposed. Confirm.
-- Which nixpkgs ref for the fast-moving browsers in this profile — follow
-  the catalog's `nixos-unstable` browser pins, or pin TraceLabs' browsers
-  to `nixos-26.05` for stability? (OSINT work values reproducibility;
-  leaning 26.05 with the self-hosted Chrome overlay excluded.)
-- Do we want the adjacent-tool superset (§3, maigret/holehe/amass/…) in v1,
-  or match the upstream script's exact list first and grow later?
-- Trace Labs branding redistribution check (§9).
+### 7.4 Service posture
+- **SpiderFoot** — user-launched via desktop entry (starts the web UI on
+  `127.0.0.1:5001`), *not* a supervised container-init service. State under
+  the user home so it persists.
+- **Tor** — no system `tor` daemon auto-started; `tor-browser` bundles and
+  manages its own tor. The `tor` CLI is available for tooling but idle by
+  default. If any tool needs the daemon, it gets writable state under the
+  user home, not `/var/lib/tor`.
+
+## 8. Licensing & architecture (rev 2 — corrected)
+
+- **Drop Maltego from v1.** nixpkgs marks it `unfree = true` /
+  `binaryNativeCode` (verified). Rev 1's "nothing here embeds proprietary
+  bits" was **false** with Maltego included, and there is no source to
+  satisfy a redistribution obligation. Revisit only with explicit licensing
+  + first-run approval.
+- **amd64-only for v1.** `tor-browser`'s nixpkgs platforms are
+  `x86_64-linux`/`i686-linux` only (verified) — an arm64 build fails to eval
+  it. Declare `platforms = ["amd64"]`; arm64 needs `tor-browser`
+  optionalized by architecture.
+- **Component-level redistribution/notice review required** — GPLv3 on the
+  Trace Labs *repo* does not settle terms for every bundled browser, binary
+  tool, the forced browser extension, or the TL documents/vault. Publishing
+  our derivations is also not automatically the complete
+  corresponding-source obligation for GPL packages. Do this review before
+  publishing the image publicly (browsers, the extension, and TL branding
+  assets specifically).
+
+## 9. Validation contract (rev 2 — expanded)
+
+`--help` checks catch packaging failures but not container-specific ones.
+kasm-nix-testbench acceptance matrix:
+
+- Every GUI app opens through its generated desktop entry.
+- Firefox **and** Brave policies are actually loaded by the *Nix-packaged*
+  browsers (about:policies / brave://policy).
+- Tor Browser connects successfully under the **real Kasm seccomp profile**.
+- SpiderFoot starts, answers on loopback, writes state to a persistent path.
+- Shodan works with no baked API key and documents user `shodan init`.
+- `nmap` has expected capabilities without extra container privileges.
+- TL Vault survives profile persistence and is seeded **only** for new users
+  (§7.3).
+- A **no-GPU** launch succeeds (software rendering).
+- **Failure of the `tracelabs` profile blocks its publication** (eval-gate /
+  the future skipped-security gate).
+
+**Forced Brave extension** (`jojaomahhndmeienhjihojidkddkahcn`) is downloaded
+and auto-updated at runtime, so it is **not in the image SBOM** and is an
+external code-update channel. Explicitly: accept-and-document, self-host/pin,
+or drop. Recommend documenting it in the security posture; consider dropping
+for v1 if the external-update channel is unacceptable.
+
+## 10. Update & assurance model
+
+Update = bump the profile/overlay refs, rebuild; eval-gate blocks a broken
+tool; testbench (§9) gates publication. CVE posture via the existing
+`scan-nix` L3 path + security page. Custom packages (§4) each have an owner
+and a documented manual-bump cadence until `github-releases` discovery is
+implemented (§3.4).
+
+## 11. Phasing
+
+- **Phase 0 (spike, gates the rest):** an early Resolute runtime spike —
+  build a minimal `tracelabs` profile (a couple of tools + one browser +
+  tor-browser), assemble the standalone image, and confirm the full XFCE
+  desktop + browsers + tor-browser launch under the real seccomp profile and
+  with no GPU. Validates §3.5's base assumption before committing.
+- **Phase 1:** the four overlay derivations (§4) with owners + tests; the
+  `tracelabs` profile at the recorded upstream commit (§2 inventory);
+  reverse-dependency change-gating (§3.4) with the phoneinfoga test;
+  `fat_store=false` (§3.2) with the invariant test; the startup/wiring
+  contract (§7) incl. TL Vault seeding.
+- **Phase 2:** browser-layer promotion with ref alignment (§3.3) + registry
+  dedup confirmation (skopeo digest compare).
+- **Phase 3:** registry entry + seccomp/GPU run_config + full §9 testbench
+  baselines; component licensing review (§8); publish.
+
+## 12. Settled choices (rev 2)
+
+- Resolute base, validated by the Phase-0 spike.
+- Image name `tracelabs-osint`.
+- v1 = exact tools-script inventory + TL Vault/Obsidian workflow; adjacent
+  tools + theHarvester/recon-ng in a later extension list.
+- amd64-only unless tor-browser is made architecture-conditional.
+- `fat_store = false` as declarative profile metadata, applied at every
+  fat-store construction point.
+- Same browser refs as the standalone profiles where layer reuse is desired.
+- No Maltego until licensing + first-run are explicitly approved.
+
+## 13. Open questions
+
+- Forced Brave extension: document-and-accept vs self-host vs drop for v1?
+- Browser ref: confirm aligning TraceLabs browsers to the standalone
+  `nixos-unstable` pins (for dedup) is acceptable, vs `26.05` stability with
+  no dedup.
+- Extension list contents/priority (theHarvester, recon-ng, maigret, …).
+- TL branding/vault redistribution terms (§8).
