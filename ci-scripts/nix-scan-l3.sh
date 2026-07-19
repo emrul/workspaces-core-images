@@ -128,23 +128,43 @@ GRYPE_CFG=""; VEX_RULES=0
 if [ -f "${VEX_FILE}" ]; then
   jq -e '.statements | type == "array"' "${VEX_FILE}" >/dev/null \
     || fail "VEX file ${VEX_FILE} is not valid OpenVEX (no statements array)"
+  jq -e '."@context" and ."@id" and .author and .timestamp' "${VEX_FILE}" >/dev/null \
+    || fail "VEX file missing required document fields (@context/@id/author/timestamp)"
   bad_status="$(jq -r '[.statements[].status]
     | map(select(. != "not_affected" and . != "affected" and . != "fixed" and . != "under_investigation"))
     | join(" ")' "${VEX_FILE}")"
   [ -z "${bad_status}" ] || fail "VEX file has non-OpenVEX status(es): ${bad_status}"
+  # Spec: a not_affected statement MUST carry a justification or impact
+  # statement; our adapter additionally needs products + subcomponent purls
+  # WITH versions (see the versioned-rule note below).
+  bad_shape="$(jq -r '.statements[]
+    | select(.status=="not_affected")
+    | select(
+        ((.justification // .impact_statement // "") == "")
+        or ((.products // []) | length == 0)
+        or ([.products[] | (.subcomponents // []) | length] | min // 0) == 0
+        or ([.products[].subcomponents[]."@id"
+             | test("^pkg:[^/]+/[^@]+@.+$") | not] | any)
+      )
+    | .vulnerability.name' "${VEX_FILE}")"
+  [ -z "${bad_shape}" ] || fail "VEX not_affected statement(s) missing justification/products/versioned subcomponent purls: ${bad_shape}"
   narrow="$(jq -r --arg cat "${VEX_CATALOG_PRODUCT}" '.statements[]
     | select(.status=="not_affected")
     | select([.products[]."@id"] | all(. == $cat) | not)
     | .vulnerability.name' "${VEX_FILE}")"
   [ -z "${narrow}" ] || fail "VEX statement(s) not catalog-scoped (grype ignore rules cannot express narrower products): ${narrow}"
+  # Rules are constrained to vulnerability + package name + EXACT version
+  # from the subcomponent purl — a name-only rule would keep suppressing
+  # every future version of the package long after the statement's basis
+  # (e.g. a specific backport) stopped applying.
   {
     echo "ignore:"
     jq -r '.statements[]
            | select(.status=="not_affected")
            | .vulnerability.name as $v
            | .products[].subcomponents[]."@id"
-           | capture("^pkg:[^/]+/(?<n>[^@]+)").n
-           | "  - vulnerability: \($v)\n    package:\n      name: \(.)"' "${VEX_FILE}"
+           | capture("^pkg:[^/]+/(?<n>[^@]+)@(?<ver>.+)$")
+           | "  - vulnerability: \($v)\n    package:\n      name: \(.n)\n      version: \(.ver)"' "${VEX_FILE}"
   } > "${WORK}/grype-vex.yaml" || fail "VEX→grype rule conversion failed"
   VEX_RULES="$(grep -c '^  - vulnerability:' "${WORK}/grype-vex.yaml" || true)"
   if [ "${VEX_RULES}" -gt 0 ]; then
