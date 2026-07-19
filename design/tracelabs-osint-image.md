@@ -1,22 +1,31 @@
 # Trace Labs OSINT — a Nix-pipeline workspace image
 
-Status: **draft for review, rev 3**. Owner: emrul. Requested 2026-07-19.
+Status: **draft for review, rev 4 — approved for the Phase-0 spike**. Owner:
+emrul. Requested 2026-07-19.
 
-Rev 3 (external review round 2, 8 findings, all verified against the code):
-the central correction is the **composition model** — TraceLabs is a thin
-unique profile plus wiring that declares the existing app profiles through
-`requires`, so their *existing* delta blobs are referenced unchanged by the
-standalone apps, the fat store, and the TraceLabs image (three-way blob
-reuse). This replaces rev 2's browser-promotion idea entirely. Rev 3 also
-specifies `requires` dependency propagation (selection, reverse-dependents,
-eval-gate key, scan union, composite provenance), per-profile base selection
-(Resolute for TraceLabs while the catalog stays Noble), a corrected
-fat-store completeness identity (`fatApps` vs `apps`), and real publication
-gating (candidate→test→promote, not the post-publish allow_failure
-testbench).
+Rev 4 (external review round 3): reviewer approves starting Phase 0 once the
+spike explicitly selects its required profiles. Absorbed: per-profile
+`app_base` is **mandatory in the same catalog/resolution pass** for
+production (a separate invocation could float `nixos-unstable` to a
+different commit and lose dedup — separate invocation is Phase-0-only); the
+fat-store `db.sqlite` is an allowed **registration superset** (metadata
+absence is defined narrowly — store/profiles/_meta.json/SBOM, not the DB);
+the **three dependency-graph sets** (`requestedRoots` / `buildProfiles` /
+`assembleApps`); composite provenance is **additive** (keep root
+store-path/rev labels, add `profile-set-digest`); a concrete
+**candidate→test→promote** sequence; and doc fixes (drop nmap, drop the
+eval-gate wording, §5 subheadings, launcher scope, concrete layer-digest
+compare). Also, owner decision mid-review: **Maltego is now included**
+(unfree in nix, but covered by the Kasm–Maltego partnership / existing
+`kasmweb/maltego`), added as a new `allowUnfree` catalog profile composed via
+`requires` — reversing rev 2's drop.
 
-Rev 2 closed review round 1 (product definition, change-gating, declarative
-`fat_store=false`, full-desktop startup contract, dropped Maltego, amd64-only).
+Rev 3 (review round 2) established the **composition model** — TraceLabs is a
+thin unique profile + wiring that declares the existing app profiles through
+`requires`, so their existing delta blobs are referenced unchanged by the
+standalone apps, the fat store, and the TraceLabs image (three-way reuse).
+Rev 2 closed review round 1 (product definition, change-gating,
+`fat_store=false`, startup contract, dropped Maltego, amd64-only).
 
 ## 1. Goal
 
@@ -56,10 +65,15 @@ defined as:
    (a defining part of the current VM), wallpaper, OSINT links, and the
    Firefox/Brave policies.
 
+**Deliberately included beyond the tools script:** **Maltego** (owner
+decision 2026-07-19). It is *not* in `tlosint-tools.sh`, but Kasm partners
+with Maltego and already ships `kasmweb/maltego`, so the unfree/redistribution
+concern that blocked it in earlier revs is settled by that partnership (§6).
+Recorded in the manifest as an intentional addition, not a tools-script tool.
+
 **Out of v1 core** (into a separately-approved *extension list*, not
-shipped until asked): `theharvester`, `recon-ng`, `maltego`, and the
-adjacent-tool superset (`maigret`, `holehe`, `amass`, …) — none are in the
-tools script. Maltego is additionally blocked on licensing (§6).
+shipped until asked): `theharvester`, `recon-ng`, and the adjacent-tool
+superset (`maigret`, `holehe`, `amass`, …) — none are in the tools script.
 
 **Deliverable: a manifest** (`design/tracelabs-manifest.tsv` or similar)
 with a row per tool: `upstream-source | v1-included? | mechanism | excluded-reason`,
@@ -74,6 +88,12 @@ The tools-script inventory, mapped to delivery mechanism, verified against
   `firefox-esr` recorded — §3.3), `brave`, `torbrowser`, `obsidian`. These
   are *not* listed in TraceLabs' `pkgs`; their existing delta blobs are
   referenced, giving the three-way dedup that is the whole point.
+- **New `maltego` catalog profile, also composed via `requires`:** added to
+  the catalog with `allowUnfree` (§6) so it becomes a first-class app that
+  dedups like the browsers — and gives Kasm a nix-native standalone Maltego
+  alongside the existing apt-based `kasmweb/maltego`. (Alternative if a
+  standalone nix Maltego isn't wanted yet: carry it in TraceLabs' own `pkgs`,
+  accepting no dedup. Recommend the catalog profile.)
 - **TraceLabs `pkgs` — from nixpkgs, unique to this profile:** `sherlock`,
   `sn0int`, `translate-shell` (`trans`), `exiftool`, `steghide`, `stegseek`,
   `tor` (CLI; not auto-started — §5.4), `python3Packages.shodan`.
@@ -142,10 +162,21 @@ partial and refuse to publish. Split the concepts:
 The completeness guard compares against `fatApps`. `build-nix-store-volume`
 emits both sets so the publisher can tell them apart.
 
+**The `db.sqlite` exception (rev 4).** TraceLabs' paths must stay *realized*
+in the staging store (its standalone image needs them), and the fat store
+copies the whole staging `db.sqlite` into its meta layer
+(`bin/build-nix-store-volume:787`). So the fat store's Nix DB **will**
+register TraceLabs paths even though their store files and profile symlink
+are excluded. We accept this as a **registration superset** rather than
+building a filtered DB (much cheaper, and it is exactly why the scanner
+already deletes `nix/var/nix/db` before syft — the phantom-path fix). "Absent
+from metadata" is therefore defined narrowly.
+
 **Invariant test (must land with the feature):** `tracelabs` is absent from
-fat-store store files, metadata, `_meta.json`, and the fat-store SBOM, and
-does **not** trip the completeness guard; the standalone `tracelabs-osint`
-image contains its closure and activates it.
+the fat store's `/store` files, `/var/nix/profiles` symlinks, `_meta.json`,
+and the fat-store SBOM, and does **not** trip the completeness guard;
+`db.sqlite` may register TraceLabs paths (not asserted absent there); the
+standalone `tracelabs-osint` image contains its closure and activates it.
 
 ### 3.3 Composition via `requires` — the dedup model (rev 3, central)
 
@@ -189,8 +220,10 @@ Two consequences:
 
 **No `[layers.*]` promotion, no Phase-2 promotion.** The existing profile
 deltas *are* the compositional units. Phase 2 becomes: **verify exact
-layer-digest reuse** across `tracelabs-osint:nix`, `firefox:nix`, and
-`nix-store:nix` (skopeo digest compare).
+layer-digest reuse** — `skopeo inspect --raw` each of `tracelabs-osint:nix`,
+`firefox:nix`, and `nix-store:nix`, and assert the `profile-firefox`
+`.layers[].digest` value is identical across all three manifests (compare the
+specific layer blob digests, **not** the overall image/manifest digest).
 
 **Product choice — Firefox ESR vs catalog Firefox.** Upstream requests
 `firefox-esr`; the catalog profile is `nixpkgs#firefox`
@@ -200,20 +233,42 @@ catalog `firefox`** and record the intentional deviation in the manifest
 (§2); the hardening policies (§5.2) apply to either build, so we keep the
 hardened-Firefox experience without a distinct blob.
 
-### 3.4 `requires` dependency propagation (rev 3)
+### 3.4 `requires` dependency propagation (rev 3, refined rev 4)
 
 `requires` works at *assembly* but only among profiles that were already
 selected and built (`expand_requires` restricts to built profiles,
 `bin/build-nix-store-volume:957`), and it does not propagate updates upward.
-Five gaps must close before this composes reliably:
 
-1. **Expand `requires` at selection**, before profile building — a build
-   selecting `tracelabs` must also select `firefox`/`chromium`/`obsidian`/…
-   (today a scoped build omits them and assembly warns + drops the layer,
-   `:298`).
-2. **Reverse-dependents on change** — a Firefox change must reassemble
-   TraceLabs. This extends rev 2's overlay reverse-map (the overlay reverse-map above, kept below)
-   to profile-level `requires`: `firefox → tracelabs`, not just
+**Three distinct graph sets (rev 4)** — naively expanding `selected.txt` to
+the forward closure would make a scoped TraceLabs build treat Firefox,
+Chromium and Obsidian as *independently requested outputs* (assembling,
+scanning and reporting each as a changed app). Keep them separate:
+
+- **`requestedRoots`** — what the user / change detector actually asked for.
+- **`buildProfiles`** — the forward `requires` closure needed to *build and
+  compose* those roots (browsers/obsidian for TraceLabs). Built, but not
+  reported as independently-changed apps.
+- **`assembleApps`** — changed roots **plus** reverse-dependents needing
+  restacking.
+
+The intended behaviours fall out of this:
+
+- **PhoneInfoga change** → build/reassemble TraceLabs; reuse unchanged
+  browser blobs.
+- **Firefox change** → rebuild Firefox and reassemble **both** Firefox and
+  TraceLabs (Firefox is a requested root *and* a reverse-dependency source).
+- **TraceLabs wiring change** → reassemble TraceLabs only.
+
+The five mechanisms that implement this:
+
+1. **Expand `requires` at selection into `buildProfiles`**, before profile
+   building — a build with `requestedRoots={tracelabs}` must also *build*
+   `firefox`/`chromium`/`obsidian`/… (today a scoped build omits them and
+   assembly warns + drops the layer, `:298`) — without adding them to
+   `requestedRoots`.
+2. **Reverse-dependents into `assembleApps`** — a Firefox change must
+   reassemble TraceLabs. Extends the overlay reverse-map (below) to
+   profile-level `requires`: `firefox → tracelabs`, not just
    `phoneinfoga → tracelabs`.
 3. **Eval-gate key must fold in `requires`** — `gate_input_key` hashes only
    the profile's own `pkgs` + rev + overlay sources
@@ -225,10 +280,14 @@ Five gaps must close before this composes reliably:
    results for TraceLabs would omit the browsers. (Syft/Grype scan the actual
    image, so the SBOM/CVE view stays complete; only the vulnix advisory is
    incomplete.) Scan `tracelabs ∪ requires`.
-5. **Composite provenance** — stamp TraceLabs with a digest over sorted
-   `profile=store-path` entries (its own + each required profile), not its
-   own profile store-path alone, so provenance reflects what actually
-   composes the image.
+5. **Composite provenance — additive, not replacing (rev 4).** Existing
+   consumers expect `dev.kasm.nix.store-path` / `dev.kasm.nix.rev` to
+   describe the **root** profile — keep them. **Add**
+   `dev.kasm.nix.profile-set-digest=<sha256>` (over the sorted
+   `profile=store-path` set: TraceLabs + each required profile), and put the
+   corresponding sorted `{profile: store-path}` map in the build report, so
+   the scanner/remediator can reconstruct the composed closure without losing
+   root-profile compatibility.
 
 **Overlay change-gating (carried from rev 2, still required):**
 `ci-scripts/nix-changed-profiles.sh` maps an overlay change by directory
@@ -244,30 +303,49 @@ a claimed-but-absent auto-discovery.
 layer digest, (4) the *same* digest appears in `firefox:nix` and
 `nix-store:nix`, (5) a `phoneinfoga` pin change selects+rebuilds `tracelabs`.
 
-### 3.5 Per-profile base selection (rev 3)
+### 3.5 Per-profile base selection — mandatory for production (rev 4)
 
 The assembler has one global app base (`APP_BASE_IMAGE=localhost/nix-ubuntu:dev`,
-`bin/build-nix-store-volume:37`), overridable only per whole run
-(`--app-base-image`). It cannot assemble ordinary apps on Noble and
-TraceLabs on Resolute in one catalog run. Options:
+`bin/build-nix-store-volume:37`), tagged to a single global staging ref
+(`base_ref=${REG_LOCAL}/nixbase:${APP_TAG}`, `bin/nix-crane-assemble:239`),
+overridable only per whole run. It cannot assemble Noble apps and a Resolute
+TraceLabs in one catalog run.
 
-- **Per-profile `app_base = "resolute"`** (clean long-term) — assembly and
-  change-gating map it to `localhost/nix-ubuntu-resolute:dev`, and a Resolute
-  base rebuild must propagate into TraceLabs reassembly (today
-  `NIX_BASE_REBUILT` only tracks the Noble/Ubuntu app base).
-- Build TraceLabs in a **separate invocation/job** with
-  `--app-base-image localhost/nix-ubuntu-resolute:dev`.
-- **Noble for v1**, defer Resolute.
+**Production must use per-profile `app_base` within the same catalog build
+and resolution pass** — this is settled, *not* an open choice (rev 4). The
+tempting "separate production invocation" is **rejected**: a second
+invocation resolves floating `nixos-unstable` at a possibly-different commit
+from the catalog build, giving TraceLabs a different Firefox closure and
+losing the three-way dedup that is the entire point. One build, one
+resolution.
 
-Recommend per-profile base selection as the target; for the Phase-0 spike a
-separate invocation is enough to prove it out. **Base is independent of
-Trace Labs' Debian 13** (their Debian is a consequence of their apt/pipx
-installer; our tools carry their own closures). But Nix removes only
-libc/package-manager coupling — apps still depend on host kernel, user
-namespaces, seccomp, D-Bus, GPU, certs, `/etc`, desktop services — so
-Resolute must be justified by the **Phase-0 runtime spike** (does the full
-desktop + browsers + tor-browser launch under the real seccomp profile),
-not glibc proximity. `amd64-only` for v1 (§6).
+```toml
+[profiles.tracelabs]
+app_base = "resolute"
+```
+
+Implementation:
+
+- a **per-base staging ref** (e.g. `nixbase-resolute:${APP_TAG}`) instead of
+  the single global `nixbase:${APP_TAG}` (`nix-crane-assemble:239`);
+- **base name + config digest in image provenance**;
+- reassembly propagation from a **Resolute** base rebuild to **Resolute
+  profiles only** (today `NIX_BASE_REBUILT` tracks only the Noble/Ubuntu app
+  base);
+- validation that Noble Firefox and Resolute TraceLabs share the identical
+  `profile-firefox` store-layer digest (§3.4 test).
+
+**Phase-0 exception:** a separate invocation is acceptable *for the spike
+only*, **provided the required profiles are explicitly selected and pinned to
+the same resolved revisions** as the catalog build (§9 Phase 0).
+
+**Base is independent of Trace Labs' Debian 13** (their Debian is a
+consequence of their apt/pipx installer; our tools carry their own closures).
+But Nix removes only libc/package-manager coupling — apps still depend on the
+host kernel, user namespaces, seccomp, D-Bus, GPU, certs, `/etc`, desktop
+services — so Resolute is justified by the **Phase-0 runtime spike** (does the
+full desktop + browsers + tor-browser launch under the real seccomp
+profile?), not glibc proximity. `amd64-only` for v1 (§6).
 
 ## 4. The four overlay derivations
 
@@ -292,17 +370,20 @@ single-application respawn loop** — wrong for a desktop of tools. The wiring
 layer accepts only `custom_startup.sh`, an optional `launch`, and the output
 of `post-build.sh` (`:102`). So we must define:
 
-### 7.1 custom_startup.sh — full-desktop, no auto-launch
+### 5.1 custom_startup.sh — full-desktop, no auto-launch
 Not a respawn loop. Starts nothing on connect (the user opens tools from the
 XFCE menu / desktop entries). Honours `DISABLE_CUSTOM_STARTUP` and the
 `kasm_exec` contract for `docker exec` opens, but has no single `START_COMMAND`.
 
-### 7.2 post-build.sh — installs the desktop experience
+### 5.2 post-build.sh — installs the desktop experience
 Firefox `policies.json` + OSINT bookmarks; Brave managed policy (+ forced
-extension, §7); wallpaper; desktop entries + icons for every tool; the TL
-Vault seed payload staged into the default-profile skel.
+extension, §7); wallpaper; the TL Vault seed payload staged into the
+default-profile skel; and desktop entries + icons **only for TraceLabs-unique
+CLI/web tools** (SpiderFoot, the overlay tools). The required GUI profiles
+(chromium/firefox/brave/torbrowser/obsidian) already contribute their own
+generated desktop entries via their profile layers — do not duplicate them.
 
-### 7.3 TL Vault seeding — new users only, never clobber a returning profile
+### 5.3 TL Vault seeding — new users only, never clobber a returning profile
 The vault seeds via the Kasm default-profile mechanism. Correct path (rev 3,
 `src/common/kasm-go/scripts/kasm-setup:73`): the seed lives at
 **`/home/kasm-default-profile`** (not `$HOME/kasm-default-profile`), so
@@ -314,7 +395,7 @@ a returning (profile-synced) home is left untouched. The §7 persistence test
 must exercise that exact mechanism (seed on first launch; edit; relaunch with
 a populated home; confirm the edit survives and the seed does not overwrite).
 
-### 7.4 Service posture
+### 5.4 Service posture
 - **SpiderFoot** — user-launched via desktop entry (starts the web UI on
   `127.0.0.1:5001`), *not* a supervised container-init service. State under
   the user home so it persists.
@@ -323,13 +404,21 @@ a populated home; confirm the edit survives and the seed does not overwrite).
   default. If any tool needs the daemon, it gets writable state under the
   user home, not `/var/lib/tor`.
 
-## 6. Licensing & architecture (rev 2 — corrected)
+## 6. Licensing & architecture (rev 4 — Maltego included)
 
-- **Drop Maltego from v1.** nixpkgs marks it `unfree = true` /
-  `binaryNativeCode` (verified). Rev 1's "nothing here embeds proprietary
-  bits" was **false** with Maltego included, and there is no source to
-  satisfy a redistribution obligation. Revisit only with explicit licensing
-  + first-run approval.
+- **Maltego — included (owner decision, rev 4).** nixpkgs marks it
+  `unfree = true` / `binaryNativeCode` (verified), so the build must set
+  `allowUnfree` (per-profile config or `NIXPKGS_ALLOW_UNFREE=1`) for the
+  `maltego` profile to evaluate. The redistribution concern that dropped it
+  in rev 2 is settled by the **Kasm–Maltego partnership** — Kasm already
+  ships `kasmweb/maltego` — so shipping a nix Maltego is within existing
+  terms. Two caveats to close before publish: (a) the actual Maltego EULA /
+  redistribution terms should be confirmed by the partnership owner (this
+  design records the *basis*, it does not itself adjudicate the EULA);
+  (b) Maltego CE requires an **account login / licensing step on first run**
+  — validated in §7, and it must not block a fresh desktop from starting.
+  Because it is `binaryNativeCode` there is no corresponding-source
+  obligation to us.
 - **amd64-only for v1.** `tor-browser`'s nixpkgs platforms are
   `x86_64-linux`/`i686-linux` only (verified) — an arm64 build fails to eval
   it. Declare `platforms = ["amd64"]`; arm64 needs `tor-browser`
@@ -353,12 +442,16 @@ kasm-nix-testbench acceptance matrix:
 - Tor Browser connects successfully under the **real Kasm seccomp profile**.
 - SpiderFoot starts, answers on loopback, writes state to a persistent path.
 - Shodan works with no baked API key and documents user `shodan init`.
-- `nmap` has expected capabilities without extra container privileges.
 - TL Vault survives profile persistence and is seeded **only** for new users
   (§5.3).
+- Maltego completes its first-run startup/licensing flow (account login) and
+  the desktop still starts cleanly for a user who skips it.
 - A **no-GPU** launch succeeds (software rendering).
-- **Failure of the `tracelabs` profile blocks its publication** (eval-gate /
-  the future skipped-security gate).
+- **Failure of the `tracelabs` profile is a hard publication failure** (§8) —
+  it must not silently skip while the pipeline goes green.
+
+(`nmap` is not in the v1 inventory — it lives in the §2 extension list, so it
+is not a v1 acceptance check.)
 
 **Forced Brave extension** (`jojaomahhndmeienhjihojidkddkahcn`) is downloaded
 and auto-updated at runtime, so it is **not in the image SBOM** and is an
@@ -377,16 +470,30 @@ Neither is true today (review finding, verified):
   `allow_failure: true`, fire-and-forget (`.gitlab-ci.yml:590`) — it cannot
   gate the tag it runs after.
 
-For a public TraceLabs release, the contract must be concrete:
+For a public TraceLabs release, the concrete order (rev 4) — the existing
+SBOM/signing jobs consume the *production* publish mapping and testbench runs
+*after* production publish today, so this gate must be inserted, not assumed:
+
+```
+build → scan → push CANDIDATE digest (candidate tag)
+      → synchronous testbench against the candidate
+      → promote the SAME manifest digest to :nix   (copy/tag, no rebuild)
+      → attach/sign SBOM + final image on the promoted digest
+```
 
 - **A requested-but-failed `tracelabs` profile is a HARD publication
-  failure** — not skipped. (This is a behaviour change in `nix-publish` for
-  `fat_store=false` desktop profiles: a desktop that failed to build must
-  not silently vanish from the run while the pipeline goes green.)
-- **candidate → test → promote**, or run the TraceLabs testbench check
-  **synchronously before** its production tag is published (build+push a
-  candidate tag, test it, promote to `:nix` on pass). "The future
-  skipped-security gate" is not a sufficient contract for this image.
+  failure** — not skipped (behaviour change in `nix-publish` for
+  `fat_store=false` desktop profiles: a desktop that failed to build must not
+  silently vanish while the pipeline goes green).
+- **Testbench failure OR infrastructure failure fails closed** for TraceLabs
+  (no promotion) — unlike the report-only catalog testbench.
+- **Promotion copies/tags the *tested* manifest digest** — it never rebuilds
+  (a rebuild could resolve differently and ship an untested artifact).
+- The final publication report **maps the tested candidate digest → the
+  production manifest**.
+- **Other catalog images keep their current flow** — this synchronous gate is
+  initially TraceLabs-specific, so we don't perturb the 40-odd single-app
+  images while proving it out.
 
 Update model: bump the profile/overlay refs, rebuild. CVE posture via the
 existing `scan-nix` L3 path (scanning the composed image — the union per
@@ -398,12 +505,16 @@ implemented.
 
 - **Phase 0 (spike, gates the rest):** an early Resolute runtime spike —
   a minimal `tracelabs` profile (a couple of unique tools) that
-  `requires = ["firefox","torbrowser"]`, assembled as a standalone image via
-  a separate `--app-base-image nix-ubuntu-resolute` invocation (§3.5), to
-  confirm: (a) the full XFCE desktop + composed browsers + tor-browser launch
+  `requires = ["firefox","torbrowser"]`. Because forward `requires` expansion
+  isn't implemented until Phase 1, **invoke the spike with all roots
+  explicit** — `--profile tracelabs --profile firefox --profile torbrowser` —
+  all pinned to the *same resolved revisions* as the catalog build (so the
+  dedup check is meaningful). A separate `--app-base-image
+  nix-ubuntu-resolute` invocation is acceptable **for the spike only** (§3.5).
+  Confirm: (a) the full XFCE desktop + composed browsers + tor-browser launch
   under the real seccomp profile with no GPU, and (b) the `profile-firefox`
-  layer digest in the spike image **equals** the standalone `firefox:nix`
-  digest (proves composition dedup before we build anything else).
+  layer blob digest in the spike image **equals** the standalone `firefox:nix`
+  layer digest (proves composition dedup before we build anything else).
 - **Phase 1:** the four overlay derivations (§4) with owners + tests; the
   full `tracelabs` profile with `requires` at the recorded upstream commit
   (§2 inventory); `requires` dependency propagation (§3.4: selection,
@@ -411,37 +522,49 @@ implemented.
   the Firefox-change test; `fat_store=false` + `fatApps`/`apps` split (§3.2)
   with the invariant test; the startup/wiring contract (§5) incl. correct TL
   Vault seeding.
-- **Phase 2:** per-profile `app_base` selection (§3.5) if not already done in
-  Phase 0; confirm exact layer-digest reuse across `tracelabs-osint:nix`,
-  `firefox:nix`, and `nix-store:nix` (skopeo). **No browser-layer promotion**
-  — composition already achieves the dedup.
+- **Phase 2:** per-profile `app_base` in the **same catalog/resolution pass**
+  (§3.5, mandatory for production — the Phase-0 separate invocation does not
+  ship); confirm exact `profile-firefox` layer-blob-digest reuse across
+  `tracelabs-osint:nix`, `firefox:nix`, and `nix-store:nix` (`skopeo inspect
+  --raw`, compare `.layers[].digest`). **No browser-layer promotion** —
+  composition already achieves the dedup.
 - **Phase 3:** registry entry + seccomp/GPU run_config + full §7 testbench
   baselines with real publication gating (§8: hard-fail on failed tracelabs
   profile, candidate→test→promote); component licensing review (§6); publish.
 
-## 10. Settled choices (rev 3)
+## 10. Settled choices (rev 4)
 
 - **Composition via `requires`, not layer promotion** — TraceLabs is a thin
   unique profile + wiring; `requires = [obsidian, chromium, firefox, brave,
   torbrowser]` references the existing profile delta blobs unchanged.
-- Resolute base (per-profile `app_base`), validated by the Phase-0 spike;
-  base differs from the catalog's Noble without breaking store-layer reuse.
+- **Per-profile `app_base = "resolute"` in the same catalog/resolution pass
+  is mandatory for production** (a separate invocation risks a different
+  `nixos-unstable` commit and loses dedup); separate invocation is
+  Phase-0-only. Base differs from the catalog's Noble without breaking
+  store-layer reuse.
 - Image name `tracelabs-osint`.
 - v1 = exact tools-script inventory + TL Vault/Obsidian workflow; adjacent
   tools + theHarvester/recon-ng in a later extension list.
 - amd64-only unless tor-browser is made architecture-conditional.
 - `fat_store = false` declarative metadata + `fatApps`/`apps` split, applied
-  at every fat-store construction point.
+  at every fat-store construction point; `db.sqlite` is an allowed
+  registration superset (absence asserted for store/profiles/_meta.json/SBOM,
+  not the DB).
+- Three graph sets — `requestedRoots` / `buildProfiles` / `assembleApps` —
+  so required profiles aren't reported as independently-changed apps.
+- Composite provenance is additive: keep root `store-path`/`rev`, add
+  `dev.kasm.nix.profile-set-digest` + the sorted profile→store-path map.
 - Reuse the catalog `firefox` profile (deviation from upstream `firefox-esr`
   recorded in the manifest) — a separate ESR profile would share nothing.
-- Real publication gating: a failed `tracelabs` profile is a hard failure;
-  candidate→test→promote (not the post-publish allow_failure testbench).
-- No Maltego until licensing + first-run are explicitly approved.
+- Real publication gating: hard-fail on a failed `tracelabs` profile;
+  `build → scan → candidate → synchronous testbench → promote digest →
+  attach/sign`, fail-closed, TraceLabs-specific initially.
+- **Maltego included** as a new `allowUnfree` catalog profile (owner
+  decision; Kasm–Maltego partnership, already ships `kasmweb/maltego`);
+  EULA confirmation + CE first-run login to close before publish.
 
 ## 11. Open questions
 
 - Forced Brave extension: document-and-accept vs self-host vs drop for v1?
 - Extension list contents/priority (theHarvester, recon-ng, maigret, …).
-- Per-profile `app_base` now vs a separate Resolute build invocation for v1
-  (both work; the former is the clean long-term answer).
 - TL branding/vault redistribution terms (§6).
