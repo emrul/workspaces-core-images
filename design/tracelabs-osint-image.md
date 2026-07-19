@@ -391,6 +391,19 @@ Not a respawn loop. Starts nothing on connect (the user opens tools from the
 XFCE menu / desktop entries). Honours `DISABLE_CUSTOM_STARTUP` and the
 `kasm_exec` contract for `docker exec` opens, but has no single `START_COMMAND`.
 
+**Panel gotcha (found in the Phase-0 spike, 2026-07-20).** `nix-activate`'s
+`apply_single_app_desktop()` swaps XFCE to the **no-panel** "single
+application" layout whenever *exactly one profile is active* — it counts
+active profiles, and TraceLabs ships as **one** active profile (its
+`requires` are composed into the image, not counted active). So a multi-tool
+desktop is misread as single-app and `xfce4-panel` is dropped → blank screen
+(WM + xfdesktop run, but no panel/menu). **Fix: set `NIX_SINGLE_APP_DESKTOP=0`**
+(the code's documented toggle) in the workspace's `run_config.environment`
+(done for the registry entry). Phase-1 improvement: have `nix-activate` treat
+a profile that declares itself a desktop (e.g. has `requires` + a desktop
+marker, or `fat_store=false` desktop profiles) as multi-app automatically, so
+the toggle isn't a per-workspace footgun.
+
 ### 5.2 post-build.sh — installs the desktop experience
 Firefox `policies.json` + OSINT bookmarks; Brave managed policy (+ forced
 extension, §7); wallpaper; the TL Vault seed payload staged into the
