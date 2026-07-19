@@ -79,6 +79,24 @@ stages:
   - test
   - maintenance
 
+# ── vex-lint: regression-test the VEX suppression gate ──────────────────────
+# nix-vex-lint.sh decides what the scanner HIDES; its rejection cases are
+# committed fixtures, verified whenever the gate, the fixtures, or the live
+# statement file change. Cheap (jq only), runs on the shell runner.
+vex-lint:
+  stage: prepare
+  needs: []
+  rules:
+    - if: '$NIX_GC == "1"'
+      when: never
+    - changes:
+        - ci-scripts/nix-vex-lint.sh
+        - ci-scripts/tests/vex-lint-test.sh
+        - ci-scripts/tests/vex/**
+        - security/vex/**
+  script:
+    - bash ci-scripts/tests/vex-lint-test.sh
+
 # ── prepare: change-gating → NIX_PROFILES dotenv ────────────────────────────
 prepare:
   stage: prepare
@@ -444,6 +462,13 @@ scan-nix:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
     - |
+      # SBOM identity kind: MR pipelines scan CANDIDATES (publish does not
+      # run for them) — their SBOMs must never carry the production ref.
+      if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+        SBOM_KIND=candidate
+      else
+        SBOM_KIND=published
+      fi
       bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/build-output:ro" \
@@ -452,7 +477,10 @@ scan-nix:
         -e NIX_PROFILES="$NIX_PROFILES" -e OUT_DIR=/artifacts -e DOCKER=podman \
         -e SCAN_MAX_APPS="${SCAN_MAX_APPS:-0}" -e SKIP_VULNIX="${SKIP_VULNIX:-0}" \
         -e SCAN_ALL="${SCAN_ALL:-0}" \
+        -e SBOM_KIND="$SBOM_KIND" \
         -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" \
+        -e CI_PIPELINE_ID="$CI_PIPELINE_ID" -e CI_JOB_ID="$CI_JOB_ID" \
+        -e CI_PROJECT_PATH="$CI_PROJECT_PATH" \
         -e CI_COMMIT_SHA="$CI_COMMIT_SHA" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         "$DIND_IMG" bash /work/ci-scripts/nix-scan-l3.sh

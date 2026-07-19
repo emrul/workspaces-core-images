@@ -123,63 +123,14 @@ VEX_FILE="${VEX_FILE:-/work/security/vex/kasm-nix.openvex.json}"
 # image. Suppression statuses per the OpenVEX spec: only not_affected (a
 # scanner false positive is not_affected + justification; "false_positive"
 # is not an OpenVEX status).
-VEX_CATALOG_PRODUCT="https://kasm-nix-registry.emrul.dev/catalog"
 GRYPE_CFG=""; VEX_RULES=0
+L3_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 if [ -f "${VEX_FILE}" ]; then
-  jq -e '.statements | type == "array"' "${VEX_FILE}" >/dev/null \
-    || fail "VEX file ${VEX_FILE} is not valid OpenVEX (no statements array)"
-  jq -e '."@context" and ."@id" and .author and .timestamp and (.version | type == "number")' "${VEX_FILE}" >/dev/null \
-    || fail "VEX file missing required document fields (@context/@id/author/timestamp/version)"
-  jq -e '[.statements[] | (.vulnerability.name // "") | length > 0] | all' "${VEX_FILE}" >/dev/null \
-    || fail "VEX statement(s) missing vulnerability.name"
-  bad_status="$(jq -r '[.statements[].status]
-    | map(select(. != "not_affected" and . != "affected" and . != "fixed" and . != "under_investigation"))
-    | join(" ")' "${VEX_FILE}")"
-  [ -z "${bad_status}" ] || fail "VEX file has non-OpenVEX status(es): ${bad_status}"
-  bad_just="$(jq -r '[.statements[]
-    | select(.status=="not_affected") | .justification // empty
-    | select(. != "component_not_present" and . != "vulnerable_code_not_present"
-         and . != "vulnerable_code_not_in_execute_path"
-         and . != "vulnerable_code_cannot_be_controlled_by_adversary"
-         and . != "inline_mitigations_already_exist")] | join(" ")' "${VEX_FILE}")"
-  [ -z "${bad_just}" ] || fail "VEX justification(s) outside the OpenVEX vocabulary: ${bad_just}"
-  # Spec: a not_affected statement MUST carry a justification or impact
-  # statement; our adapter additionally needs products + subcomponent purls
-  # WITH versions (see the versioned-rule note below).
-  bad_shape="$(jq -r '.statements[]
-    | select(.status=="not_affected")
-    | select(
-        ((.justification // .impact_statement // "") == "")
-        or ((.products // []) | length == 0)
-        or ([.products[] | (.subcomponents // []) | length] | min // 0) == 0
-        or ([.products[].subcomponents[]."@id"
-             | test("^pkg:[^/]+/[^@]+@.+$") | not] | any)
-      )
-    | .vulnerability.name' "${VEX_FILE}")"
-  [ -z "${bad_shape}" ] || fail "VEX not_affected statement(s) missing justification/products/versioned subcomponent purls: ${bad_shape}"
-  narrow="$(jq -r --arg cat "${VEX_CATALOG_PRODUCT}" '.statements[]
-    | select(.status=="not_affected")
-    | select([.products[]."@id"] | all(. == $cat) | not)
-    | .vulnerability.name' "${VEX_FILE}")"
-  [ -z "${narrow}" ] || fail "VEX statement(s) not catalog-scoped (grype ignore rules cannot express narrower products): ${narrow}"
-  # Rules are constrained to vulnerability + package name + EXACT version
-  # from the subcomponent purl — a name-only rule would keep suppressing
-  # every future version of the package long after the statement's basis
-  # (e.g. a specific backport) stopped applying. Version capture stops at
-  # purl qualifiers/subpath (?…/#…) so they can't leak into the grype rule;
-  # namespaced purls keep the full path as the name (grype's artifact.name
-  # for e.g. go modules is the full module path). This jq is a gate, not a
-  # purl parser — the remediator's draft_vex adapter validates with a real
-  # OpenVEX library before anything lands here.
-  {
-    echo "ignore:"
-    jq -r '.statements[]
-           | select(.status=="not_affected")
-           | .vulnerability.name as $v
-           | .products[].subcomponents[]."@id"
-           | capture("^pkg:[^/]+/(?<n>[^@]+)@(?<ver>[^?#]+)")
-           | "  - vulnerability: \($v)\n    package:\n      name: \(.n)\n      version: \(.ver)"' "${VEX_FILE}"
-  } > "${WORK}/grype-vex.yaml" || fail "VEX→grype rule conversion failed"
+  # All validation + rule emission lives in nix-vex-lint.sh (single source
+  # of truth, regression-tested against committed invalid fixtures by
+  # ci-scripts/tests/vex-lint-test.sh — this code controls suppression).
+  bash "${L3_DIR}/nix-vex-lint.sh" "${VEX_FILE}" > "${WORK}/grype-vex.yaml" \
+    || fail "VEX lint rejected ${VEX_FILE} (reason above)"
   VEX_RULES="$(grep -c '^  - vulnerability:' "${WORK}/grype-vex.yaml" || true)"
   if [ "${VEX_RULES}" -gt 0 ]; then
     GRYPE_CFG="${WORK}/grype-vex.yaml"
@@ -273,10 +224,18 @@ fi
 
 label() { "${DOCKER}" image inspect --format "{{ index .Config.Labels \"$2\" }}" "$1" 2>/dev/null || true; }
 
-# SBOM source identity = the PUBLISHED ref, not the local :dev build tag —
-# provenance and VEX product matching key on the name users actually pull.
-# Mirrors nix-publish.sh's kasm_name_for; falls back to the local ref when
-# REGISTRY_NS is unset (manual runs outside CI).
+# SBOM source identity — kind-aware (design review round 4: an MR pipeline
+# runs scan-nix but NOT publish, so naming its SBOM with the production ref
+# would forge provenance for an image that never ships):
+#   SBOM_KIND=published  → the registry ref users pull
+#                          ($REGISTRY_NS/<kasm_name>:<tag>, mirroring
+#                          nix-publish's mapping) — set by CI only on
+#                          pipelines where publish also runs
+#   SBOM_KIND=candidate  → unmistakable non-registry identity derived from
+#                          project + head SHA + profile (default: any MR
+#                          pipeline, or anywhere REGISTRY_NS is unset)
+# The report row carries the full artifact identity either way.
+SBOM_KIND="${SBOM_KIND:-candidate}"
 PROFILES_TOML="${PROFILES_TOML:-/work/bin/nix-profiles.toml}"
 kasm_name_for() {
   awk -v want="$1" '
@@ -291,6 +250,12 @@ pub_ref() {  # $1=scan name → published ref ("" when unresolvable)
   [ -n "${REGISTRY_NS:-}" ] || { echo ""; return; }
   if [ "$1" = "nix-store" ]; then echo "${REGISTRY_NS}/nix-store:${KASM_TAG:-nix}"
   else echo "${REGISTRY_NS}/$(kasm_name_for "$1"):${KASM_TAG:-nix}"; fi
+}
+sbom_ref() {  # $1=scan name → source identity per SBOM_KIND
+  local r="" sha="${CI_COMMIT_SHA:-unknown}"
+  if [ "${SBOM_KIND}" = "published" ]; then r="$(pub_ref "$1")"; fi
+  [ -n "${r}" ] || r="candidate/${CI_PROJECT_PATH:-local}@${sha:0:12}/nix-$1"
+  echo "${r}"
 }
 
 # ── one image: export → normalize → syft → grype → stats row ─────────────────
@@ -318,9 +283,9 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   # declared-dependency catalogers (lockfiles/manifests inside the rootfs
   # would inflate the inventory with software that isn't installed). The
   # nix cataloger is pinned by name so a tag-set change can't drop it.
-  # Source identity: the SBOM names the PUBLISHED image (falling back to
-  # the local ref) — provenance + VEX product matching depend on it.
-  local src_name; src_name="$(pub_ref "${name}")"; [ -n "${src_name}" ] || src_name="${img}"
+  # Source identity: kind-aware (published ref vs unmistakable candidate
+  # id) — provenance + VEX product matching depend on it.
+  local src_name; src_name="$(sbom_ref "${name}")"
   "${SYFT}" -q "dir:${d}/rootfs" \
       --override-default-catalogers image \
       --select-catalogers "+nix-cataloger" \
@@ -341,10 +306,20 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   local -a gargs=()
   [ -n "${GRYPE_CFG}" ] && gargs+=(-c "${GRYPE_CFG}")
   "${GRYPE}" -q "${gargs[@]}" "sbom:${SBOM_DIR}/${name}.syft.json" -o "json=${GRYPE_DIR}/${name}.grype.json" || return 1
-  # stats row (dedup CVEs by id; severity sets are unique-by-id too)
+  # stats row (dedup CVEs by id; severity sets are unique-by-id too).
+  # artifact = the explicit identity contract (design review round 4):
+  # kind candidate|published, the SBOM ref, the local config digest, and
+  # the producing commit/pipeline/job. The registry manifest_digest only
+  # exists after push — sbom-attach resolves it; consumers needing it join
+  # on ref+config_digest.
   jq -n --arg name "${name}" \
         --arg image "${img}" \
         --arg image_id "${image_id}" \
+        --arg kind "${SBOM_KIND}" \
+        --arg src "${src_name}" \
+        --arg sha_env "${CI_COMMIT_SHA:-}" \
+        --arg pipeline "${CI_PIPELINE_ID:-}" \
+        --arg job "${CI_JOB_ID:-}" \
         --arg store_path "$(label "${img}" dev.kasm.nix.store-path)" \
         --arg rev "$(label "${img}" dev.kasm.nix.rev)" \
         --argjson pkgs_total "$(jq '.artifacts|length' "${SBOM_DIR}/${name}.syft.json")" \
@@ -356,6 +331,8 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
         --argjson vexed "$(jq '[.ignoredMatches[]?.vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
         --argjson fixed_crit_raw "$(jq '[(.matches[],(.ignoredMatches[]?))|select(.vulnerability.severity=="Critical" and .vulnerability.fix.state=="fixed").vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
         '{name:$name,image:$image,image_id:$image_id,store_path:$store_path,rev:$rev,
+          artifact:{kind:$kind,ref:$src,config_digest:$image_id,
+                    source_commit:$sha_env,pipeline_id:$pipeline,scan_job_id:$job},
           packages:{total:$pkgs_total,nix:$pkgs_nix},
           cves:{unique:$cves,critical:$crit,high:$high,fixed_critical:$fixed_crit,
                 vexed:$vexed,fixed_critical_raw:$fixed_crit_raw}}' \

@@ -1,0 +1,27 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://kasm-nix-registry.emrul.dev/vex/kasm-nix.openvex.json",
+  "author": "kasm-nix image pipeline (emrul.islam@kasmweb.com)",
+  "timestamp": "2026-07-19T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "description": "Perl heap overflow; fixed upstream in 5.43.9 / 5.42.2-rc1 / 5.40.4-rc1"
+      },
+      "products": [
+        {
+          "@id": "https://kasm-nix-registry.emrul.dev/catalog",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/perl@5.42.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "nixpkgs applies the upstream fix as a source patch without a version bump: pkgs/development/interpreters/perl/interpreter.nix references CVE-2026-4176 on nixos-26.05 and nixos-unstable (backported via NixOS/nixpkgs PR #528021). The perl 5.42.0 shipped in these images is built from that patched expression, so the version-only match is a false positive. NOT valid for images built from nixos-25.05/25.11, which never received the backport — this statement was added together with the base ref bump to nixos-26.05."
+    }
+  ]
+}
