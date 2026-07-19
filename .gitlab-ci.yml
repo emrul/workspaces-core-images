@@ -523,6 +523,11 @@ security-page:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   script:
     - |
+      # Change-gated no-op pipelines (NIX_PROFILES=__none__) skip scan-nix's
+      # work — no report file means nothing scanned, nothing to publish.
+      if [ ! -f nix-scan-report.json ]; then
+        echo "no nix-scan-report.json this run — nothing scanned, skipping"; exit 0
+      fi
       sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w" "$DIND_IMG" \
         python3 /w/ci-scripts/nix-security-page.py /w/nix-scan-report.json /w/security.json
       if [ -f security.json ]; then
