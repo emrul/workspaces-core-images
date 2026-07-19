@@ -64,7 +64,7 @@ run() { if [[ "${DRY_RUN}" == 1 ]]; then echo "  DRY: $*"; else "$@"; fi; }
 # registry with no layer pull). Folds in the build-side sidecars written to
 # REPORT_DIR by the build stage (labels.json, closure-diffs.tsv, metrics.json).
 REPORT_DIR="${REPORT_DIR:-/root/.cache/nix-build-output}"
-RESULTS="${REPORT_DIR}/publish-results.tsv"        # profile\tkasm\tdest\tstatus\taction\trev\tver\tnewSP\tprevSP
+RESULTS="${REPORT_DIR}/publish-results.tsv"        # profile\tkasm\tdest\tstatus\taction\trev\tver\tnewSP\tprevSP\tcandCfg\tmanifest\tremoteCfg\tequivBasis
 mkdir -p "${REPORT_DIR}" 2>/dev/null || true
 # Fall back to a temp dir if the output mount isn't writable (standalone runs),
 # so a report-dir hiccup can never abort the publish under set -e.
@@ -78,6 +78,43 @@ fi
 # (skopeo; absent → empty, handled gracefully). Go templates → no jq needed.
 local_label()  { "${DOCKER}" image inspect --format "{{ index .Config.Labels \"$2\" }}" "$1" 2>/dev/null || true; }
 remote_label() { command -v skopeo >/dev/null 2>&1 && skopeo inspect --format "{{ index .Labels \"$2\" }}" "docker://$1" 2>/dev/null || true; }
+
+# Publication-mapping digests (design review round 5): scan-nix runs
+# concurrently with publish and only ever describes the local candidate
+# build, so THIS script is the sole source of truth for what actually
+# landed on the registry. Every row records:
+#   candidateConfigDigest  the local image ID (config digest) — the join key
+#                          back to the scan row's artifact.config_digest
+#   manifestDigest         the registry manifest digest (pushed: from
+#                          podman push --digestfile; content-identical skip:
+#                          resolved from the registry)
+#   remoteConfigDigest     the registry image's config digest (skip rows —
+#                          labels differ from the candidate even when the
+#                          rootfs is identical)
+#   equivalenceBasis       "pushed" (exact artifact) | "rootfs.diff_ids"
+#                          (content-identical skip) | "" (not published:
+#                          filtered out, failed, or partial)
+# Consumers (sbom-publish, security page, the remediator) promote a scan
+# row to "published" ONLY via this mapping — never from scan-side intent.
+local_config_digest()    { "${DOCKER}" image inspect --format '{{.Id}}' "$1" 2>/dev/null || true; }
+# push + capture the manifest digest. --digestfile is podman-only; under
+# docker fall back to a plain push (digest resolved as "" — consumers treat
+# a missing manifestDigest on a pushed row as resolvable-from-registry).
+push_dig=""
+push_and_digest() { # $1=dest → sets $push_dig
+  push_dig=""
+  if [[ "${DOCKER}" == *podman* ]]; then
+    run "${DOCKER}" push --digestfile "${REPORT_DIR}/.push-digest" "$1" || return 1
+    push_dig="$(cat "${REPORT_DIR}/.push-digest" 2>/dev/null || true)"; rm -f "${REPORT_DIR}/.push-digest"
+  else
+    run "${DOCKER}" push "$1" || return 1
+  fi
+}
+remote_manifest_digest() { command -v skopeo >/dev/null 2>&1 && skopeo inspect --format '{{.Digest}}' "docker://$1" 2>/dev/null || true; }
+remote_config_digest() {
+  command -v skopeo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
+  skopeo inspect --raw "docker://$1" 2>/dev/null | jq -r '.config.digest // empty' 2>/dev/null || true
+}
 
 # Classify by comparing published (prev) store-path to this build's (new).
 # Used for the human REPORT (which packages moved); the PUSH decision uses
@@ -112,8 +149,10 @@ content_state() { # $1=local-img $2=remote-ref
   [[ "${lo}" == "${re}" ]] && echo same || echo changed
 }
 
-# record <profile> <kasm> <dest> <status> <action> <rev> <ver> <newSP> <prevSP>
-record() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >> "${RESULTS}"; }
+# record <profile> <kasm> <dest> <status> <action> <rev> <ver> <newSP> <prevSP> \
+#        [candCfg] [manifestDigest] [remoteCfg] [equivBasis]
+# (printf pads missing trailing args with empty fields — rows are always 13 cols)
+record() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >> "${RESULTS}"; }
 
 _pkg_install() { # $1 = package; best-effort across the common managers
   { command -v microdnf >/dev/null 2>&1 && microdnf install -y "$1" >/dev/null 2>&1; } \
@@ -182,6 +221,8 @@ gen_json() {
      ($results | split("\n") | map(select(length>0)|split("\t"))
        | map({profile:.[0], kasmName:.[1], dest:.[2], status:.[3], action:.[4],
               rev:.[5], version:.[6], storePath:.[7], prevStorePath:.[8],
+              candidateConfigDigest:(.[9] // ""), manifestDigest:(.[10] // ""),
+              remoteConfigDigest:(.[11] // ""), equivalenceBasis:(.[12] // ""),
               changedPackages: ($D[.[0]].detail // null)})) as $imgs |
      {run:{gitSha:$gitSha, baseRef:($L.base.ref//null), baseRev:($L.base.rev//null),
            scope:$scope, baseAffected:$baseAffected, metrics:($metrics[0]//{})},
@@ -249,9 +290,11 @@ for img in "${imgs[@]}"; do
   new_sp="$(local_label "${img}" dev.kasm.nix.store-path)"
   new_rev="$(local_label "${img}" dev.kasm.nix.rev)"
   new_ver="$(local_label "${img}" org.opencontainers.image.version)"
+  cand_cfg="$(local_config_digest "${img}")"
   if ! in_filter "${profile}"; then
     echo "[nix-publish] ${profile}: skip (not in NIX_PROFILES)"
-    record "${profile}" "${kn}" "${dest}" skipped skipped "${new_rev}" "${new_ver}" "${new_sp}" ""
+    record "${profile}" "${kn}" "${dest}" skipped skipped "${new_rev}" "${new_ver}" "${new_sp}" "" \
+           "${cand_cfg}" "" "" ""
     continue
   fi
   # Compare against the currently-published image BEFORE we overwrite it.
@@ -266,19 +309,26 @@ for img in "${imgs[@]}"; do
   cstate="$(content_state "${img}" "${dest}")"
   if [[ "${cstate}" == "same" ]]; then
     echo "[nix-publish] ${profile} → ${dest}  [unchanged: layers identical] — skip push"
-    record "${profile}" "${kn}" "${dest}" unchanged skipped "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}"
+    # The registry keeps its older manifest (labels differ even when the
+    # rootfs is identical) — record the REMOTE digests so consumers can
+    # promote the candidate scan row to it under the stated equivalence.
+    record "${profile}" "${kn}" "${dest}" unchanged skipped "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}" \
+           "${cand_cfg}" "$(remote_manifest_digest "${dest}")" "$(remote_config_digest "${dest}")" "rootfs.diff_ids"
     continue
   fi
   # Layers differ but store-path matched ⇒ a wiring/base-layer change; surface
   # it as "updated" rather than the misleading "unchanged".
   [[ "${status_}" == "unchanged" ]] && status_=updated
   echo "[nix-publish] ${profile} → ${dest}  [${status_}: content ${cstate}]"
-  if run "${DOCKER}" tag "${img}" "${dest}" && run "${DOCKER}" push "${dest}"; then
+  if run "${DOCKER}" tag "${img}" "${dest}" && push_and_digest "${dest}"; then
     pushed=$((pushed+1)); action=pushed
+    record "${profile}" "${kn}" "${dest}" "${status_}" "${action}" "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}" \
+           "${cand_cfg}" "${push_dig}" "" "pushed"
   else
     echo "[nix-publish] WARN push failed: ${profile}" >&2; failed+=("${profile}"); action=failed; status_=failed
+    record "${profile}" "${kn}" "${dest}" "${status_}" "${action}" "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}" \
+           "${cand_cfg}" "" "" ""
   fi
-  record "${profile}" "${kn}" "${dest}" "${status_}" "${action}" "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}"
 done
 
 # Also publish the fat store-mount image (all profiles' Nix store in shared
@@ -321,13 +371,16 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
     fnew="$(local_label "${fat_local}" dev.kasm.nix.base-rev)"
     fprev="$(remote_label "${fat_dest}" dev.kasm.nix.base-rev)"
     fstat="$(classify "${fprev}" "${fnew}")"
+    fcfg="$(local_config_digest "${fat_local}")"
     echo "[nix-publish] fat store: ${fat_local} → ${fat_dest}  [base ${fstat}]"
-    if run "${DOCKER}" tag "${fat_local}" "${fat_dest}" && run "${DOCKER}" push "${fat_dest}"; then
-      pushed=$((pushed+1)); faction=pushed
+    if run "${DOCKER}" tag "${fat_local}" "${fat_dest}" && push_and_digest "${fat_dest}"; then
+      pushed=$((pushed+1)); faction=pushed; fbasis="pushed"
     else
       echo "[nix-publish] WARN fat store push failed" >&2; failed+=("nix-store"); faction=failed; fstat=failed
+      fbasis=""; push_dig=""
     fi
-    record "nix-store" "nix-store" "${fat_dest}" "${fstat}" "${faction}" "${fnew}" "" "${fnew}" "${fprev}"
+    record "nix-store" "nix-store" "${fat_dest}" "${fstat}" "${faction}" "${fnew}" "" "${fnew}" "${fprev}" \
+           "${fcfg}" "${push_dig}" "" "${fbasis}"
     fi
   else
     echo "[nix-publish] PUBLISH_FAT_STORE=1 but no localhost/nix-store-<arch>:dev found" >&2

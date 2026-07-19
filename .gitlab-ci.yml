@@ -462,12 +462,18 @@ scan-nix:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
     - |
-      # SBOM identity kind: MR pipelines scan CANDIDATES (publish does not
-      # run for them) — their SBOMs must never carry the production ref.
+      # Publish intent, NOT publication fact: scan-nix runs concurrently
+      # with publish (needs: [prepare, build]) and always scans the local
+      # candidate build — report rows are kind:candidate regardless. Intent
+      # only controls the SBOM source-name (the intended registry ref, so
+      # SBOMs attached post-push wear the name users pull) and the row's
+      # intended_ref join key. MR pipelines scan pure candidates (publish
+      # never runs for them) — their SBOMs must never carry the production
+      # ref. Publication truth = nix-build-report.json's per-image mapping.
       if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
-        SBOM_KIND=candidate
+        SBOM_PUBLISH_INTENT=0
       else
-        SBOM_KIND=published
+        SBOM_PUBLISH_INTENT=1
       fi
       bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
@@ -477,7 +483,7 @@ scan-nix:
         -e NIX_PROFILES="$NIX_PROFILES" -e OUT_DIR=/artifacts -e DOCKER=podman \
         -e SCAN_MAX_APPS="${SCAN_MAX_APPS:-0}" -e SKIP_VULNIX="${SKIP_VULNIX:-0}" \
         -e SCAN_ALL="${SCAN_ALL:-0}" \
-        -e SBOM_KIND="$SBOM_KIND" \
+        -e SBOM_PUBLISH_INTENT="$SBOM_PUBLISH_INTENT" \
         -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" \
         -e CI_PIPELINE_ID="$CI_PIPELINE_ID" -e CI_JOB_ID="$CI_JOB_ID" \
         -e CI_PROJECT_PATH="$CI_PROJECT_PATH" \
@@ -525,6 +531,8 @@ sbom-publish:
         -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
         -e COSIGN_PRIVATE_KEY="$COSIGN_PRIVATE_KEY" -e COSIGN_PASSWORD="$COSIGN_PASSWORD" \
         -e SBOM_BACKFILL="${SBOM_BACKFILL:-0}" -e OUT_DIR=/artifacts \
+        -e CI_COMMIT_SHA="$CI_COMMIT_SHA" -e CI_PIPELINE_ID="$CI_PIPELINE_ID" \
+        -e CI_JOB_ID="$CI_JOB_ID" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         "$DIND_IMG" bash /work/ci-scripts/nix-sbom-attach.sh
   artifacts:
@@ -532,6 +540,7 @@ sbom-publish:
     expire_in: 90 days
     paths:
       - sbom-attach-report.md
+      - sbom-attach-report.json
 
 # ── security-page: refresh the registry site's security.json ────────────────
 # Auto-updates https://kasm-nix-registry.emrul.dev/1.1/security.json after

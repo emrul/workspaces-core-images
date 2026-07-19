@@ -51,7 +51,12 @@ if [ "${SBOM_BACKFILL:-0}" = "1" ]; then
 else
   sel='.action=="pushed"'
 fi
-mapfile -t pushed < <(jq -r ".images[] | select(${sel}) | \"\(.profile)\t\(.dest)\"" "${REPORT}")
+# manifestDigest rides in from the publish mapping (nix-publish records it
+# via podman push --digestfile / registry resolution) — attaching to THAT
+# digest pins the exact artifact publish shipped, immune to the tag moving
+# between publish and this job. Empty (older reports, docker fallback,
+# backfill-skipped rows without one) → resolve from the registry below.
+mapfile -t pushed < <(jq -r ".images[] | select(${sel}) | \"\(.profile)\t\(.dest)\t\(.manifestDigest // \"\")\"" "${REPORT}")
 if [ "${#pushed[@]}" -eq 0 ]; then log "no images were pushed this run — nothing to attach"; exit 0; fi
 
 # pinned cosign (checksum-verified)
@@ -78,8 +83,13 @@ digest_of() {  # $1=repo-path $2=ref(tag or sha256-…) → sha256:… on stdout
 }
 
 rows=(); failed=(); nosbom=()
+JROWS="$(mktemp)"; : > "${JROWS}"
+jrow() {  # $1=profile $2=ref $3=manifest-digest $4=sbom-digest $5=result
+  jq -nc --arg p "$1" --arg r "$2" --arg d "$3" --arg s "$4" --arg res "$5" \
+    '{profile:$p, ref:$r, manifest_digest:$d, sbom_digest:$s, result:$res}' >> "${JROWS}"
+}
 for entry in "${pushed[@]}"; do
-  profile="${entry%%$'\t'*}"; dest="${entry#*$'\t'}"
+  IFS=$'\t' read -r profile dest rep_dig <<<"${entry}"
   repo_path="${dest#*/}"; repo_path="${repo_path%:*}"          # strip host + tag
   repo_ref="${dest%:*}"                                        # host/path (no tag)
   tag="${dest##*:}"
@@ -87,14 +97,19 @@ for entry in "${pushed[@]}"; do
   if [ ! -f "${sbom_gz}" ]; then
     log "WARN ${profile}: pushed but no SBOM artifact from this run (assembled earlier?) — skipping"
     nosbom+=("${profile}"); rows+=("| ${profile} | — | no-sbom |")
+    jrow "${profile}" "${dest}" "${rep_dig}" "" "no-sbom"
     continue
   fi
   gunzip -kf "${sbom_gz}"; sbom="${sbom_gz%.gz}"
-  dig="$(digest_of "${repo_path}" "${tag}")"
-  if [ -z "${dig}" ]; then log "ERROR ${profile}: cannot resolve digest for ${dest}"; failed+=("${profile}"); continue; fi
+  dig="${rep_dig:-$(digest_of "${repo_path}" "${tag}")}"
+  if [ -z "${dig}" ]; then
+    log "ERROR ${profile}: cannot resolve digest for ${dest}"; failed+=("${profile}")
+    jrow "${profile}" "${dest}" "" "" "no-digest"; continue
+  fi
   log "${profile}: attach+sign @ ${dig}"
   if ! "${COSIGN}" attach sbom --sbom "${sbom}" --type syft "${repo_ref}@${dig}"; then
-    log "ERROR ${profile}: cosign attach failed"; failed+=("${profile}"); continue
+    log "ERROR ${profile}: cosign attach failed"; failed+=("${profile}")
+    jrow "${profile}" "${dest}" "${dig}" "" "attach-failed"; continue
   fi
   hex="${dig#sha256:}"
   sbom_dig="$(digest_of "${repo_path}" "sha256-${hex}.sbom")"
@@ -103,8 +118,10 @@ for entry in "${pushed[@]}"; do
   [ -n "${sbom_dig}" ] && { "${COSIGN}" sign --key env://COSIGN_PRIVATE_KEY --tlog-upload=false --yes "${repo_ref}@${sbom_dig}" || ok=0; }
   if [ "${ok}" = 1 ]; then
     rows+=("| ${profile} | \`${dig}\` | attached+signed |")
+    jrow "${profile}" "${dest}" "${dig}" "${sbom_dig}" "attached+signed"
   else
     log "ERROR ${profile}: cosign sign failed"; failed+=("${profile}")
+    jrow "${profile}" "${dest}" "${dig}" "${sbom_dig}" "sign-failed"
   fi
   rm -f "${sbom}"
 done
@@ -119,7 +136,16 @@ done
   for r in "${rows[@]}"; do echo "${r}"; done
   if [ "${#failed[@]}" -gt 0 ]; then echo; echo "**FAILED:** ${failed[*]}"; fi
 } > "${OUT_DIR}/sbom-attach-report.md"
-[ -n "${HOST_UID:-}" ] && chown "${HOST_UID}:${HOST_GID:-$HOST_UID}" "${OUT_DIR}/sbom-attach-report.md" 2>/dev/null || true
+
+# Machine-readable companion (design review round 5): the per-image
+# {profile, ref, manifest_digest, sbom_digest, result} mapping consumers
+# join against — the Markdown above is for humans only.
+jq -s --arg sha "${CI_COMMIT_SHA:-}" --arg pipeline "${CI_PIPELINE_ID:-}" --arg job "${CI_JOB_ID:-}" \
+  '{source_commit:$sha, pipeline_id:$pipeline, job_id:$job, images:.}' \
+  "${JROWS}" > "${OUT_DIR}/sbom-attach-report.json"
+rm -f "${JROWS}"
+[ -n "${HOST_UID:-}" ] && chown "${HOST_UID}:${HOST_GID:-$HOST_UID}" \
+  "${OUT_DIR}/sbom-attach-report.md" "${OUT_DIR}/sbom-attach-report.json" 2>/dev/null || true
 
 log "done: attached=$(( ${#pushed[@]} - ${#failed[@]} - ${#nosbom[@]} )) no-sbom=${#nosbom[@]} failed=${#failed[@]} ${failed[*]:-}"
 [ "${#failed[@]}" -eq 0 ]

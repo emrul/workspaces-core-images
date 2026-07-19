@@ -224,18 +224,27 @@ fi
 
 label() { "${DOCKER}" image inspect --format "{{ index .Config.Labels \"$2\" }}" "$1" 2>/dev/null || true; }
 
-# SBOM source identity — kind-aware (design review round 4: an MR pipeline
-# runs scan-nix but NOT publish, so naming its SBOM with the production ref
-# would forge provenance for an image that never ships):
-#   SBOM_KIND=published  → the registry ref users pull
-#                          ($REGISTRY_NS/<kasm_name>:<tag>, mirroring
-#                          nix-publish's mapping) — set by CI only on
-#                          pipelines where publish also runs
-#   SBOM_KIND=candidate  → unmistakable non-registry identity derived from
-#                          project + head SHA + profile (default: any MR
-#                          pipeline, or anywhere REGISTRY_NS is unset)
-# The report row carries the full artifact identity either way.
-SBOM_KIND="${SBOM_KIND:-candidate}"
+# SBOM source identity — intent-aware, never publication-asserting (design
+# review rounds 4+5). Round 4: an MR pipeline runs scan-nix but NOT publish,
+# so naming its SBOM with the production ref would forge provenance for an
+# image that never ships. Round 5: scan-nix runs CONCURRENTLY with publish
+# (needs: [prepare, build]) and publish may skip or fail per image — so this
+# script can never truthfully claim "published" either. What it scans is by
+# definition the local candidate build; publication is proven downstream by
+# joining nix-build-report.json's per-image publication mapping (action +
+# digests) on intended_ref + config_digest.
+#   SBOM_PUBLISH_INTENT=1  → this pipeline also runs publish; the SBOM's
+#                            source-name is the intended registry ref
+#                            ($REGISTRY_NS/<kasm_name>:<tag>, mirroring
+#                            nix-publish's naming) so the SBOM that
+#                            sbom-publish attaches AFTER a successful push
+#                            wears the name users pull
+#   SBOM_PUBLISH_INTENT=0  → (default; MR pipelines, local runs) unmistakable
+#                            non-registry candidate identity from
+#                            project + head SHA + profile
+# Report rows always carry kind:"candidate" + ref (candidate id) +
+# intended_ref (the publish join key, null without intent).
+SBOM_PUBLISH_INTENT="${SBOM_PUBLISH_INTENT:-0}"
 PROFILES_TOML="${PROFILES_TOML:-/work/bin/nix-profiles.toml}"
 kasm_name_for() {
   awk -v want="$1" '
@@ -251,10 +260,14 @@ pub_ref() {  # $1=scan name → published ref ("" when unresolvable)
   if [ "$1" = "nix-store" ]; then echo "${REGISTRY_NS}/nix-store:${KASM_TAG:-nix}"
   else echo "${REGISTRY_NS}/$(kasm_name_for "$1"):${KASM_TAG:-nix}"; fi
 }
-sbom_ref() {  # $1=scan name → source identity per SBOM_KIND
-  local r="" sha="${CI_COMMIT_SHA:-unknown}"
-  if [ "${SBOM_KIND}" = "published" ]; then r="$(pub_ref "$1")"; fi
-  [ -n "${r}" ] || r="candidate/${CI_PROJECT_PATH:-local}@${sha:0:12}/nix-$1"
+cand_ref() {  # $1=scan name → the always-true candidate identity
+  local sha="${CI_COMMIT_SHA:-unknown}"
+  echo "candidate/${CI_PROJECT_PATH:-local}@${sha:0:12}/nix-$1"
+}
+sbom_ref() {  # $1=scan name → SBOM source-name (intended ref only with intent)
+  local r=""
+  if [ "${SBOM_PUBLISH_INTENT}" = "1" ]; then r="$(pub_ref "$1")"; fi
+  [ -n "${r}" ] || r="$(cand_ref "$1")"
   echo "${r}"
 }
 
@@ -307,15 +320,20 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   [ -n "${GRYPE_CFG}" ] && gargs+=(-c "${GRYPE_CFG}")
   "${GRYPE}" -q "${gargs[@]}" "sbom:${SBOM_DIR}/${name}.syft.json" -o "json=${GRYPE_DIR}/${name}.grype.json" || return 1
   # stats row (dedup CVEs by id; severity sets are unique-by-id too).
-  # artifact = the explicit identity contract (design review round 4):
-  # kind candidate|published, the SBOM ref, the local config digest, and
-  # the producing commit/pipeline/job. The registry manifest_digest only
-  # exists after push — sbom-attach resolves it; consumers needing it join
-  # on ref+config_digest.
+  # artifact = the explicit identity contract (design review rounds 4+5):
+  # kind is ALWAYS "candidate" — scan-nix runs concurrently with publish and
+  # publish may skip/fail per image, so publication is never asserted here.
+  # Promotion to "published" happens at consumers by joining nix-build-
+  # report.json's publication mapping (dest==intended_ref, matching
+  # candidateConfigDigest==config_digest, action pushed/skipped +
+  # equivalence basis). intended_ref is null on no-intent (MR/local) runs.
+  local iref=""
+  [ "${SBOM_PUBLISH_INTENT}" = "1" ] && iref="$(pub_ref "${name}")"
   jq -n --arg name "${name}" \
         --arg image "${img}" \
         --arg image_id "${image_id}" \
-        --arg kind "${SBOM_KIND}" \
+        --arg cref "$(cand_ref "${name}")" \
+        --arg iref "${iref}" \
         --arg src "${src_name}" \
         --arg sha_env "${CI_COMMIT_SHA:-}" \
         --arg pipeline "${CI_PIPELINE_ID:-}" \
@@ -331,7 +349,9 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
         --argjson vexed "$(jq '[.ignoredMatches[]?.vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
         --argjson fixed_crit_raw "$(jq '[(.matches[],(.ignoredMatches[]?))|select(.vulnerability.severity=="Critical" and .vulnerability.fix.state=="fixed").vulnerability.id]|unique|length' "${GRYPE_DIR}/${name}.grype.json")" \
         '{name:$name,image:$image,image_id:$image_id,store_path:$store_path,rev:$rev,
-          artifact:{kind:$kind,ref:$src,config_digest:$image_id,
+          artifact:{kind:"candidate",ref:$cref,
+                    intended_ref:(if $iref=="" then null else $iref end),
+                    sbom_source_name:$src,config_digest:$image_id,
                     source_commit:$sha_env,pipeline_id:$pipeline,scan_job_id:$job},
           packages:{total:$pkgs_total,nix:$pkgs_nix},
           cves:{unique:$cves,critical:$crit,high:$high,fixed_critical:$fixed_crit,
