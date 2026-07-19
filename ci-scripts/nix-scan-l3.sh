@@ -128,12 +128,21 @@ GRYPE_CFG=""; VEX_RULES=0
 if [ -f "${VEX_FILE}" ]; then
   jq -e '.statements | type == "array"' "${VEX_FILE}" >/dev/null \
     || fail "VEX file ${VEX_FILE} is not valid OpenVEX (no statements array)"
-  jq -e '."@context" and ."@id" and .author and .timestamp' "${VEX_FILE}" >/dev/null \
-    || fail "VEX file missing required document fields (@context/@id/author/timestamp)"
+  jq -e '."@context" and ."@id" and .author and .timestamp and (.version | type == "number")' "${VEX_FILE}" >/dev/null \
+    || fail "VEX file missing required document fields (@context/@id/author/timestamp/version)"
+  jq -e '[.statements[] | (.vulnerability.name // "") | length > 0] | all' "${VEX_FILE}" >/dev/null \
+    || fail "VEX statement(s) missing vulnerability.name"
   bad_status="$(jq -r '[.statements[].status]
     | map(select(. != "not_affected" and . != "affected" and . != "fixed" and . != "under_investigation"))
     | join(" ")' "${VEX_FILE}")"
   [ -z "${bad_status}" ] || fail "VEX file has non-OpenVEX status(es): ${bad_status}"
+  bad_just="$(jq -r '[.statements[]
+    | select(.status=="not_affected") | .justification // empty
+    | select(. != "component_not_present" and . != "vulnerable_code_not_present"
+         and . != "vulnerable_code_not_in_execute_path"
+         and . != "vulnerable_code_cannot_be_controlled_by_adversary"
+         and . != "inline_mitigations_already_exist")] | join(" ")' "${VEX_FILE}")"
+  [ -z "${bad_just}" ] || fail "VEX justification(s) outside the OpenVEX vocabulary: ${bad_just}"
   # Spec: a not_affected statement MUST carry a justification or impact
   # statement; our adapter additionally needs products + subcomponent purls
   # WITH versions (see the versioned-rule note below).
@@ -156,14 +165,19 @@ if [ -f "${VEX_FILE}" ]; then
   # Rules are constrained to vulnerability + package name + EXACT version
   # from the subcomponent purl — a name-only rule would keep suppressing
   # every future version of the package long after the statement's basis
-  # (e.g. a specific backport) stopped applying.
+  # (e.g. a specific backport) stopped applying. Version capture stops at
+  # purl qualifiers/subpath (?…/#…) so they can't leak into the grype rule;
+  # namespaced purls keep the full path as the name (grype's artifact.name
+  # for e.g. go modules is the full module path). This jq is a gate, not a
+  # purl parser — the remediator's draft_vex adapter validates with a real
+  # OpenVEX library before anything lands here.
   {
     echo "ignore:"
     jq -r '.statements[]
            | select(.status=="not_affected")
            | .vulnerability.name as $v
            | .products[].subcomponents[]."@id"
-           | capture("^pkg:[^/]+/(?<n>[^@]+)@(?<ver>.+)$")
+           | capture("^pkg:[^/]+/(?<n>[^@]+)@(?<ver>[^?#]+)")
            | "  - vulnerability: \($v)\n    package:\n      name: \(.n)\n      version: \(.ver)"' "${VEX_FILE}"
   } > "${WORK}/grype-vex.yaml" || fail "VEX→grype rule conversion failed"
   VEX_RULES="$(grep -c '^  - vulnerability:' "${WORK}/grype-vex.yaml" || true)"
@@ -259,6 +273,26 @@ fi
 
 label() { "${DOCKER}" image inspect --format "{{ index .Config.Labels \"$2\" }}" "$1" 2>/dev/null || true; }
 
+# SBOM source identity = the PUBLISHED ref, not the local :dev build tag —
+# provenance and VEX product matching key on the name users actually pull.
+# Mirrors nix-publish.sh's kasm_name_for; falls back to the local ref when
+# REGISTRY_NS is unset (manual runs outside CI).
+PROFILES_TOML="${PROFILES_TOML:-/work/bin/nix-profiles.toml}"
+kasm_name_for() {
+  awk -v want="$1" '
+    /^\[profiles\./ { cur=$0; sub(/^\[profiles\./,"",cur); sub(/\].*/,"",cur); name[cur]=cur }
+    /^[[:space:]]*kasm_name[[:space:]]*=/ && cur!="" {
+      v=$0; sub(/^[^"]*"/,"",v); sub(/".*/,"",v); name[cur]=v
+    }
+    END { print (want in name) ? name[want] : want }
+  ' "${PROFILES_TOML}" 2>/dev/null || echo "$1"
+}
+pub_ref() {  # $1=scan name → published ref ("" when unresolvable)
+  [ -n "${REGISTRY_NS:-}" ] || { echo ""; return; }
+  if [ "$1" = "nix-store" ]; then echo "${REGISTRY_NS}/nix-store:${KASM_TAG:-nix}"
+  else echo "${REGISTRY_NS}/$(kasm_name_for "$1"):${KASM_TAG:-nix}"; fi
+}
+
 # ── one image: export → normalize → syft → grype → stats row ─────────────────
 scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   local name="$1" img="$2" symlinks="$3"
@@ -284,12 +318,13 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   # declared-dependency catalogers (lockfiles/manifests inside the rootfs
   # would inflate the inventory with software that isn't installed). The
   # nix cataloger is pinned by name so a tag-set change can't drop it.
-  # Source identity: the SBOM must name the image, not the temp export dir
-  # (provenance + VEX product matching depend on it).
+  # Source identity: the SBOM names the PUBLISHED image (falling back to
+  # the local ref) — provenance + VEX product matching depend on it.
+  local src_name; src_name="$(pub_ref "${name}")"; [ -n "${src_name}" ] || src_name="${img}"
   "${SYFT}" -q "dir:${d}/rootfs" \
       --override-default-catalogers image \
       --select-catalogers "+nix-cataloger" \
-      --source-name "${img}" \
+      --source-name "${src_name}" \
       --source-version "${image_id}" \
       -o "syft-json=${SBOM_DIR}/${name}.syft.json" \
       -o "cyclonedx-json=${SBOM_DIR}/${name}.cdx.json" || return 1

@@ -452,6 +452,7 @@ scan-nix:
         -e NIX_PROFILES="$NIX_PROFILES" -e OUT_DIR=/artifacts -e DOCKER=podman \
         -e SCAN_MAX_APPS="${SCAN_MAX_APPS:-0}" -e SKIP_VULNIX="${SKIP_VULNIX:-0}" \
         -e SCAN_ALL="${SCAN_ALL:-0}" \
+        -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" \
         -e CI_COMMIT_SHA="$CI_COMMIT_SHA" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         "$DIND_IMG" bash /work/ci-scripts/nix-scan-l3.sh
@@ -543,34 +544,6 @@ security-page:
     expire_in: 30 days
     paths:
       - security.json
-
-# ── sbom-attach-test: THROWAWAY registry capability test ────────────────────
-# design/cve-scanning.md § 7 step 2 item 4 — exercises cosign attach/discover/
-# download/sign/verify with the job token against a scratch repo (sbom-spike)
-# in this project's registry; no app repos touched, contents synthetic.
-# Trigger: web pipeline with SBOM_ATTACH_TEST=1. Remove once the real SBOM
-# pipeline lands.
-sbom-attach-test:
-  stage: scan
-  needs: []
-  rules:
-    - if: '$NIX_GC == "1"'
-      when: never
-    - if: '$SBOM_ATTACH_TEST == "1"'
-  script:
-    - |
-      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
-        -v "$CI_PROJECT_DIR:/work:ro" \
-        -v "$CI_PROJECT_DIR:/artifacts" \
-        -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
-        -e REGISTRY_NS="$REGISTRY_NS" -e OUT_DIR=/artifacts \
-        -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
-        "$DIND_IMG" bash /work/ci-scripts/sbom-attach-test.sh
-  artifacts:
-    when: always
-    expire_in: 30 days
-    paths:
-      - sbom-attach-test.md
 
 # ── testbench: post-publish app assurance (downstream pipeline) ──────────────
 # Fire-and-forget trigger of kasm-nix-testbench: it fetches this pipeline's
