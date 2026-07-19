@@ -411,7 +411,7 @@ scan-base:
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -v "$CI_PROJECT_DIR:/artifacts" \
-        -e NIX_BASES="$NIX_BASES" -e S3_BUCKET="$S3_BUCKET" \
+        -e NIX_BASES="$NIX_BASES" -e S3_BUCKET="${S3_BUCKET:-}" \
         -e OUT_DIR=/artifacts -e DOCKER=podman \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         "$DIND_IMG" bash /work/ci-scripts/nix-scan-base.sh

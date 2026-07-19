@@ -25,7 +25,9 @@
 #   DOCKER      container CLI (default: podman) — also the trivy --image-src
 #   OUT_DIR     where to drop the JUnit XML (default: /artifacts)
 #   TRIVY_HOME  writable trivy binary dir (default: /tmp/trivy; /work is ro)
-#   S3_BUCKET   trivy download bucket (consumed by ci-scripts/download-trivy)
+#   S3_BUCKET   trivy download bucket (consumed by ci-scripts/download-trivy);
+#               UNSET in this sandbox project → pinned GitHub release instead
+#   TRIVY_VERSION  release used by the GitHub fallback (checksum-verified)
 #   HOST_UID/HOST_GID  chown reports back to the runner UID (root writes them)
 set -uo pipefail
 
@@ -50,9 +52,35 @@ in_filter() { [ -z "${FILTER}" ] && return 0; local x; for x in ${FILTER}; do [ 
 command -v curl >/dev/null 2>&1 || { echo "[nix-scan-base] installing curl"; dnf install -y --setopt=install_weak_deps=False curl >/dev/null 2>&1 || true; }
 
 mkdir -p "${OUT_DIR}"
-# Trivy binary in a writable home (/work is ro). download-trivy honours TRIVY_HOME.
+# Trivy binary in a writable home (/work is ro). Two sources:
+#   S3_BUCKET set   → upstream Kasm mirror via ci-scripts/download-trivy
+#   S3_BUCKET unset → pinned, checksum-verified official GitHub release
+#                     (this sandbox project defines no S3_BUCKET CI variable —
+#                     the first non-empty run died on it, pipeline 2688148353)
+TRIVY_VERSION="${TRIVY_VERSION:-0.72.0}"
 if [ ! -x "${TRIVY_HOME}/trivy" ]; then
-  ( cd "${SCRIPT_DIR}" && bash download-trivy )
+  if [ -n "${S3_BUCKET:-}" ]; then
+    ( cd "${SCRIPT_DIR}" && bash download-trivy )
+  else
+    echo "[nix-scan-base] fetching trivy ${TRIVY_VERSION} from GitHub releases (no S3_BUCKET)"
+    case "$(uname -m)" in
+      x86_64)  t_arch="64bit" ;;
+      aarch64) t_arch="ARM64" ;;
+      *) echo "[nix-scan-base] unsupported arch $(uname -m)" >&2; exit 1 ;;
+    esac
+    t_tgz="trivy_${TRIVY_VERSION}_Linux-${t_arch}.tar.gz"
+    t_url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+    curl -fsSLo "/tmp/${t_tgz}" "${t_url}/${t_tgz}" || exit 1
+    curl -fsSLo /tmp/trivy_checksums.txt "${t_url}/trivy_${TRIVY_VERSION}_checksums.txt" || exit 1
+    ( cd /tmp && grep " ${t_tgz}\$" trivy_checksums.txt | sha256sum -c - >/dev/null ) || {
+      echo "[nix-scan-base] trivy checksum verification FAILED" >&2; exit 1; }
+    mkdir -p "${TRIVY_HOME}/contrib"
+    tar -C "${TRIVY_HOME}" -xzf "/tmp/${t_tgz}" trivy
+    # The scan wrapper expects the JUnit template at $TRIVY_HOME/contrib/;
+    # download-trivy stages the in-repo copy the same way.
+    cp "${SCRIPT_DIR}/junit.tpl" "${TRIVY_HOME}/contrib/"
+    echo "[nix-scan-base] using trivy $("${TRIVY_HOME}/trivy" --version | head -1)"
+  fi
 fi
 
 scanned=0; missing=0; failed=()
