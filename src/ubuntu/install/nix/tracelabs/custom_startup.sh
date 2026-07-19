@@ -44,8 +44,34 @@ kasm_exec() {
     fi
 }
 
+# Ensure the XFCE panel (taskbar + Applications menu + launchers) is running.
+# WHY THIS IS HERE: nix-activate's apply_single_app_desktop() applies the
+# NO-PANEL "single application" XFCE layout whenever exactly one profile is
+# active — and TraceLabs ships as one active profile (its requires= are
+# composed into the image, not counted active), so the session comes up with
+# no panel → a blank desktop. The documented toggle NIX_SINGLE_APP_DESKTOP=0
+# only works if it's set BEFORE nix-activate (Before=window-manager.service),
+# which neither Kasm's run_config env nor a post-boot export reliably achieve.
+# So we start the panel here (custom-startup.service runs after the WM). This
+# is boot-timing-independent and idempotent: if the full-desktop session
+# already started a panel, pgrep skips it (no double panel).
+ensure_desktop_shell() {
+    export DISPLAY="${DISPLAY:-:1}"
+    if pgrep -x xfce4-panel >/dev/null 2>&1; then
+        echo "[tracelabs] xfce4-panel already running"
+        return 0
+    fi
+    if command -v xfce4-panel >/dev/null 2>&1; then
+        echo "[tracelabs] starting xfce4-panel (single-app layout dropped it)"
+        (xfce4-panel >/tmp/tracelabs-panel.log 2>&1 &)
+    else
+        echo "[tracelabs] WARN xfce4-panel not found on PATH" >&2
+    fi
+}
+
 kasm_startup() {
-    # Full desktop: launch nothing. Optionally open a landing URL once.
+    ensure_desktop_shell
+    # Full desktop: launch no app. Optionally open a landing URL once.
     local url="${KASM_URL:-$LAUNCH_URL}"
     if [ -z "$DISABLE_CUSTOM_STARTUP" ] && [ -n "$url" ]; then
         /usr/bin/filter_ready
