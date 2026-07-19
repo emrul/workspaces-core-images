@@ -235,6 +235,14 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   mkdir -p "${d}/rootfs/nix"
   mv "${d}/rootfs/store" "${d}/rootfs/nix/store"
   mv "${d}/rootfs/var"   "${d}/rootfs/nix/var"
+  # Drop the nix DB from the scan view: syft's nix cataloger catalogues every
+  # path REGISTERED in db.sqlite, and the fat store ships the staging volume's
+  # db — which registers old-generation paths whose store dirs are NOT in the
+  # image. Result: phantom packages/CVEs (2688148353's fat row showed 25.05
+  # freerdp/openssl "present" post-bump, all attributed to db.sqlite). The
+  # spike proved dir enumeration alone gives full coverage; the SBOM must
+  # reflect shipped store dirs only.
+  rm -rf "${d}/rootfs/nix/var/nix/db"
   # IMAGE cataloger set, not the dir: defaults — directory scans enable
   # declared-dependency catalogers (lockfiles/manifests inside the rootfs
   # would inflate the inventory with software that isn't installed). The
