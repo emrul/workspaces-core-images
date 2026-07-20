@@ -196,6 +196,25 @@ status "RUNNING build ${started_at}"
 echo "[driver] exec: bin/build-nix-store-volume ${args[*]}"
 bash bin/build-nix-store-volume "${args[@]}"
 
+# ── 3b. end-of-build reclaim — free THIS build's transient cache so the
+# DOWNSTREAM jobs start with headroom. scan-nix needs ~40G export scratch and
+# publish needs to git-checkout; both are separate jobs that run AFTER this one
+# on the same store, and neither GCs. The start-of-build prune (1b) only clears
+# the PREVIOUS run's churn — this build's fresh ~89G of `podman build` cache
+# otherwise sits full through scan/publish (the recurring "No space left on
+# device" at their git-checkout). Cache-ONLY, mirroring 1b's proven-safe set:
+# dangling layers + build cache + throwaway crane staging volumes. KEEP every
+# localhost/nix-*:dev (per-app + fat store + resolute — scan/publish consume them)
+# and nix-build-stage-* (the Nix cache). NOT the full nix-gc, which drops the :dev
+# images the very next jobs need.
+echo "[driver] end-of-build reclaim: free before=$(freeG)G"
+podman image prune -f >/dev/null 2>&1 || true
+podman builder prune -f >/dev/null 2>&1 || true
+for v in $(podman volume ls --format '{{.Name}}' 2>/dev/null | grep -vE '^nix-build-stage-'); do
+  podman volume rm "$v" >/dev/null 2>&1 || true
+done
+echo "[driver] end-of-build reclaim: free after=$(freeG)G (kept :dev images + Nix cache for scan/publish)"
+
 t_end="$(date +%s 2>/dev/null || echo 0)"
 disk_after="$(freeG)"
 podman system df 2>/dev/null > "$OUT/podman-df-after.txt" || true
