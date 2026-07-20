@@ -1,6 +1,6 @@
 # Trace Labs OSINT — a Nix-pipeline workspace image
 
-Status: **draft for review, rev 5 — approved for the Phase-0 spike**. Owner:
+Status: **draft for review, rev 6 — approved for the Phase-0 spike**. Owner:
 emrul. Requested 2026-07-19.
 
 Rev 4 (external review round 3): reviewer approves starting Phase 0 once the
@@ -208,7 +208,7 @@ they dedupe by blob digest across all three manifests. The configuration is:
 kasm_name = "tracelabs-osint"
 fat_store = false
 platforms = ["amd64"]
-app_base  = "resolute"            # §3.5
+# Built on the single-store Noble base (default) — NOT Resolute (§3.5).
 pkgs = [ # TraceLabs-only: the 4 overlay derivations + CLI tools not shared
          # with any other profile (sherlock, sn0int, exiftool, steghide, …)
          # + maltego (unfree; TraceLabs-only, not a standalone/fat profile — §6)
@@ -229,10 +229,10 @@ Two consequences:
   literally the catalog `firefox` profile at its `nixos-unstable` pin — same
   store paths, same blob, guaranteed dedup. There is no separate TraceLabs
   browser pin to keep aligned (rev 2's contradiction dissolves).
-- **The base may differ without breaking store-layer reuse.** The
-  `profile-firefox/store` COPY layer is independent of the `FROM` base
-  image; TraceLabs on Resolute and standalone Firefox on Noble share the
-  identical profile-store blob — only the base-OS layers differ (§3.5).
+- **Same base as the catalog (Noble) → maximal layer reuse.** TraceLabs
+  builds on the same single-store Noble base as the standalone apps and the
+  fat store (§3.5), so it shares not just the `profile-firefox` blob but the
+  base-OS layers too — the ideal dedup case.
 
 **No `[layers.*]` promotion, no Phase-2 promotion.** The existing profile
 deltas *are* the compositional units. Phase 2 becomes: **verify exact
@@ -319,49 +319,33 @@ a claimed-but-absent auto-discovery.
 layer digest, (4) the *same* digest appears in `firefox:nix` and
 `nix-store:nix`, (5) a `phoneinfoga` pin change selects+rebuilds `tracelabs`.
 
-### 3.5 Per-profile base selection — mandatory for production (rev 4)
+### 3.5 Base = Noble (single-store), NOT Resolute — corrected rev 6
 
-The assembler has one global app base (`APP_BASE_IMAGE=localhost/nix-ubuntu:dev`,
-`bin/build-nix-store-volume:37`), tagged to a single global staging ref
-(`base_ref=${REG_LOCAL}/nixbase:${APP_TAG}`, `bin/nix-crane-assemble:239`),
-overridable only per whole run. It cannot assemble Noble apps and a Resolute
-TraceLabs in one catalog run.
+**Rev 4 recommended Resolute (multi-store). That was wrong — proven in the
+Phase-0 spike (2026-07-20).** The per-app assembly bakes `/nix/store -> /store`
+(the single-store convention). The Resolute base is **multi-store**: it unions
+`/nix-stores/*` into `/nix` at boot via `nix-compose`. The two collide — in the
+spike image, `/nix/store` ended up a **dangling symlink** into a random
+`libpsl` store dir, so the composed store never contained the profile paths:
+the tool binaries were present at `/store/…-sherlock` but unreachable via
+`/nix/store`, the profiles resolved to garbage, and **none of the OSINT tools
+were accessible** (empty menu/PATH) even though the desktop rendered.
 
-**Production must use per-profile `app_base` within the same catalog build
-and resolution pass** — this is settled, *not* an open choice (rev 4). The
-tempting "separate production invocation" is **rejected**: a second
-invocation resolves floating `nixos-unstable` at a possibly-different commit
-from the catalog build, giving TraceLabs a different Firefox closure and
-losing the three-way dedup that is the entire point. One build, one
-resolution.
+So a **per-app-assembled desktop must build on the single-store Noble base**
+(`localhost/nix-ubuntu:dev`) — the same base the entire catalog uses, where
+`/nix/store -> /store` works cleanly. Noble ships the same XFCE desktop, so
+the desktop experience is identical; the desktop-mode fix (§5.1) + default
+seccomp (§6) make it render like the plain desktop. There is **no per-profile
+`app_base` and no Resolute** for TraceLabs.
 
-```toml
-[profiles.tracelabs]
-app_base = "resolute"
-```
-
-Implementation:
-
-- a **per-base staging ref** (e.g. `nixbase-resolute:${APP_TAG}`) instead of
-  the single global `nixbase:${APP_TAG}` (`nix-crane-assemble:239`);
-- **base name + config digest in image provenance**;
-- reassembly propagation from a **Resolute** base rebuild to **Resolute
-  profiles only** (today `NIX_BASE_REBUILT` tracks only the Noble/Ubuntu app
-  base);
-- validation that Noble Firefox and Resolute TraceLabs share the identical
-  `profile-firefox` store-layer digest (§3.4 test).
-
-**Phase-0 exception:** a separate invocation is acceptable *for the spike
-only*, **provided the required profiles are explicitly selected and pinned to
-the same resolved revisions** as the catalog build (§9 Phase 0).
+(Aside: this also removes the "Resolute for glibc proximity" rationale
+entirely — glibc is bundled per-closure; the base is chosen purely for
+single-vs-multi-store compatibility with the assembler, and per-app assembly
+requires single-store.)
 
 **Base is independent of Trace Labs' Debian 13** (their Debian is a
 consequence of their apt/pipx installer; our tools carry their own closures).
-But Nix removes only libc/package-manager coupling — apps still depend on the
-host kernel, user namespaces, seccomp, D-Bus, GPU, certs, `/etc`, desktop
-services — so Resolute is justified by the **Phase-0 runtime spike** (does the
-full desktop + browsers + tor-browser launch under the real seccomp
-profile?), not glibc proximity. `amd64-only` for v1 (§6).
+`amd64-only` for v1 (§6).
 
 ## 4. The four overlay derivations
 
