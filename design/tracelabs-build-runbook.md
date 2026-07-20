@@ -136,16 +136,33 @@ marker file since it runs before activation.) CLI tools (sherlock/sn0int) still
 won't be in the *menu* (no `.desktop`); they're on PATH via the profile —
 launch from a terminal.
 
-### 4.2 seccomp must be DEFAULT, not kasm-chrome
-The kasm-chrome seccomp (copied from Firefox) breaks glycin's
-`bwrap --unshare-all` SVG loader → a missing icon falls back to
-`image-missing.svg` → glycin-svg exits early → GTK aborts → panel crashes →
-blank/white desktop, no icons. Reproduce:
-`gdk-pixbuf-thumbnailer <svg>` = FAIL under kasm-chrome, OK on default.
-TraceLabs' `run_config` therefore has **no `security_opt`** (browsers run
-`--no-sandbox` via nix-launch; Firefox is fine on default). **Debug lesson: a
-plain `docker run` does NOT reproduce Kasm rendering issues unless you pass
-`--security-opt seccomp=<profile>` and `--device /dev/dri`.**
+### 4.2 security_opt: use the DESKTOP profile (apparmor=unconfined + bwrap.json) — CORRECTED
+**Earlier (WRONG) conclusion:** "drop seccomp, run default." That was a
+misdiagnosis. The blank/broken desktop was caused by the **0600 asset perms**
+(§ the mutagen chmod fix) — a missing/unreadable icon fell back to
+`image-missing.svg`, and glycin's SVG loader crashed the panel. Fixing the perms
+fixed the desktop.
+
+**Correct fix (matches every Nix desktop image, registry 4aa0d22):** the
+TraceLabs workspace `run_config.security_opt` must be
+`["apparmor=unconfined", "seccomp=<bwrap.json>"]` — the SAME two options the
+`Nix Ubuntu - Resolute` / `Nix Fat Store` desktop workspaces use. Why:
+- `bwrap.json` (src/common/seccomp/bwrap.json) = chrome.json + `pivot_root` +
+  unconditional mount family. It permits unprivileged userns AND bwrap's mount
+  setup, so **Chromium/Electron keep their namespace sandbox** (no
+  `--no-sandbox` — the SUID sandbox helper can't be root:4755 in the read-only
+  Nix store, so without userns Chrome/Electron/obsidian ABORT) and **glycin's
+  bwrap SVG loader works** (panel renders).
+- `apparmor=unconfined` is **required** too: under docker's default AppArmor,
+  bwrap's mount ops are denied → glycin-svg fails → panel crash-loop, even with
+  bwrap.json seccomp. Kasm applies both; a bare `docker run` with only
+  `--security-opt seccomp=…` reproduces the CRASH (missing the apparmor half).
+
+**Debug lesson:** to reproduce a Kasm launch with `docker run`, pass BOTH
+`--security-opt apparmor=unconfined` AND `--security-opt seccomp=<bwrap.json>`
+(and inspect a real working Kasm container's `HostConfig.SecurityOpt` to see
+exactly what it applies). Chromium/obsidian failing = missing this security_opt,
+NOT a GPU or nix-launch issue.
 
 ### 4.3 TL desktop assets not wired (Phase-1)
 Missing: TL Vault, Obsidian, wallpaper, templates, OSINT Resources/
