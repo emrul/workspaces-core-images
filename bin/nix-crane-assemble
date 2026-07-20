@@ -316,11 +316,17 @@ fi
 # the fat store + the standalone per-app image → registry-wide dedup) but assemble
 # onto the Resolute base with the /nix-stores/<id> registration layer instead of
 # the /nix/store->/store seam, and no single-app wiring.
-if [[ -n "${RESOLUTE_APPS}" ]]; then
-  [[ -n "${RESOLUTE_BASE_IMAGE}" ]] || fail "RESOLUTE_APPS set but RESOLUTE_BASE_IMAGE empty"
+# A missing/absent Resolute base must NOT abort the whole catalog assembly — the
+# base job is manual and may not have run this pipeline. Warn + skip the resolute
+# block instead of fail (per-app + fat-store assembly already succeeded above).
+resolute_ready() {
+  [[ -n "${RESOLUTE_BASE_IMAGE}" ]] \
+    || { log "resolute: RESOLUTE_APPS='${RESOLUTE_APPS}' set but RESOLUTE_BASE_IMAGE empty — skipping resolute assembly (non-fatal)"; return 1; }
   "${CONTAINER_CLI}" image exists "${RESOLUTE_BASE_IMAGE}" 2>/dev/null \
     || "${CONTAINER_CLI}" image inspect "${RESOLUTE_BASE_IMAGE}" >/dev/null 2>&1 \
-    || fail "RESOLUTE_BASE_IMAGE not found in ${CONTAINER_CLI} store: ${RESOLUTE_BASE_IMAGE}"
+    || { log "resolute: base image not in ${CONTAINER_CLI} store (${RESOLUTE_BASE_IMAGE}) — skipping resolute assembly (non-fatal; play the 'base' job first)"; return 1; }
+}
+if [[ -n "${RESOLUTE_APPS}" ]] && resolute_ready; then
   rbase_ref="${REG_LOCAL}/nixresolutebase:${RESOLUTE_TAG}"
   "${CONTAINER_CLI}" tag "${RESOLUTE_BASE_IMAGE}" "${rbase_ref}"
   "${CONTAINER_CLI}" push --tls-verify=false "${rbase_ref}" >/dev/null

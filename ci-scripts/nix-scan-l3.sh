@@ -146,7 +146,7 @@ fi
 in_filter() { [ -z "${FILTER}" ] && return 0; local x; for x in ${FILTER}; do [ "${x}" = "$1" ] && return 0; done; return 1; }
 mapfile -t all_apps < <("${DOCKER}" images --format '{{.Repository}}:{{.Tag}}' \
   | grep -E "^${NIX_APP_REPO}-[a-z0-9][a-z0-9-]*:dev$" \
-  | grep -vE "^${NIX_APP_REPO}-(ubuntu|store|fedora|alpine)" \
+  | grep -vE "^${NIX_APP_REPO}-(ubuntu|store|fedora|alpine|resolute)" \
   | sed -E "s|^${NIX_APP_REPO}-||; s|:dev\$||" | sort)
 # Scan scope, in priority order:
 #   1. SCAN_ALL=1            → every built app image (manual baselines)
@@ -295,10 +295,29 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   c="$("${DOCKER}" create --name "${CTR_PREFIX}-${name}" "${img}" true)" || return 1
   "${DOCKER}" export "${c}" | tar -C "${d}/rootfs" -xf - || { "${DOCKER}" rm "${c}" >/dev/null; return 1; }
   "${DOCKER}" rm "${c}" >/dev/null
-  if [ "${symlinks}" = "1" ]; then rm -f "${d}/rootfs/nix/store" "${d}/rootfs/nix/var"; fi
   mkdir -p "${d}/rootfs/nix"
-  mv "${d}/rootfs/store" "${d}/rootfs/nix/store"
-  mv "${d}/rootfs/var"   "${d}/rootfs/nix/var"
+  local scan_root="${d}/rootfs"
+  if [ "${symlinks}" = "2" ]; then
+    # Resolute multi-store: at rest the closure is split across REAL store roots
+    # (/store = app closure; /nix-stores/<svc>/store = base services), unioned into
+    # /nix/store only at runtime by nix-compose. /nix-stores/<app>/{store,var} are
+    # registration SYMLINKS back to /store,/var (skip them). Union every real store
+    # root — content-addressed names never collide. Scan the nix subtree ONLY (the
+    # ubuntu OS layer is scan-base's L1/L2 job; keeps this row nix-comparable).
+    mkdir -p "${d}/rootfs/nix/store" "${d}/rootfs/nix/var"
+    local sr
+    for sr in "${d}/rootfs/store" "${d}/rootfs/nix-stores"/*/store; do
+      { [ -d "${sr}" ] && [ ! -L "${sr}" ]; } || continue
+      # -exec mv -t {} + batches (a store root can hold thousands of entries → ARG_MAX).
+      find "${sr}" -mindepth 1 -maxdepth 1 -exec mv -t "${d}/rootfs/nix/store/" {} + 2>/dev/null || true
+    done
+    [ -d "${d}/rootfs/var/nix" ] && mv "${d}/rootfs/var/nix" "${d}/rootfs/nix/var/nix" 2>/dev/null || true
+    scan_root="${d}/rootfs/nix"
+  else
+    if [ "${symlinks}" = "1" ]; then rm -f "${d}/rootfs/nix/store" "${d}/rootfs/nix/var"; fi
+    mv "${d}/rootfs/store" "${d}/rootfs/nix/store"
+    mv "${d}/rootfs/var"   "${d}/rootfs/nix/var"
+  fi
   # Drop the nix DB from the scan view: syft's nix cataloger catalogues every
   # path REGISTERED in db.sqlite, and the fat store ships the staging volume's
   # db — which registers old-generation paths whose store dirs are NOT in the
@@ -314,7 +333,7 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   # Source identity: kind-aware (published ref vs unmistakable candidate
   # id) — provenance + VEX product matching depend on it.
   local src_name; src_name="$(sbom_ref "${name}")"
-  "${SYFT}" -q "dir:${d}/rootfs" \
+  "${SYFT}" -q "dir:${scan_root}" \
       --override-default-catalogers image \
       --select-catalogers "+nix-cataloger" \
       --source-name "${src_name}" \
@@ -389,6 +408,25 @@ wait || true
 for a in "${apps[@]}"; do
   if [ ! -s "${WORK}/rows/${a}.json" ]; then
     failed+=("${a}"); log "ERROR app scan failed: ${a} — log follows"; cat "${WORK}/logs/${a}.log" >&2 || true
+  fi
+done
+
+# ── resolute multi-store desktop images: localhost/nix-resolute-<app>:dev ──────
+# Excluded from all_apps (need the multi-store union, scan_one mode 2). Named by
+# profile so pub_ref/attestation align. Scope mirrors apps[] (SCAN_ALL / NIX_PROFILES
+# filter — assembled.txt lists per-app images only). Serial: each is a large export.
+# The profile ALSO gets the vulnix advisory pass below (belt-and-braces).
+for rp in $(resolute_profiles); do
+  [ -n "${rp}" ] || continue
+  { [ "${SCAN_ALL:-0}" = "1" ] || [ -z "${FILTER}" ] || in_filter "${rp}"; } || continue
+  rimg="${NIX_APP_REPO}-resolute-${rp}:dev"
+  if ! "${DOCKER}" image inspect "${rimg}" >/dev/null 2>&1; then
+    log "resolute scan: no image ${rimg} (not assembled this run) — vulnix still covers the profile"
+    continue
+  fi
+  log "scan resolute desktop: ${rp} (${rimg})"
+  if ! scan_one "${rp}" "${rimg}" 2 > "${WORK}/logs/${rp}.log" 2>&1; then
+    failed+=("${rp}"); log "ERROR resolute scan failed: ${rp} — log follows"; cat "${WORK}/logs/${rp}.log" >&2 || true
   fi
 done
 

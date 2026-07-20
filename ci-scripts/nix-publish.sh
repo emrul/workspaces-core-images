@@ -29,6 +29,9 @@ CONFIG="${CONFIG:-${SCRIPT_DIR}/../bin/nix-profiles.toml}"
 REGISTRY_NS="${REGISTRY_NS:-${CI_REGISTRY_IMAGE:?set REGISTRY_NS or CI_REGISTRY_IMAGE}}"
 KASM_TAG="${KASM_TAG:-nix}"
 NIX_APP_REPO="${NIX_APP_REPO:-localhost/nix}"
+# Resolute multi-store desktop images (nix-crane-assemble RESOLUTE_REPO); published
+# to their kasm_name like any app (tracelabs → tracelabs-osint).
+RESOLUTE_REPO="${RESOLUTE_REPO:-localhost/nix-resolute}"
 DOCKER="${DOCKER:-docker}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -282,8 +285,12 @@ ensure_skopeo || echo "[nix-publish] WARN skopeo unavailable — every image wil
 ensure_jq || echo "[nix-publish] WARN jq unavailable — content compare degraded; images may re-push" >&2
 
 pushed=0; failed=()
-for img in "${imgs[@]}"; do
-  profile="${img#"${NIX_APP_REPO}"-}"; profile="${profile%:dev}"
+# Publish one local image to its kasm-named registry ref with a content-based push
+# skip. Shared by the per-app images and the resolute multi-store desktop images.
+# Mutates the globals pushed/failed; every other var is local.
+publish_one() {
+  local img="$1" profile="$2"
+  local kn dest new_sp new_rev new_ver cand_cfg prev_sp status_ cstate action
   kn="$(kasm_name_for "${profile}")"
   dest="${REGISTRY_NS}/${kn}:${KASM_TAG}"
   # Provenance from THIS build's local image (labels stamped by nix-crane-assemble).
@@ -295,7 +302,7 @@ for img in "${imgs[@]}"; do
     echo "[nix-publish] ${profile}: skip (not in NIX_PROFILES)"
     record "${profile}" "${kn}" "${dest}" skipped skipped "${new_rev}" "${new_ver}" "${new_sp}" "" \
            "${cand_cfg}" "" "" ""
-    continue
+    return 0
   fi
   # Compare against the currently-published image BEFORE we overwrite it.
   prev_sp="$(remote_label "${dest}" dev.kasm.nix.store-path)"
@@ -314,7 +321,7 @@ for img in "${imgs[@]}"; do
     # promote the candidate scan row to it under the stated equivalence.
     record "${profile}" "${kn}" "${dest}" unchanged skipped "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}" \
            "${cand_cfg}" "$(remote_manifest_digest "${dest}")" "$(remote_config_digest "${dest}")" "rootfs.diff_ids"
-    continue
+    return 0
   fi
   # Layers differ but store-path matched ⇒ a wiring/base-layer change; surface
   # it as "updated" rather than the misleading "unchanged".
@@ -329,6 +336,25 @@ for img in "${imgs[@]}"; do
     record "${profile}" "${kn}" "${dest}" "${status_}" "${action}" "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}" \
            "${cand_cfg}" "" "" ""
   fi
+}
+
+for img in "${imgs[@]}"; do
+  profile="${img#"${NIX_APP_REPO}"-}"; profile="${profile%:dev}"
+  publish_one "${img}" "${profile}"
+done
+
+# Resolute multi-store desktop images (localhost/nix-resolute-<app>:dev) →
+# ${REGISTRY_NS}/<kasm_name>:<tag> (e.g. tracelabs → tracelabs-osint). Same
+# content-compare + record path; nix-crane-assemble stamps their provenance labels.
+mapfile -t rimgs < <(
+  "${DOCKER}" images --format '{{.Repository}}:{{.Tag}}' \
+    | grep -E "^${RESOLUTE_REPO}-[a-z0-9][a-z0-9-]*:dev$" | sort -u
+)
+[[ ${#rimgs[@]} -gt 0 ]] && echo "[nix-publish] ${#rimgs[@]} resolute desktop image(s) → ${REGISTRY_NS}/<kasm_name>:${KASM_TAG}"
+for img in "${rimgs[@]:-}"; do
+  [[ -n "${img}" ]] || continue
+  profile="${img#"${RESOLUTE_REPO}"-}"; profile="${profile%:dev}"
+  publish_one "${img}" "${profile}"
 done
 
 # Also publish the fat store-mount image (all profiles' Nix store in shared
@@ -356,8 +382,14 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
     # last-known-good tag and record `skipped-partial`.
     # FORCE_FAT_PUSH=1 overrides (e.g. intentionally shrinking the catalog).
     fat_profiles="$(jq -r '.apps | keys[]' "${REPORT_DIR}/labels.json" 2>/dev/null | sort)"
-    cfg_profiles="$(grep -E '^\[profiles\.[a-z0-9-]+\]' "${CONFIG}" \
-                     | sed -E 's/^\[profiles\.([a-z0-9-]+)\]/\1/' | sort)"
+    # EXCLUDE fat_store=false profiles (resolute desktop bundles like tracelabs):
+    # they are DELIBERATELY absent from the fat store, so counting them as
+    # "missing" would flag every full build as partial and skip the fat-store push.
+    cfg_profiles="$(awk '
+      /^\[profiles\./ { p=$0; sub(/^\[profiles\./,"",p); sub(/\].*/,"",p); keep[p]=1; ord[++n]=p }
+      /^[[:space:]]*fat_store[[:space:]]*=[[:space:]]*false/ && p!="" { keep[p]=0 }
+      END { for (i=1;i<=n;i++) if (keep[ord[i]]) print ord[i] }
+    ' "${CONFIG}" | sort)"
     fat_missing="$(comm -23 <(printf '%s\n' "${cfg_profiles}") <(printf '%s\n' "${fat_profiles}") | tr '\n' ' ')"
     if [[ -n "${fat_missing// /}" && "${FORCE_FAT_PUSH:-0}" != "1" ]]; then
       echo "[nix-publish] SKIP fat store: PARTIAL build (missing: ${fat_missing})" >&2
