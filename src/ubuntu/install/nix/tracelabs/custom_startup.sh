@@ -44,42 +44,22 @@ kasm_exec() {
     fi
 }
 
-# Ensure the XFCE panel (taskbar + Applications menu + launchers) is running.
-# WHY THIS IS HERE: nix-activate's apply_single_app_desktop() applies the
-# NO-PANEL "single application" XFCE layout whenever exactly one profile is
-# active — and TraceLabs ships as one active profile (its requires= are
-# composed into the image, not counted active), so the session comes up with
-# no panel → a blank desktop. The documented toggle NIX_SINGLE_APP_DESKTOP=0
-# only works if it's set BEFORE nix-activate (Before=window-manager.service),
-# which neither Kasm's run_config env nor a post-boot export reliably achieve.
-# So we start the panel here (custom-startup.service runs after the WM). This
-# is boot-timing-independent and idempotent: if the full-desktop session
-# already started a panel, pgrep skips it (no double panel).
-ensure_desktop_shell() {
-    export DISPLAY="${DISPLAY:-:1}"
-    if pgrep -x xfce4-panel >/dev/null 2>&1; then
-        echo "[tracelabs] xfce4-panel already running"
-        return 0
-    fi
-    if command -v xfce4-panel >/dev/null 2>&1; then
-        echo "[tracelabs] starting xfce4-panel (single-app layout dropped it)"
-        (xfce4-panel >/tmp/tracelabs-panel.log 2>&1 &)
-    else
-        echo "[tracelabs] WARN xfce4-panel not found on PATH" >&2
-    fi
-}
-
+# Full desktop: launch nothing on connect. The panel, WM and xfdesktop are
+# started and managed by the XFCE session itself — TraceLabs runs in DESKTOP
+# mode (nix-activate keeps the full desktop session config + a clean shell env
+# for a desktop profile), so the desktop comes up like the plain distro
+# desktop and the user opens tools from the Applications menu / desktop icons.
 kasm_startup() {
-    ensure_desktop_shell
-    # Full desktop: launch no app. Optionally open a landing URL once.
+    echo "[tracelabs] full-desktop startup: session-managed desktop; tools launch from the XFCE menu"
+    # Optionally open a landing URL once (nice-to-have; most users start from
+    # the menu). Never a respawn loop — there is no single app to keep alive.
     local url="${KASM_URL:-$LAUNCH_URL}"
     if [ -z "$DISABLE_CUSTOM_STARTUP" ] && [ -n "$url" ]; then
-        /usr/bin/filter_ready
-        /usr/bin/desktop_ready
+        /usr/bin/filter_ready 2>/dev/null || true
+        /usr/bin/desktop_ready 2>/dev/null || true
         "${BROWSER}" "$url" &
     fi
-    echo "[tracelabs] full-desktop startup: tools are launched from the XFCE menu / desktop icons."
-    # Return cleanly — the desktop keeps running independently of this shim.
+    # Return cleanly — the session-managed desktop keeps running.
 }
 
 if [ -n "$GO" ] || [ -n "$ASSIGN" ]; then
