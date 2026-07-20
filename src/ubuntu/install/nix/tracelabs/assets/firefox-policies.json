@@ -37,7 +37,7 @@
     "DisplayBookmarksToolbar": true,
     "DisplayMenuBar": "default-on",
     "DNSOverHTTPS": {
-      "Enabled":  false,
+      "Enabled": false,
       "Locked": true
     },
     "DontCheckDefaultBrowser": true,
@@ -58,14 +58,21 @@
         "https://addons.mozilla.org/firefox/downloads/latest/https-everywhere/latest.xpi",
         "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi"
       ],
-      "Locked":  ["*"],
-      "Uninstall": ["*"]
+      "Locked": [
+        "*"
+      ],
+      "Uninstall": [
+        "*"
+      ]
     },
     "ExtensionSettings": {
       "*": {
         "allowed_types": [],
         "blocked_install_message": "Software installation has been disabled by your system administrator.",
-        "install_sources": ["about:addons","https://addons.mozilla.org/"],
+        "install_sources": [
+          "about:addons",
+          "https://addons.mozilla.org/"
+        ],
         "installation_mode": "blocked"
       },
       "https-everywhere@eff.org": {
@@ -88,14 +95,16 @@
     },
     "FlashPlugin": {
       "Allow": [],
-      "Block": ["*"],
+      "Block": [
+        "*"
+      ],
       "Default": false,
       "Locked": true
     },
     "Homepage": {
       "Locked": false,
       "StartPage": "homepage",
-      "URL": "https://google.com/",
+      "URL": "https://google.com/"
     },
     "InstallAddonsPermission": {
       "Allow": [],
@@ -115,37 +124,49 @@
     "Permissions": {
       "Autoplay": {
         "Allow": [],
-        "Block": ["*"],
+        "Block": [
+          "*"
+        ],
         "Default": "block-audio-video",
         "Locked": true
       },
       "Camera": {
         "Allow": [],
-        "Block": ["*"],
+        "Block": [
+          "*"
+        ],
         "BlockNewRequests": true,
         "Locked": true
       },
       "Location": {
         "Allow": [],
-        "Block": ["*"],
+        "Block": [
+          "*"
+        ],
         "BlockNewRequests": true,
         "Locked": true
       },
       "Microphone": {
         "Allow": [],
-        "Block": ["*"],
+        "Block": [
+          "*"
+        ],
         "BlockNewRequests": true,
         "Locked": true
       },
       "Notifications": {
         "Allow": [],
-        "Block": ["*"],
+        "Block": [
+          "*"
+        ],
         "BlockNewRequests": true,
         "Locked": true
       },
       "VirtualReality": {
         "Allow": [],
-        "Block": ["*"],
+        "Block": [
+          "*"
+        ],
         "BlockNewRequests": true,
         "Locked": true
       }
@@ -170,6 +191,1148 @@
     "PromptForDownloadLocation": false,
     "SanitizeOnShutdown": true,
     "SSLVersionMax": "tls1.3",
-    "SSLVersionMin": "tls1.2"
+    "SSLVersionMin": "tls1.2",
+    "Bookmarks": [
+      {
+        "Title": "Canadian Business Research",
+        "URL": "https://www.canada.ca/en/services/business/research.html",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company/Country Specific"
+      },
+      {
+        "Title": "Europages",
+        "URL": "http://www.europages.co.uk/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company/Country Specific"
+      },
+      {
+        "Title": "Overseas Company Records",
+        "URL": "https://www.gov.uk/government/publications/overseas-registries/overseas-registries",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company/Country Specific"
+      },
+      {
+        "Title": "Wikipedia National Company Registers",
+        "URL": "https://en.wikipedia.org/wiki/List_of_company_registers",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company/Country Specific"
+      },
+      {
+        "Title": "Crunchbase",
+        "URL": "https://www.crunchbase.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "Ezilion",
+        "URL": "http://www.ezilon.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "Glassdoor",
+        "URL": "https://www.glassdoor.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "Guidestar",
+        "URL": "http://www.guidestar.org/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "LinkedIn",
+        "URL": "https://www.linkedin.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "Morningstar Research",
+        "URL": "http://library.morningstar.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "Orbis Directory",
+        "URL": "http://orbisdirectory.bvdinfo.com/version-20161014/OrbisDirectory/Companies",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "OpenCorporates",
+        "URL": "https://opencorporates.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "Owler",
+        "URL": "https://www.owler.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "Scoot",
+        "URL": "http://www.scoot.co.uk/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "Serpstat",
+        "URL": "https://serpstat.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "Spyfu",
+        "URL": "http://www.spyfu.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "Accuranker",
+        "URL": "https://www.accuranker.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Company"
+      },
+      {
+        "Title": "DNS Dumpster",
+        "URL": "https://dnsdumpster.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan/DNS"
+      },
+      {
+        "Title": "MX Toolbox",
+        "URL": "https://mxtoolbox.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan/DNS"
+      },
+      {
+        "Title": "View DNS",
+        "URL": "http://viewdns.info/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan/DNS"
+      },
+      {
+        "Title": "Who Is Hosting This",
+        "URL": "http://www.whoishostingthis.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan/Whois"
+      },
+      {
+        "Title": "Whoisology",
+        "URL": "https://whoisology.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan/Whois"
+      },
+      {
+        "Title": "Ahrefs",
+        "URL": "https://ahrefs.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Alexa",
+        "URL": "http://www.alexa.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Builtwith",
+        "URL": "http://builtwith.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "ExoneraTor Tor Relay Search",
+        "URL": "https://exonerator.torproject.org/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Follow.net",
+        "URL": "http://follow.net/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Greynoise",
+        "URL": "http://greynoise.io/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Intelx.io",
+        "URL": "https://intelx.io/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "IP Fingerprints",
+        "URL": "http://www.ipfingerprints.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "IntelliTamper",
+        "URL": "http://www.softpedia.com/get/Internet/Other-Internet-Related/IntelliTamper.shtml",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Netcraft Site Report",
+        "URL": "https://sitereport.netcraft.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Moz Research Tools OSE",
+        "URL": "https://moz.com/researchtools/ose",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Shodan",
+        "URL": "https://shodan.io/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Robtex",
+        "URL": "https://www.robtex.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Spyse",
+        "URL": "https://spyse.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "DNS Trails",
+        "URL": "https://securitytrails.com/dns-trails",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Website Informer",
+        "URL": "http://website.informer.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "WaybackMachine",
+        "URL": "http://archive.org/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Internet Scan"
+      },
+      {
+        "Title": "Epieos Tools",
+        "URL": "https://tools.epieos.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Email Search"
+      },
+      {
+        "Title": "Dehashed",
+        "URL": "https://dehashed.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Email Search"
+      },
+      {
+        "Title": "EmailHippo",
+        "URL": "https://tools.verifyemailaddress.io/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Email Search"
+      },
+      {
+        "Title": "Have I Been Pwned",
+        "URL": "https://haveibeenpwned.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Email Search"
+      },
+      {
+        "Title": "Hunter.io",
+        "URL": "https://hunter.io/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Email Search"
+      },
+      {
+        "Title": "Pipl",
+        "URL": "https://pipl.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Email Search"
+      },
+      {
+        "Title": "Thats Them",
+        "URL": "https://thatsthem.com/reverse-email-lookup",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Email Search"
+      },
+      {
+        "Title": "Toofr",
+        "URL": "https://www.toofr.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Email Search"
+      },
+      {
+        "Title": "Verify Email",
+        "URL": "http://verify-email.org/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Email Search"
+      },
+      {
+        "Title": "Voilanorbert",
+        "URL": "https://www.voilanorbert.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Email Search"
+      },
+      {
+        "Title": "Epieos Tools",
+        "URL": "https://tools.epieos.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Phone Number"
+      },
+      {
+        "Title": "Free Carrier Lookup",
+        "URL": "http://freecarrierlookup.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Phone Number"
+      },
+      {
+        "Title": "National Cellular Directory",
+        "URL": "https://www.nationalcellulardirectory.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Phone Number"
+      },
+      {
+        "Title": "Phone Validator",
+        "URL": "https://www.phonevalidator.com/index.aspx",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Phone Number"
+      },
+      {
+        "Title": "Reverse Phone Lookup",
+        "URL": "http://www.reversephonelookup.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Phone Number"
+      },
+      {
+        "Title": "Spy Dialer",
+        "URL": "http://spydialer.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Phone Number"
+      },
+      {
+        "Title": "Twillo",
+        "URL": "https://www.twilio.com/lookup",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Phone Number"
+      },
+      {
+        "Title": "OpenCNAM",
+        "URL": "http://opencnam.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Phone Number"
+      },
+      {
+        "Title": "Alumni.net",
+        "URL": "http://www.alumni.net/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Ancestry",
+        "URL": "http://www.ancestry.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Classmates",
+        "URL": "http://www.classmates.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Facesearch",
+        "URL": "http://facesaerch.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Family Search",
+        "URL": "https://familysearch.org/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Family Tree Now",
+        "URL": "http://www.familytreenow.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Genealogy Links",
+        "URL": "http://www.genealogylinks.net/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Homemetry",
+        "URL": "https://homemetry.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Infobel",
+        "URL": "http://www.infobel.com/en/world",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Interment",
+        "URL": "http://www.interment.net/data/search.htm",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "International White and Yellow Pages",
+        "URL": "http://www.wayp.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Itools",
+        "URL": "http://itools.com/search/people-search",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "LittleSis",
+        "URL": "https://littlesis.org/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Rocket Reach",
+        "URL": "http://rocketreach.co/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Lullar",
+        "URL": "http://com.lullar.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "PeekYou",
+        "URL": "http://www.peekyou.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Pipl",
+        "URL": "https://pipl.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Recruitin",
+        "URL": "http://recruitin.net/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Faxvin",
+        "URL": "http://faxvin.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Search Bug",
+        "URL": "http://www.searchbug.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Skip Ease",
+        "URL": "http://www.skipease.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "SnoopStation",
+        "URL": "http://snoopstation.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Spokeo",
+        "URL": "http://www.spokeo.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Switchboard",
+        "URL": "http://www.switchboard.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "ThatsThem",
+        "URL": "https://thatsthem.com/img/favicon-32x32.png",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Wink",
+        "URL": "https://webmii.com/v3/img/apple-touch-icon.png",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Wink",
+        "URL": "http://itools.com/tool/wink-people-search",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Yasni",
+        "URL": "http://www.yasni.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Zabasearch",
+        "URL": "http://www.zabasearch.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Zoominfo",
+        "URL": "http://www.zoominfo.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "411 (US)",
+        "URL": "http://www.411.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Fold3 (US Military Records) - Browse records of US Military members",
+        "URL": "http://www.fold3.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "192 (UK)",
+        "URL": "http://www.192.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Canada411 (Canada)",
+        "URL": "http://www.canada411.ca/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Inmate Location",
+        "URL": "http://www.bop.gov/inmateloc",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "LookUpUK (UK)",
+        "URL": "http://www.lookupuk.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "The National Archives (United Kingdom)",
+        "URL": "http://www.nationalarchives.gov.uk/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "People Search (Australia)",
+        "URL": "http://www.peoplesearch.com.au/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "White Pages (US)",
+        "URL": "http://www.whitepages.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "USSearch",
+        "URL": "http://www.ussearch.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/People"
+      },
+      {
+        "Title": "Bing Maps",
+        "URL": "http://www.bing.com/maps",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Maps & Geography"
+      },
+      {
+        "Title": "Dominoc925",
+        "URL": "https://dominoc925-pages.appspot.com/mapplets/cs_mgrs.html",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Maps & Geography"
+      },
+      {
+        "Title": "Google Earth",
+        "URL": "http://www.google.com/earth",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Maps & Geography"
+      },
+      {
+        "Title": "Google Maps",
+        "URL": "https://www.google.com/maps",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Maps & Geography"
+      },
+      {
+        "Title": "Google My Maps",
+        "URL": "https://www.google.com/maps/about/mymaps",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Maps & Geography"
+      },
+      {
+        "Title": "Wireless Network Mapping",
+        "URL": "https://wigle.net/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Maps & Geography"
+      },
+      {
+        "Title": "Alleba (Philippines)",
+        "URL": "http://www.alleba.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Country Specific"
+      },
+      {
+        "Title": "Baidu (China)",
+        "URL": "http://www.baidu.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Country Specific"
+      },
+      {
+        "Title": "Eniro (Sweden)",
+        "URL": "http://www.eniro.se/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Country Specific"
+      },
+      {
+        "Title": "Goo (Japan)",
+        "URL": "http://www.goo.ne.jp/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Country Specific"
+      },
+      {
+        "Title": "Najdsi (Slovenia)",
+        "URL": "http://www.najdi.si/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Country Specific"
+      },
+      {
+        "Title": "Naver (South Korea)",
+        "URL": "http://www.naver.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Country Specific"
+      },
+      {
+        "Title": "Onet.pl (Poland)",
+        "URL": "http://www.onet.pl/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Country Specific"
+      },
+      {
+        "Title": "SAPO (Portugal)",
+        "URL": "http://www.sapo.pt/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Country Specific"
+      },
+      {
+        "Title": "Search.ch (Switzerland)",
+        "URL": "http://www.search.ch/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Country Specific"
+      },
+      {
+        "Title": "Walla (Israel)",
+        "URL": "http://www.walla.co.il/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Country Specific"
+      },
+      {
+        "Title": "Yandex (Russia)",
+        "URL": "http://www.yandex.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Country Specific"
+      },
+      {
+        "Title": "Offshore Leak Database",
+        "URL": "https://offshoreleaks.icij.org/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Data"
+      },
+      {
+        "Title": "Search Code",
+        "URL": "https://searchcode.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Data"
+      },
+      {
+        "Title": "Draugiem",
+        "URL": "https://www.draugiem.lv/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Data"
+      },
+      {
+        "Title": "Baidu Images",
+        "URL": "http://image.baidu.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "Bing Images",
+        "URL": "http://www.bing.com/images",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "Google Image",
+        "URL": "https://images.google.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "Image Identify",
+        "URL": "https://www.imageidentify.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "KarmaDecay",
+        "URL": "http://karmadecay.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "Lycos Image Search",
+        "URL": "http://search.lycos.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "PhotoBucket",
+        "URL": "http://photobucket.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "Picsearch",
+        "URL": "http://www.picsearch.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "Tineye",
+        "URL": "https://tineye.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "Yahoo Image Search",
+        "URL": "https://images.search.yahoo.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "Yandex Images",
+        "URL": "https://www.yandex.com/images",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "FotoForensics",
+        "URL": "http://www.fotoforensics.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "Jeffreys Image Metadata Viewer",
+        "URL": "http://exif.regex.info/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "Metapicz",
+        "URL": "http://metapicz.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Image"
+      },
+      {
+        "Title": "Bing Video",
+        "URL": "http://www.bing.com/?scope=video",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Video"
+      },
+      {
+        "Title": "DailyMotion",
+        "URL": "http://www.dailymotion.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Video"
+      },
+      {
+        "Title": "Earthcam",
+        "URL": "http://www.earthcam.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Video"
+      },
+      {
+        "Title": "Archive.org Open Source Videos",
+        "URL": "https://archive.org/details/opensource_movies",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Video"
+      },
+      {
+        "Title": "LiveLeak",
+        "URL": "http://www.liveleak.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Video"
+      },
+      {
+        "Title": "Vimeo",
+        "URL": "https://vimeo.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Video"
+      },
+      {
+        "Title": "Yahoo Video Search",
+        "URL": "http://video.search.yahoo.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Video"
+      },
+      {
+        "Title": "YouTube",
+        "URL": "https://www.youtube.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Video"
+      },
+      {
+        "Title": "YouTube Data Viewer",
+        "URL": "https://www.amnestyusa.org/citizenevidence",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search/Video"
+      },
+      {
+        "Title": "Bing",
+        "URL": "http://www.bing.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "DuckDuckGo",
+        "URL": "https://duckduckgo.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Google",
+        "URL": "http://www.google.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Yahoo",
+        "URL": "http://www.yahoo.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Ask",
+        "URL": "http://www.ask.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Advangle",
+        "URL": "http://advangle.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Aol",
+        "URL": "http://search.aol.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Instya",
+        "URL": "http://www.instya.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Impersonal.me",
+        "URL": "http://www.impersonal.me/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "iSeek",
+        "URL": "http://education.iseek.com/iseek/home.page",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "IxQuick",
+        "URL": "https://www.ixquick.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Lycos",
+        "URL": "http://www.lycos.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Parseek (Iran)",
+        "URL": "http://www.parseek.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Search.com",
+        "URL": "http://www.search.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "SurfCanyon",
+        "URL": "http://www.surfcanyon.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Wolfram Alpha",
+        "URL": "http://www.wolframalpha.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Search"
+      },
+      {
+        "Title": "Backtweets",
+        "URL": "http://backtweets.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools/Twitter"
+      },
+      {
+        "Title": "https://tinfoleak.com",
+        "URL": "https://tinfoleak.com/favicon/xandroid-icon-192x192.png.pagespeed.ic.SrzO0FouKa.jpg",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools/Twitter"
+      },
+      {
+        "Title": "Twitter Search",
+        "URL": "http://search.twitter.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools/Twitter"
+      },
+      {
+        "Title": "Facebook Search",
+        "URL": "http://search.fb.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools/Facebook"
+      },
+      {
+        "Title": "Find my Facebook ID",
+        "URL": "https://findmyfbid.in/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools/Facebook"
+      },
+      {
+        "Title": "Lookup-ID.com",
+        "URL": "https://lookup-id.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools/Facebook"
+      },
+      {
+        "Title": "Picodash",
+        "URL": "https://www.picodash.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools/Instagram"
+      },
+      {
+        "Title": "Social Rank",
+        "URL": "https://www.socialrank.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools/Instagram"
+      },
+      {
+        "Title": "Hashtagify",
+        "URL": "http://hashtagify.me/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools/Instagram"
+      },
+      {
+        "Title": "Vk",
+        "URL": "http://vk.com/app3046467",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools/VK"
+      },
+      {
+        "Title": "Glass Door",
+        "URL": "https://www.glassdoor.co.in/Reviews/index.htm",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools"
+      },
+      {
+        "Title": "Social Blade",
+        "URL": "https://socialblade.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools"
+      },
+      {
+        "Title": "Social Searcher",
+        "URL": "https://www.social-searcher.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Media Tools"
+      },
+      {
+        "Title": "Facebook",
+        "URL": "http://www.facebook.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Facenama",
+        "URL": "http://facenama.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Instagram",
+        "URL": "https://www.instagram.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "LinkedIn",
+        "URL": "https://www.linkedin.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Mixi",
+        "URL": "https://mixi.jp/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Odnoklassniki (Russia)",
+        "URL": "http://ok.ru/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Pinterest",
+        "URL": "http://www.pinterest.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "QQ",
+        "URL": "http://qzone.qq.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Reddit",
+        "URL": "https://www.reddit.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Taringa",
+        "URL": "http://www.taringa.net/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Tinder",
+        "URL": "https://www.gotinder.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Tumblr",
+        "URL": "https://www.tumblr.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Twitter",
+        "URL": "https://twitter.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Weibo China",
+        "URL": "http://weibo.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/Social Networks"
+      },
+      {
+        "Title": "Check User Names",
+        "URL": "http://www.checkusernames.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/User Name Check"
+      },
+      {
+        "Title": "Knowem",
+        "URL": "http://www.knowem.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/User Name Check"
+      },
+      {
+        "Title": "Name Chk",
+        "URL": "http://www.namechk.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/User Name Check"
+      },
+      {
+        "Title": "Name Checkr",
+        "URL": "http://www.namecheckr.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/User Name Check"
+      },
+      {
+        "Title": "Namecheckup",
+        "URL": "https://namecheckup.com/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/User Name Check"
+      },
+      {
+        "Title": "User Search",
+        "URL": "http://www.usersearch.org/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/User Name Check"
+      },
+      {
+        "Title": "WhatsMyName",
+        "URL": "https://whatsmyname.app/",
+        "Placement": "toolbar",
+        "Folder": "OSINT Bookmarks/User Name Check"
+      }
+    ]
   }
 }

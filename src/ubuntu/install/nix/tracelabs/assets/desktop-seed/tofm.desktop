@@ -1,6 +1,9 @@
 [Desktop Entry]
 Encoding=UTF-8
+Type=Application
 Name=Trace Labs OSINT Field Manual
-Type=Link
-URL=https://github.com/tracelabs/tofm/blob/main/tofm.md
+Comment=Open the OSINT Field Manual (TOFM) in Firefox
+Exec=/usr/local/bin/nix-launch /nix/var/nix/profiles/firefox/bin/firefox https://github.com/tracelabs/tofm/blob/main/tofm.md
+Terminal=false
 Icon=text-html
+Categories=Documentation;

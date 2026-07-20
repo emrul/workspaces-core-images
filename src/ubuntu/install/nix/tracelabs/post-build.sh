@@ -24,9 +24,25 @@ cp -a "${A}/backgrounds-tracelabs/." "${D}/usr/share/backgrounds/tracelabs/"
 cp -a "${A}/backgrounds-tracelabs/tracelabs-1920x1080.png" \
       "${D}/usr/share/backgrounds/bg_default.png"
 
-# 3. Firefox OSINT security/UX policy (nixpkgs firefox reads /etc/firefox/policies).
+# 3. Firefox OSINT security/UX policy + OSINT bookmarks (nixpkgs firefox reads
+#    /etc/firefox/policies; the Bookmarks policy re-applies each launch — Firefox
+#    has no read-only bookmark policy, so these are seeded, not locked).
 mkdir -p "${D}/etc/firefox/policies"
 cp -a "${A}/firefox-policies.json" "${D}/etc/firefox/policies/policies.json"
+
+# 3b. Chromium + Brave OSINT bookmarks as READ-ONLY ManagedBookmarks (managed
+#     policy is honored — Kasm requirement). Same tree as Firefox.
+mkdir -p "${D}/etc/chromium/policies/managed" "${D}/etc/brave/policies/managed"
+cp -a "${A}/bookmarks/managed-bookmarks.json" "${D}/etc/chromium/policies/managed/tracelabs-bookmarks.json"
+cp -a "${A}/bookmarks/managed-bookmarks.json" "${D}/etc/brave/policies/managed/tracelabs-bookmarks.json"
+
+# 3c. User defaults (default-profile seed): Obsidian auto-opens the TL Vault, and
+#     PDFs open in Chromium (Firefox's builtin PDF viewer is disabled by policy),
+#     web links in Firefox. mimeapps points at the nix-*.desktop shims nix-activate
+#     materialises at boot.
+mkdir -p "${D}/home/kasm-default-profile/.config/obsidian"
+cp -a "${A}/obsidian.json" "${D}/home/kasm-default-profile/.config/obsidian/obsidian.json"
+cp -a "${A}/mimeapps.list" "${D}/home/kasm-default-profile/.config/mimeapps.list"
 
 # 4. TraceLabs category icon (for the OSINT app-menu categories, Phase-1).
 mkdir -p "${D}/usr/share/icons/hicolor/scalable/categories"
@@ -40,6 +56,8 @@ chmod -R a+rX \
     "${D}/home/kasm-default-profile" \
     "${D}/usr/share/backgrounds" \
     "${D}/etc/firefox" \
+    "${D}/etc/chromium" \
+    "${D}/etc/brave" \
     "${D}/usr/share/icons/hicolor/scalable/categories" 2>/dev/null || true
 
 echo "tracelabs post-build: staged vault + wallpaper + firefox policy under ${D}" >&2

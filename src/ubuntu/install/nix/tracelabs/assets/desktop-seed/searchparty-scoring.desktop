@@ -1,6 +1,9 @@
 [Desktop Entry]
 Encoding=UTF-8
+Type=Application
 Name=Search Party Categories & Scoring
-Type=Link
-URL=https://tracelabs.org/searchparty-scoring
+Comment=Open the Search Party scoring guide in Firefox
+Exec=/usr/local/bin/nix-launch /nix/var/nix/profiles/firefox/bin/firefox https://tracelabs.org/searchparty-scoring
 Icon=text-html
+Terminal=false
+Categories=Documentation;

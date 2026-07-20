@@ -1,6 +1,9 @@
 [Desktop Entry]
 Encoding=UTF-8
+Type=Application
 Name=Trace Labs Participant Guide
-Type=Link
-URL=https://tracelabs.org/participant-guide
+Comment=Open the Trace Labs participant guide in Firefox
+Exec=/usr/local/bin/nix-launch /nix/var/nix/profiles/firefox/bin/firefox https://tracelabs.org/participant-guide
 Icon=text-html
+Terminal=false
+Categories=Documentation;
