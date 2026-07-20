@@ -27,8 +27,15 @@ REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 SRC_TOML="${REPO}/bin/nix-profiles.toml"
 SPIKE_TOML="${SPIKE_TOML:-${REPO}/bin/nix-profiles-tracelabs-spike.toml}"
 RESOLUTE_BASE="${RESOLUTE_BASE:-localhost/nix-ubuntu-resolute:dev}"
-: "${FIREFOX_REV:?set FIREFOX_REV to the published firefox:nix dev.kasm.nix.rev}"
-TORBROWSER_REV="${TORBROWSER_REV:-}"
+# Published nixpkgs revs (dev.kasm.nix.rev) of the catalog browsers, so the
+# composed requires-deltas dedup byte-for-byte with the standalone images.
+# Read from the registry 2026-07-20; override via env for a later re-pin.
+REV_A="${REV_A:-61b7c44c4073f0b827768aff0049561b5110ea5a}"  # chromium, brave, firefox
+REV_B="${REV_B:-fd1462031fdee08f65fd0b4c6b64e22239a77870}"  # obsidian, tor-browser
+# nixpkgs rev the TraceLabs pkgs (nixpkgs tools + overlay derivations) build
+# against — matches bin/nix-kasm-overlay's flake pin, where the 4 overlay tools
+# were validated. TraceLabs pkgs are profile-unique (no dedup constraint).
+OVERLAY_REV="${OVERLAY_REV:-d407951447dcd00442e97087bf374aad70c04cea}"
 
 log() { printf '[spike] %s\n' "$*" >&2; }
 
@@ -42,33 +49,58 @@ awk '/^\[profiles\./{exit} {print}' "${SRC_TOML}" > "${SPIKE_TOML}"
 
 {
   echo ""
-  echo "# ─── Trace Labs OSINT Phase-0 spike profiles (isolated; never pushed) ───"
+  echo "# ─── Trace Labs OSINT v1 profiles (isolated config; design §2/§3) ───"
   echo "[profiles.tracelabs]"
   echo 'kasm_name = "tracelabs-osint"'
-  echo 'fat_store = false          # inert until Phase 1 (fatApps split) — this'
-  echo '                           # build is --profile-scoped + never pushed anyway'
+  echo 'fat_store = false          # OSINT desktop, not a single-app launch'
   echo 'platforms = ["amd64"]'
   echo 'app_base  = "resolute"     # inert here; the build passes --app-base-image'
+  echo "ref       = \"github:NixOS/nixpkgs/${OVERLAY_REV}\""
   echo 'pkgs = ['
+  echo '    # nixpkgs, unique to TraceLabs (design §3)'
   echo '    "nixpkgs#sherlock",'
   echo '    "nixpkgs#sn0int",'
-  echo '    "nixpkgs#maltego",     # unfree; allowUnfree already global (build:251)'
+  echo '    "nixpkgs#translate-shell",'
+  echo '    "nixpkgs#exiftool",'
+  echo '    "nixpkgs#steghide",'
+  echo '    "nixpkgs#stegseek",'
+  echo '    "nixpkgs#tor",                       # CLI only; not auto-started'
+  echo '    "nixpkgs#python3Packages.shodan",    # needs API key at runtime'
+  echo '    # Maltego CE, keyring-disabled wrapper (overlay); unfree (allowUnfree global)'
+  echo '    "path:/config/kasm-overlay#maltego",'
+  echo '    # overlay derivations — not in nixpkgs (design §4)'
+  echo '    "path:/config/kasm-overlay#spiderfoot",'
+  echo '    "path:/config/kasm-overlay#phoneinfoga",'
+  echo '    "path:/config/kasm-overlay#sublist3r",'
+  echo '    "path:/config/kasm-overlay#metagoofil",'
   echo ']'
-  echo 'requires = ["firefox", "torbrowser"]'
+  echo '# composed via requires → three-way blob dedup with the standalone apps + fat store'
+  echo 'requires = ["obsidian", "chromium", "firefox", "brave", "torbrowser"]'
   echo ""
+  echo "# requires profiles, each PINNED to its published rev so the deltas dedup."
   echo "[profiles.firefox]"
   echo 'pkgs = ["nixpkgs#firefox"]'
-  echo "ref  = \"github:NixOS/nixpkgs/${FIREFOX_REV}\"   # PINNED to published rev"
+  echo "ref  = \"github:NixOS/nixpkgs/${REV_A}\""
+  echo ""
+  echo "[profiles.chromium]"
+  echo 'pkgs = ["nixpkgs#chromium"]'
+  echo "ref  = \"github:NixOS/nixpkgs/${REV_A}\""
+  echo ""
+  echo "[profiles.brave]"
+  echo 'pkgs = ["nixpkgs#brave"]'
+  echo "ref  = \"github:NixOS/nixpkgs/${REV_A}\""
+  echo ""
+  echo "[profiles.obsidian]"
+  echo 'pkgs = ["nixpkgs#obsidian"]'
+  echo "ref  = \"github:NixOS/nixpkgs/${REV_B}\""
   echo ""
   echo "[profiles.torbrowser]"
   echo 'pkgs = ["nixpkgs#tor-browser"]'
   echo 'kasm_name = "tor-browser"'
-  if [ -n "${TORBROWSER_REV}" ]; then
-    echo "ref = \"github:NixOS/nixpkgs/${TORBROWSER_REV}\""
-  fi
+  echo "ref  = \"github:NixOS/nixpkgs/${REV_B}\""
 } >> "${SPIKE_TOML}"
 
-log "spike config profiles: $(grep -c '^\[profiles\.' "${SPIKE_TOML}") (expect 3)"
+log "v1 config profiles: $(grep -c '^\[profiles\.' "${SPIKE_TOML}") (expect 6: tracelabs + 5 requires)"
 
 # ── 2. build (on the forge, via the DinD driver) ──────────────────────────
 # APP_BASE_IMAGE + NIX_CONFIG_FILE overrides are honoured by dind-build.sh.
@@ -83,7 +115,7 @@ export RESOLUTE_APPS="tracelabs"
 export RESOLUTE_BASE_IMAGE="${RESOLUTE_BASE}"
 export NIX_CONFIG_FILE="${SPIKE_TOML}"
 export SCOPED_BUILD=1
-export PROFILES="tracelabs,firefox,torbrowser"
+export PROFILES="tracelabs,obsidian,chromium,firefox,brave,torbrowser"
 export EMIT_APPS=1
 unset PUSH || true
 bash "${REPO}/runs/nix-portal/dind-build.sh"

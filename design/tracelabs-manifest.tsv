@@ -1,0 +1,33 @@
+# Trace Labs OSINT image — per-tool manifest (design/tracelabs-osint-image.md §2 deliverable).
+# Source of truth: tracelabs/tlosint-vm scripts/tlosint-tools.sh @ 71d9815401ce3f061dbf65e509f57073fa1e2be1
+# nixpkgs availability verified against rev d407951447dcd00442e97087bf374aad70c04cea on .140 (2026-07-20).
+# Columns: tool <TAB> upstream-source <TAB> v1-included <TAB> mechanism <TAB> notes/excluded-reason
+tool	upstream-source	v1-included	mechanism	notes
+chromium	nixpkgs#chromium	yes	requires (catalog profile)	composed via requires; dedups with standalone chromium:nix
+firefox	nixpkgs#firefox	yes	requires (catalog profile)	upstream uses firefox-esr; catalog ships firefox (deviation recorded, design §3.3)
+brave	nixpkgs#brave	yes	requires (catalog profile)	composed via requires
+torbrowser	nixpkgs#tor-browser	yes	requires (catalog profile)	composed via requires; replaces upstream torbrowser-launcher
+obsidian	nixpkgs#obsidian	yes	requires (catalog profile)	the TL Vault workflow host; composed via requires
+maltego	nixpkgs#maltego	yes	tracelabs pkgs (nixpkgs)	owner steer 2026-07-19; NOT a catalog/fat-store profile; unfree (allowUnfree global)
+sherlock	nixpkgs#sherlock	yes	tracelabs pkgs (nixpkgs)	username enumeration
+sn0int	nixpkgs#sn0int	yes	tracelabs pkgs (nixpkgs)	semi-automatic OSINT framework
+translate-shell	nixpkgs#translate-shell	yes	tracelabs pkgs (nixpkgs)	`trans` CLI
+exiftool	nixpkgs#exiftool	yes	tracelabs pkgs (nixpkgs)	metadata extraction
+steghide	nixpkgs#steghide	yes	tracelabs pkgs (nixpkgs)	steganography
+stegseek	nixpkgs#stegseek	yes	tracelabs pkgs (nixpkgs)	steghide cracker
+tor	nixpkgs#tor	yes	tracelabs pkgs (nixpkgs)	CLI only; NOT auto-started (design §5.4)
+shodan	nixpkgs#python3Packages.shodan	yes	tracelabs pkgs (nixpkgs)	CLI; needs API key at runtime (deferred config, not a build concern)
+spiderfoot	github.com/smicallef/spiderfoot	yes	overlay derivation	not in nixpkgs; overlay pkg; lxml<5 pin relaxed (upstream note)
+phoneinfoga	github.com/sundowndev/phoneinfoga	yes	overlay derivation	not in nixpkgs; Go (buildGoModule)
+sublist3r	github.com/aboul3la/Sublist3r	yes	overlay derivation	not in nixpkgs; Python (buildPythonApplication)
+metagoofil	github.com/opsdisk/metagoofil	yes	overlay derivation	not in nixpkgs; Python
+stegosuite	(apt: stegosuite)	no	—	absent from nixpkgs; upstream treats as optional — skip unless asked
+owlculus	github.com/be0vlk/owlculus	no	—	Docker-based; nested Docker is a non-starter in Kasm (design §2)
+docker/docker-compose	docker-ce	no	—	nested containers unsupported in Kasm; dropped
+torbrowser-launcher	apt	no	—	obviated by the torbrowser catalog profile
+OSINT-Updater	tracelabs-vm-updater	no	—	update model = image rebuild, not in-VM updater
+firefox OSINT policy + bookmarks	tl-overlays firefox-esr/distribution	yes	wiring (not nix)	staged into image; design §2 "Wiring, not Nix"
+chromium OSINT policy + bookmarks	tl-overlays usr/share/chromium	yes	wiring (not nix)	initial_bookmarks + master_preferences
+TL Vault / Obsidian workflow	tl-overlays etc/skel/Desktop/TL-Vault	yes	wiring (default-profile seed)	seeded to /home/kasm-default-profile/Desktop (new users only, design §5.3)
+wallpaper + branding	tl-overlays usr/share/backgrounds/tracelabs	yes	wiring (not nix)	TraceLabs wallpaper + XFCE backdrop
+CTF guides (PDF) + desktop launchers	tl-overlays etc/skel/Desktop	yes	wiring (default-profile seed)	participant/judge guides, obsidian/tofm/searchparty launchers

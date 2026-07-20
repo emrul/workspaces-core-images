@@ -128,6 +128,20 @@ mk_resolute_reg_tar() {
       -C "${d}" -cf "${BLOBS}/resolute-reg-${id}.tar" nix-stores
 }
 
+# ── resolute desktop-asset wiring: post-build.sh only (NO single-app startup) ─
+# The Resolute base owns the desktop, so a multi-store app contributes only its
+# static assets (vault seed, wallpaper, browser policy) via post-build.sh —
+# never custom_startup/nix-app-launch (those are the single-app seam). Returns
+# non-zero (no tar) when the app ships no post-build.sh.
+stage_resolute_wiring_tar() {
+  local p="$1" w="${STAGING}/.rwiring-${p}"
+  [[ -s "${BLOBS}/rwiring-${p}.tar" ]] && return 0
+  [[ -f "${NIXSRC}/${p}/post-build.sh" ]] || return 1
+  rm -rf "${w}"; mkdir -p "${w}"
+  DESTDIR="${w}" sh "${NIXSRC}/${p}/post-build.sh" >&2 || return 1
+  tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C "${w}" -cf "${BLOBS}/rwiring-${p}.tar" .
+}
+
 # ── per-app wiring layer (custom_startup, launchers, post-build output) ──────
 stage_wiring_tar() {
   local p="$1" w="${STAGING}/.wiring-${p}"
@@ -319,6 +333,11 @@ if [[ -n "${RESOLUTE_APPS}" ]]; then
     md="$(app_meta_dir "${p}")"; [[ -n "${md}" ]] && det_tar "${md}" var "${md}" && r_args+=( -f "${BLOBS}/${md}.tar" )
     mk_resolute_reg_tar "${id}" && r_args+=( -f "${BLOBS}/resolute-reg-${id}.tar" ) \
       || { log "resolute ${p}: registration tar failed"; continue; }
+    # Optional desktop-asset layer (vault/wallpaper/policy) when the app ships a
+    # post-build.sh (e.g. src/ubuntu/install/nix/tracelabs/).
+    if stage_resolute_wiring_tar "${p}"; then
+      r_args+=( -f "${BLOBS}/rwiring-${p}.tar" ); log "resolute ${p}: + desktop-asset wiring layer"
+    fi
     r_ref="${REG_LOCAL}/nix-resolute-${p}:${RESOLUTE_TAG}"
     r_final="${RESOLUTE_REPO}-${p}:${RESOLUTE_TAG}"
     # Provenance labels mirror the per-app path (config-only; store blobs dedupe).

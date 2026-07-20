@@ -45,6 +45,14 @@
           recorder     = pkgs.recorder;
           webcam       = pkgs.webcam;
           gamepad      = pkgs.gamepad;
+          # Maltego CE with the NetBeans keyring disabled (TraceLabs; see
+          # overlay.nix). Unfree — allowUnfree is set above.
+          maltego      = pkgs.maltego;
+          # Trace Labs OSINT tools not in nixpkgs (design §4).
+          spiderfoot   = pkgs.spiderfoot;
+          phoneinfoga  = pkgs.phoneinfoga;
+          sublist3r    = pkgs.sublist3r;
+          metagoofil   = pkgs.metagoofil;
           default      = pkgs.chrome;
         });
     };
