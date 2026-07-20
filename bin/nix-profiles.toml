@@ -414,3 +414,45 @@ pkgs = ["nixpkgs#superTuxKart", "nixpkgs#sdl3^lib"]
 # functional gain.
 pkgs      = ["path:/config/steam-overlay#steam-vgl"]
 platforms = ["amd64"]
+
+# ── Trace Labs OSINT desktop (Resolute multi-store; design §2/§3) ──────
+# A DESKTOP workspace, not a single-app launch — assembled on the Resolute nix
+# base via the RESOLUTE_APPS build path (dind-build.sh → build-nix-store-volume
+# --resolute-app → nix-crane-assemble). No custom_startup.sh, so the normal
+# --emit-app-images pass stages its store partition + installs
+# /nix/var/nix/profiles/tracelabs (which the scan stage's vulnix + syft/grype
+# passes cover) but emits NO single-app image; the desktop image comes only from
+# the resolute path. fat_store=false keeps it out of the fat store (full desktop,
+# not a single app). No `ref` → floats with [nixpkgs].ref (nixos-26.05) for CVE
+# freshness on the OSINT tools; the 4 overlay derivations
+# (spiderfoot/phoneinfoga/sublist3r/metagoofil) and maltego eval against that
+# same rev. requires[] pull the catalog's OWN browser profiles (chromium/firefox/
+# brave ride nixos-unstable, obsidian/torbrowser ride the base) so tracelabs'
+# copies of those store layers dedup byte-for-byte with the standalone images.
+# app_base is inert (the build passes --app-base-image); amd64 only (tor-browser
+# is x86_64/i686). See design/tracelabs-osint-image.md and the build runbook.
+[profiles.tracelabs]
+kasm_name = "tracelabs-osint"
+fat_store = false
+platforms = ["amd64"]
+app_base  = "resolute"
+pkgs = [
+    # nixpkgs OSINT tools, unique to TraceLabs (design §3)
+    "nixpkgs#sherlock",
+    "nixpkgs#sn0int",
+    "nixpkgs#translate-shell",
+    "nixpkgs#exiftool",
+    "nixpkgs#steghide",
+    "nixpkgs#stegseek",
+    "nixpkgs#tor",                       # CLI only; not auto-started
+    "nixpkgs#python3Packages.shodan",    # needs API key at runtime
+    # Maltego CE, keyring-disabled wrapper (overlay); unfree (allowUnfree global)
+    "path:/config/kasm-overlay#maltego",
+    # overlay derivations — not in nixpkgs (design §4)
+    "path:/config/kasm-overlay#spiderfoot",
+    "path:/config/kasm-overlay#phoneinfoga",
+    "path:/config/kasm-overlay#sublist3r",
+    "path:/config/kasm-overlay#metagoofil",
+]
+# composed via requires → three-way blob dedup with the standalone apps + fat store
+requires = ["obsidian", "chromium", "firefox", "brave", "torbrowser"]

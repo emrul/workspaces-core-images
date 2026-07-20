@@ -270,6 +270,21 @@ sbom_ref() {  # $1=scan name → SBOM source-name (intended ref only with intent
   [ -n "${r}" ] || r="$(cand_ref "$1")"
   echo "${r}"
 }
+# Resolute (multi-store DESKTOP) profiles — app_base="resolute" in the TOML.
+# They ship no single-app :dev image (no custom_startup), so they never appear
+# in the image-derived app list above, yet their profile IS installed in the
+# staging volume. List them here so the vulnix advisory pass below can cover
+# their desktop-unique closure (e.g. tracelabs' OSINT tools + maltego). Full
+# syft/grype SBOM + attestation of the assembled desktop image arrives with the
+# resolute build/publish path (they need the built image + a multi-store export).
+resolute_profiles() {
+  awk '
+    /^\[profiles\./ { cur=$0; sub(/^\[profiles\./,"",cur); sub(/\].*/,"",cur) }
+    /^[[:space:]]*app_base[[:space:]]*=/ && cur!="" {
+      v=$0; sub(/^[^"]*"/,"",v); sub(/".*/,"",v); if (v=="resolute") print cur
+    }
+  ' "${PROFILES_TOML}" 2>/dev/null
+}
 
 # ── one image: export → normalize → syft → grype → stats row ─────────────────
 scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
@@ -391,14 +406,26 @@ if [ -n "${FAT_IMG}" ]; then
 fi
 
 # ── vulnix advisory pass (one inner container for all apps) ──────────────────
-if [ "${SKIP_VULNIX}" != "1" ] && [ "${#apps[@]}" -gt 0 ]; then
-  log "vulnix advisory pass (${#apps[@]} apps; staging volume nix-build-stage-${ARCH})"
+# Scanned set = the per-image apps PLUS any in-scope resolute desktop profile
+# (no per-image row, but its profile is in the staging volume). Scope predicate
+# mirrors the apps[] scoping: full/SCAN_ALL runs, or the NIX_PROFILES filter.
+vulnix_apps=("${apps[@]}")
+if [ "${SKIP_VULNIX}" != "1" ]; then
+  while IFS= read -r rp; do
+    [ -n "${rp}" ] || continue
+    { [ "${SCAN_ALL:-0}" = "1" ] || [ -z "${FILTER}" ] || in_filter "${rp}"; } || continue
+    dup=0; for a in "${vulnix_apps[@]}"; do [ "${a}" = "${rp}" ] && { dup=1; break; }; done
+    [ "${dup}" = "0" ] && { vulnix_apps+=("${rp}"); log "vulnix: +resolute profile '${rp}' (advisory only — no per-image SBOM until the resolute build/publish path lands)"; }
+  done < <(resolute_profiles)
+fi
+if [ "${SKIP_VULNIX}" != "1" ] && [ "${#vulnix_apps[@]}" -gt 0 ]; then
+  log "vulnix advisory pass (${#vulnix_apps[@]} apps; staging volume nix-build-stage-${ARCH})"
   if ! "${DOCKER}" volume inspect "nix-build-stage-${ARCH}" >/dev/null 2>&1; then
     log "WARN staging volume absent — vulnix skipped (advisory only)"
   else
     "${DOCKER}" run --rm \
       -e NIX_CONFIG="experimental-features = nix-command flakes" \
-      -e APPS="${apps[*]}" \
+      -e APPS="${vulnix_apps[*]}" \
       -e VULNIX_REF="github:NixOS/nixpkgs/${VULNIX_NIXPKGS_REV}#vulnix" \
       -v "nix-build-stage-${ARCH}:/nix" \
       -v "${VULNIX_DIR}:/out" \

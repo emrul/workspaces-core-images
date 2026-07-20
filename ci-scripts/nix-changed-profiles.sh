@@ -100,7 +100,9 @@ while IFS= read -r f; do
     # (pkgs/<x>/pin.json|package.nix) is handled by the arms below.
     bin/nix-kasm-overlay/flake.nix|bin/nix-kasm-overlay/flake.lock|\
     bin/nix-kasm-overlay/overlay.nix|bin/nix-kasm-overlay/lib/*)
-      apps="${apps} chrome vivaldi"; BASES_AFFECTED="${BASES_AFFECTED} resolute" ;;
+      # overlay.nix also defines the maltego wrapper + imports the 4 OSINT
+      # derivations, so tracelabs is affected alongside chrome/vivaldi.
+      apps="${apps} chrome vivaldi tracelabs"; BASES_AFFECTED="${BASES_AFFECTED} resolute" ;;
     # These Nix-packaged services are BASE components (baked into the resolute
     # base via nix-bake-closure), NOT catalog apps — a pin/package change
     # rebuilds the resolute base, not an app profile. Matched before the generic
@@ -109,6 +111,13 @@ while IFS= read -r f; do
     bin/nix-kasm-overlay/pkgs/audio_input/*|bin/nix-kasm-overlay/pkgs/recorder/*|\
     bin/nix-kasm-overlay/pkgs/webcam/*|bin/nix-kasm-overlay/pkgs/gamepad/*)
       BASES_AFFECTED="${BASES_AFFECTED} resolute" ;;
+    # TraceLabs OSINT overlay tools (design §4) are NOT standalone profiles —
+    # they're members of the `tracelabs` desktop profile. A pkg change must
+    # rebuild tracelabs, not a same-named profile that doesn't exist. Matched
+    # before the generic pkgs case below (like the base-component arm above).
+    bin/nix-kasm-overlay/pkgs/spiderfoot/*|bin/nix-kasm-overlay/pkgs/phoneinfoga/*|\
+    bin/nix-kasm-overlay/pkgs/sublist3r/*|bin/nix-kasm-overlay/pkgs/metagoofil/*)
+      apps="${apps} tracelabs" ;;
     bin/nix-kasm-overlay/pkgs/*/*)
       a="${f#bin/nix-kasm-overlay/pkgs/}"; a="${a%%/*}"; apps="${apps} ${a}" ;;
     # Any OTHER src/ubuntu path (fonts, xfce, kasm_vnc, audio, printer, …) is
