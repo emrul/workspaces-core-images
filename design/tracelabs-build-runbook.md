@@ -94,17 +94,23 @@ exists), `podman login … --password-stdin < /tok`, tag, push, logout. Then
 
 ## 4. Known gaps (as of 2026-07-20)
 
-### 4.1 `requires` browsers don't activate — the jq gap (REAL BUG)
+### 4.1 `requires` browsers don't activate — the jq gap (FIX: bake jq via nix)
 `nix-activate` expands `requires` (firefox/torbrowser) and builds the menu
-**with jq** — but **jq is not on nix-activate's runtime PATH** (it's build-side
-only). So `expand_deps` silently skips, only `tracelabs` activates, and the
-composed browsers never appear (`NIX_APP_ACTIVE="tracelabs"` only; menu has
-just `nix-maltego.desktop`). CLI tools (sherlock/sn0int) have no `.desktop` so
-they're never in the menu regardless (launch from a terminal — they *are* on
-PATH via the tracelabs profile). **Fix options:** make `expand_deps` jq-free
-(parse `requires` from `_meta.json` with grep/sed), or ship jq to
-nix-activate's PATH in the base. The desktop-mode signal was already made
-jq-free (marker file) for the same reason.
+**with jq** — but jq was only installed build-side, so it wasn't on
+nix-activate's *runtime* PATH. `expand_deps` silently skipped, only
+`tracelabs` activated, and the composed browsers never appeared
+(`NIX_APP_ACTIVE="tracelabs"` only; menu had just `nix-maltego.desktop`).
+**Fix (owner direction 2026-07-20): bake jq via NIX into the Resolute base**,
+the same way KasmVNC/profile-sync are — NOT apt (the base is moving off apt
+deps). Three edits (done in source, need a Resolute base rebuild):
+`bin/nix-kasm-overlay/flake.nix` adds `jq = pkgs.jq` (nixpkgs passthrough);
+`ci-scripts/nix-base-build.sh` adds `--pkg jq` to the `nix-bake-closure` call;
+`dockerfile-nix-ubuntu-resolute` takes `JQ_STORE_PATH` and symlinks
+`jq -> /usr/bin/jq`. (I first tried a jq-free `expand_deps`, then apt — both
+wrong; nix-baked is the direction. The desktop-mode *signal* stays a jq-free
+marker file since it runs before activation.) CLI tools (sherlock/sn0int) still
+won't be in the *menu* (no `.desktop`); they're on PATH via the profile —
+launch from a terminal.
 
 ### 4.2 seccomp must be DEFAULT, not kasm-chrome
 The kasm-chrome seccomp (copied from Firefox) breaks glycin's
@@ -133,16 +139,20 @@ the module cache. Maltego-app-specific, separate from packaging.
 
 ## 5. The Resolute `/nix-stores/tracelabs` pivot — is it cheap? (assessment)
 
-**Verdict: moderate, not trivial, and architecturally cleaner — likely the
-right long-term shape.** It reuses machinery that already exists:
+**Verdict: cheaper than first framed, and architecturally cleaner — the right
+long-term shape.** Correction (owner, 2026-07-20): the TraceLabs store does
+**NOT** need to be a runtime *mount*. It's a self-contained image — **bake the
+store as a `/nix-stores/tracelabs` directory** into the image (exactly like the
+Resolute base bakes services at `/nix-stores/services`), and register it with
+`nix-compose` so it's unioned into `/nix` at boot. No `run_config` mount, no
+separate store-mount image. It reuses machinery that already exists:
 
-- We *already* build the TraceLabs nix store; `build-nix-store-volume` already
-  emits a **store-mount image** (that's exactly what the fat store
-  `nix-store:nix` is). A `nix-store-tracelabs` mount image is the same shape.
-- Resolute *already* mounts `/nix-stores/base` (fat) + `/nix-stores/services`
-  and unions them via `nix-compose`. Adding `/nix-stores/tracelabs` is a
-  `nix-compose` registration + a `run_config` mount — the established
-  fat-store-runtime-selection pattern (see memory `nix-fatstore-runtime-selection`).
+- We *already* build + bake the TraceLabs store into the image (today at
+  `/store`); the only change is baking it at `/nix-stores/tracelabs` on the
+  Resolute base instead of `/store` on Noble.
+- Resolute *already* unions `/nix-stores/base` + `/nix-stores/services` via
+  `nix-compose`. Adding `/nix-stores/tracelabs` to that union is a
+  `nix-compose` registration.
 
 What it *buys*:
 - Runs on the **proven Resolute desktop** → **no desktop-mode nix-activate
@@ -151,7 +161,7 @@ What it *buys*:
 - **Store-level dedup** with the fat store (shared paths overlaid, not copied).
 
 What it *costs* / to check:
-- Packaging the TraceLabs store as a mountable store image + `nix-compose`
+- Baking the TraceLabs store at `/nix-stores/tracelabs` + `nix-compose`
   registration + the Kasm `run_config` mount.
 - The activation path: confirm the tools land on PATH / in the menu under the
   multi-store union (the §4.1 jq gap may or may not recur depending on whether

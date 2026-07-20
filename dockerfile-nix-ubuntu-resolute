@@ -32,6 +32,7 @@ ARG AUDIO_INPUT_STORE_PATH
 ARG RECORDER_STORE_PATH
 ARG WEBCAM_STORE_PATH
 ARG GAMEPAD_STORE_PATH
+ARG JQ_STORE_PATH
 
 # ── Nix activation hooks (lockstep with dockerfile-nix-ubuntu + nix-compose) ──
 # nix-bwrap-run needs a real /usr/bin/bwrap for buildFHSEnv apps; self-heal if a
@@ -100,6 +101,10 @@ RUN set -eu; \
         ln -sf "${ps}/bin/kasm-profile-sync-2" /usr/bin/kasm-profile-sync-2; \
         echo "profile-sync wired"; \
     else echo "profile-sync store unset — skipping"; fi; \
+    # jq → /usr/bin/jq so nix-activate has it at runtime (nix-native, not apt).
+    jqp="${svc}/$(basename "${JQ_STORE_PATH:-__unset__}")"; \
+    if [ -x "${jqp}/bin/jq" ]; then ln -sf "${jqp}/bin/jq" /usr/bin/jq; echo "jq wired"; \
+    else echo "jq store unset — skipping"; fi; \
     # staticx services at the /dockerstartup/<svc>/<binary> paths their units exec.
     wire() { p="$1"; d="$2"; b="$3"; \
       if [ -x "${p}/bin/${b}" ]; then mkdir -p "$(dirname "${d}")"; ln -sf "${p}/bin/${b}" "${d}"; echo "wired ${d}"; \

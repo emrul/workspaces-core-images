@@ -86,7 +86,7 @@ EOF
     bin/nix-bake-closure \
       --base "${coretag}" --tag "${nixtag}" --store-id services \
       --pkg kasmvnc --pkg profile_sync --pkg audio_input \
-      --pkg recorder --pkg webcam --pkg gamepad \
+      --pkg recorder --pkg webcam --pkg gamepad --pkg jq \
       --dockerfile /work/dockerfile-nix-ubuntu-resolute \
       --overlay /work/bin/nix-kasm-overlay \
       --context "${ctx}" \

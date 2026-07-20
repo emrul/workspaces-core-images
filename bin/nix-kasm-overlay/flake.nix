@@ -32,6 +32,11 @@
           chrome       = pkgs.chrome;
           vivaldi      = pkgs.vivaldi;
           kasmvnc      = pkgs.kasmvnc;
+          # jq: baked into the resolute base's /nix-stores/services so
+          # nix-activate has it at RUNTIME (profile activation, `requires`
+          # expansion, _meta.json reads). A plain nixpkgs passthrough — no
+          # overlay build — but shipped via nix, not apt (nix-native base).
+          jq           = pkgs.jq;
           profile_sync = pkgs.profile_sync;
           audio_input  = pkgs.audio_input;
           recorder     = pkgs.recorder;
