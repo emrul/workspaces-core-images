@@ -295,37 +295,39 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   c="$("${DOCKER}" create --name "${CTR_PREFIX}-${name}" "${img}" true)" || return 1
   "${DOCKER}" export "${c}" | tar -C "${d}/rootfs" -xf - || { "${DOCKER}" rm "${c}" >/dev/null; return 1; }
   "${DOCKER}" rm "${c}" >/dev/null
-  mkdir -p "${d}/rootfs/nix"
-  local scan_root="${d}/rootfs"
+  local scan_root
   if [ "${symlinks}" = "2" ]; then
     # Resolute multi-store: at rest the closure is split across REAL store roots
     # (/store = app closure; /nix-stores/<svc>/store = base services), unioned into
     # /nix/store only at runtime by nix-compose. /nix-stores/<app>/{store,var} are
     # registration SYMLINKS back to /store,/var (skip them). Union every real store
-    # root — content-addressed names never collide. Scan the nix subtree ONLY (the
-    # ubuntu OS layer is scan-base's L1/L2 job; keeps this row nix-comparable).
-    mkdir -p "${d}/rootfs/nix/store" "${d}/rootfs/nix/var"
+    # root into a CLEAN tree whose store sits at <root>/nix/store — syft's nix
+    # cataloger keys on the ".../nix/store/" path segment, so the store MUST be one
+    # level under a "nix" dir (scan_root=<root>/nix would leave it at <root>/store,
+    # which the cataloger misses → only incidental language pkgs, no closure). No
+    # ubuntu OS layer here (that's scan-base's L1/L2 job). CA names never collide.
+    mkdir -p "${d}/scan/nix/store"
     local sr
     for sr in "${d}/rootfs/store" "${d}/rootfs/nix-stores"/*/store; do
       { [ -d "${sr}" ] && [ ! -L "${sr}" ]; } || continue
       # -exec mv -t {} + batches (a store root can hold thousands of entries → ARG_MAX).
-      find "${sr}" -mindepth 1 -maxdepth 1 -exec mv -t "${d}/rootfs/nix/store/" {} + 2>/dev/null || true
+      find "${sr}" -mindepth 1 -maxdepth 1 -exec mv -t "${d}/scan/nix/store/" {} + 2>/dev/null || true
     done
-    [ -d "${d}/rootfs/var/nix" ] && mv "${d}/rootfs/var/nix" "${d}/rootfs/nix/var/nix" 2>/dev/null || true
-    scan_root="${d}/rootfs/nix"
+    scan_root="${d}/scan"
   else
+    mkdir -p "${d}/rootfs/nix"
     if [ "${symlinks}" = "1" ]; then rm -f "${d}/rootfs/nix/store" "${d}/rootfs/nix/var"; fi
     mv "${d}/rootfs/store" "${d}/rootfs/nix/store"
     mv "${d}/rootfs/var"   "${d}/rootfs/nix/var"
+    # Drop the nix DB from the scan view: syft's nix cataloger catalogues every
+    # path REGISTERED in db.sqlite, and the fat store ships the staging volume's
+    # db — which registers old-generation paths whose store dirs are NOT in the
+    # image → phantom packages/CVEs (2688148353's fat row showed 25.05 freerdp/
+    # openssl "present" post-bump). Dir enumeration alone is full coverage. (Mode 2
+    # moves no var, so has no db to drop.)
+    rm -rf "${d}/rootfs/nix/var/nix/db"
+    scan_root="${d}/rootfs"
   fi
-  # Drop the nix DB from the scan view: syft's nix cataloger catalogues every
-  # path REGISTERED in db.sqlite, and the fat store ships the staging volume's
-  # db — which registers old-generation paths whose store dirs are NOT in the
-  # image. Result: phantom packages/CVEs (2688148353's fat row showed 25.05
-  # freerdp/openssl "present" post-bump, all attributed to db.sqlite). The
-  # spike proved dir enumeration alone gives full coverage; the SBOM must
-  # reflect shipped store dirs only.
-  rm -rf "${d}/rootfs/nix/var/nix/db"
   # IMAGE cataloger set, not the dir: defaults — directory scans enable
   # declared-dependency catalogers (lockfiles/manifests inside the rootfs
   # would inflate the inventory with software that isn't installed). The
