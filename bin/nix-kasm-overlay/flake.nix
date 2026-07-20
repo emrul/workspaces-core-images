@@ -36,7 +36,10 @@
           # nix-activate has it at RUNTIME (profile activation, `requires`
           # expansion, _meta.json reads). A plain nixpkgs passthrough — no
           # overlay build — but shipped via nix, not apt (nix-native base).
-          jq           = pkgs.jq;
+          # Select the `bin` output explicitly: pkgs.jq is multi-output
+          # (bin/man/dev/lib/out) and `nix build .#jq | tail -1` otherwise
+          # grabs the `-man` path (no bin/jq), so the base wiring skips it.
+          jq           = pkgs.jq.bin;
           profile_sync = pkgs.profile_sync;
           audio_input  = pkgs.audio_input;
           recorder     = pkgs.recorder;

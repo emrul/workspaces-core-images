@@ -37,6 +37,8 @@ EMIT_APP_IMAGES=0
 APP_BASE_IMAGE="localhost/nix-ubuntu:dev"
 APP_REPO="localhost/nix"
 APP_TAG=""
+RESOLUTE_APPS=""
+RESOLUTE_BASE_IMAGE="localhost/nix-ubuntu-resolute:dev"
 
 # ───── Helpers ─────────────────────────────────────────────────────────
 log()  { printf '%s %s\n' "[build-nix-store-volume]" "$*" >&2; }
@@ -81,6 +83,17 @@ build-nix-store-volume — build a Nix-store OCI image
   --app-repo REPO      Repo prefix for emitted images
                        (default: ${APP_REPO}; store-images go to
                        <REPO>-store/<profile>:<tag>).
+  --resolute-app P     ALSO emit a DESKTOP image for profile P on the
+                       Resolute nix base (multi-store): the same byte-
+                       identical store partitions baked at /store and
+                       registered as /nix-stores/<P> so the base's
+                       nix-compose unions it into /nix at boot. Implies
+                       --emit-app-images (reuses its partitions +
+                       Dockerfile.<P>). Repeatable. Output:
+                       ${RESOLUTE_REPO:-localhost/nix-resolute}-<P>:<tag>.
+  --resolute-base-image REF
+                       Resolute nix base for --resolute-app
+                       (default: ${RESOLUTE_BASE_IMAGE}).
   -h, --help           This text
 
 Environment:
@@ -112,6 +125,8 @@ while [[ $# -gt 0 ]]; do
     --emit-app-images) EMIT_APP_IMAGES=1; shift ;;
     --app-base-image)  APP_BASE_IMAGE="$2"; shift 2 ;;
     --app-repo)        APP_REPO="$2"; shift 2 ;;
+    --resolute-app)    RESOLUTE_APPS="${RESOLUTE_APPS} $2"; shift 2 ;;
+    --resolute-base-image) RESOLUTE_BASE_IMAGE="$2"; shift 2 ;;
     -h|--help)      usage; exit 0 ;;
     *)              usage >&2; fail "unknown arg: $1" ;;
   esac
@@ -1154,6 +1169,15 @@ if [[ "${EMIT_APP_IMAGES}" == 1 ]]; then
     fail "--emit-app-images: base image not found in ${CONTAINER_CLI} store: ${APP_BASE_IMAGE} (load/build nix-ubuntu first)"
   fi
 fi
+# --resolute-app reuses the per-app store partitions + staged Dockerfile.<app>,
+# so it implies --emit-app-images, and needs its (Resolute) base present too.
+if [[ -n "${RESOLUTE_APPS// }" ]]; then
+  [[ "${EMIT_APP_IMAGES}" == 1 ]] || fail "--resolute-app requires --emit-app-images (it reuses the per-app store partitions)"
+  if ! "${CONTAINER_CLI}" image exists "${RESOLUTE_BASE_IMAGE}" 2>/dev/null \
+     && ! "${CONTAINER_CLI}" image inspect "${RESOLUTE_BASE_IMAGE}" >/dev/null 2>&1; then
+    fail "--resolute-app: base image not found in ${CONTAINER_CLI} store: ${RESOLUTE_BASE_IMAGE} (build the resolute nix base first)"
+  fi
+fi
 
 log "[1/3] running nix build inside ${NIX_IMAGE_DEFAULT}"
 log "  (named volume ${STAGE_VOLUME} caches between runs — first run is slow)"
@@ -1238,6 +1262,9 @@ asm_env=(
   "WIRING_STATE_DIR=${OUTPUT_DIR}"
 )
 [[ "${EMIT_APP_IMAGES}" == 1 ]] && asm_env+=( "APP_BASE_IMAGE=${APP_BASE_IMAGE}" )
+if [[ -n "${RESOLUTE_APPS// }" ]]; then
+  asm_env+=( "RESOLUTE_APPS=${RESOLUTE_APPS# }" "RESOLUTE_BASE_IMAGE=${RESOLUTE_BASE_IMAGE}" )
+fi
 [[ -n "${PUSH_REGISTRY}" ]] && asm_env+=( "PUSH_REGISTRY=${PUSH_REGISTRY}" )
 env "${asm_env[@]}" bash "${SCRIPT_DIR}/nix-crane-assemble"
 

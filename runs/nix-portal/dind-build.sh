@@ -173,6 +173,15 @@ if [ "${SCOPED_BUILD:-0}" = "1" ] && [ -n "${PROFILES:-}" ]; then
 elif [ -n "${PROFILES:-}" ]; then
   echo "[driver] PROFILES='${PROFILES}' noted (gating/scan scope) — building FULL selection"
 fi
+# RESOLUTE_APPS: ALSO emit the DESKTOP (Resolute multi-store) variant of these
+# profiles — same partitions as --emit-app-images, baked as /nix-stores/<app> on
+# the Resolute nix base (design/nix-workspace-as-code.md). CSV/space list.
+if [ -n "${RESOLUTE_APPS:-}" ]; then
+  for p in $(printf '%s' "$RESOLUTE_APPS" | tr ',' ' '); do
+    [ -n "$p" ] && args+=(--resolute-app "$p")
+  done
+  [ -n "${RESOLUTE_BASE_IMAGE:-}" ] && args+=(--resolute-base-image "$RESOLUTE_BASE_IMAGE")
+fi
 [ -n "${PUSH:-}" ] && args+=(--push "$PUSH")
 
 # ── 3. run the real build (bracketed for the disk/timing report) ───────────

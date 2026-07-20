@@ -34,6 +34,19 @@ APP_REPO="${APP_REPO:-localhost/nix}"
 APP_TAG="${APP_TAG:-dev}"
 CONTAINER_CLI="${CONTAINER_CLI:-podman}"
 ARCH="${ARCH:-amd64}"
+# ── Resolute multi-store apps (design/nix-workspace-as-code.md) ──────────────
+# A DESKTOP image built on the Resolute nix base instead of a single-app Noble
+# base. Same byte-identical store partition tars (→ /store, dedupe with the fat
+# store + standalone apps), baked as a store nix-compose unions into /nix at boot
+# — NOT the /nix/store->/store single-store seam. A tiny registration layer
+# symlinks /nix-stores/<id>/{store,var} -> /{store,var} so nix-compose's
+# `/nix-stores/*/store` glob picks it up. No single-app wiring (the Resolute base
+# owns the desktop + nix-activate); NIX_APP_PROFILES drives activation (requires
+# expand via nix-activate now that jq is baked into the base).
+RESOLUTE_APPS="${RESOLUTE_APPS:-}"                 # space list, e.g. "tracelabs"
+RESOLUTE_BASE_IMAGE="${RESOLUTE_BASE_IMAGE:-}"     # localhost/nix-ubuntu-resolute:dev
+RESOLUTE_REPO="${RESOLUTE_REPO:-localhost/nix-resolute}"
+RESOLUTE_TAG="${RESOLUTE_TAG:-${APP_TAG}}"
 REG_LOCAL="127.0.0.1:5000"
 NIXSRC="${REPO_ROOT}/src/ubuntu/install/nix"
 BLOBS="${STAGING}/.blobs"; mkdir -p "${BLOBS}"
@@ -97,6 +110,22 @@ mk_symlink_tar() {
   ln -s /store "${d}/nix/store"; ln -s /var "${d}/nix/var"
   tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
       -C "${d}" -cf "${BLOBS}/symlink.tar" nix
+}
+
+# ── resolute registration layer: /nix-stores/<id>/{store,var} -> /{store,var} ─
+# Lets nix-compose's `/nix-stores/*/store` glob find the store we baked at /store
+# WITHOUT re-rooting the (byte-identical, dedupe-preserving) store tars. `-d`
+# follows the symlink so the glob + `[ -d ]` guard match; the union then farms
+# /store's paths into the composed /nix/store, and reads profiles via
+# /nix-stores/<id>/var/nix/profiles -> /var/nix/profiles. Tiny, app-specific tar.
+mk_resolute_reg_tar() {
+  local id="$1" d="${STAGING}/.resolute-reg-${id}"
+  [[ -s "${BLOBS}/resolute-reg-${id}.tar" ]] && return 0
+  rm -rf "${d}"; mkdir -p "${d}/nix-stores/${id}"
+  ln -s /store "${d}/nix-stores/${id}/store"
+  ln -s /var   "${d}/nix-stores/${id}/var"
+  tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+      -C "${d}" -cf "${BLOBS}/resolute-reg-${id}.tar" nix-stores
 }
 
 # ── per-app wiring layer (custom_startup, launchers, post-build output) ──────
@@ -266,6 +295,56 @@ if [[ "${#apps[@]}" -gt 0 ]]; then
   done
   log "per-app: ok=${ok} skipped=${#skipped[@]} failed=${#failed[@]} ${failed[*]:-}"
   [[ "${#skipped[@]}" -gt 0 ]] && log "per-app skipped (fat-store-only, no custom_startup.sh): ${skipped[*]}"
+fi
+
+# ── resolute multi-store apps: desktop image on the Resolute nix base ────────
+# For each named app, reuse its already-tarred store partitions (same blobs as
+# the fat store + the standalone per-app image → registry-wide dedup) but assemble
+# onto the Resolute base with the /nix-stores/<id> registration layer instead of
+# the /nix/store->/store seam, and no single-app wiring.
+if [[ -n "${RESOLUTE_APPS}" ]]; then
+  [[ -n "${RESOLUTE_BASE_IMAGE}" ]] || fail "RESOLUTE_APPS set but RESOLUTE_BASE_IMAGE empty"
+  "${CONTAINER_CLI}" image exists "${RESOLUTE_BASE_IMAGE}" 2>/dev/null \
+    || "${CONTAINER_CLI}" image inspect "${RESOLUTE_BASE_IMAGE}" >/dev/null 2>&1 \
+    || fail "RESOLUTE_BASE_IMAGE not found in ${CONTAINER_CLI} store: ${RESOLUTE_BASE_IMAGE}"
+  rbase_ref="${REG_LOCAL}/nixresolutebase:${RESOLUTE_TAG}"
+  "${CONTAINER_CLI}" tag "${RESOLUTE_BASE_IMAGE}" "${rbase_ref}"
+  "${CONTAINER_CLI}" push --tls-verify=false "${rbase_ref}" >/dev/null
+  for p in ${RESOLUTE_APPS}; do
+    [[ -f "${STAGING}/Dockerfile.${p}" ]] || { log "resolute: no Dockerfile.${p} (build with --emit-app-images and --profile ${p}) — skipping"; continue; }
+    id="${p}"
+    log "assembling resolute multi-store app '${p}' (store id '${id}') on ${RESOLUTE_BASE_IMAGE}"
+    r_args=()
+    for part in $(app_store_parts "${p}"); do det_tar "${part}" store "${part}" && r_args+=( -f "${BLOBS}/${part}.tar" ); done
+    md="$(app_meta_dir "${p}")"; [[ -n "${md}" ]] && det_tar "${md}" var "${md}" && r_args+=( -f "${BLOBS}/${md}.tar" )
+    mk_resolute_reg_tar "${id}" && r_args+=( -f "${BLOBS}/resolute-reg-${id}.tar" ) \
+      || { log "resolute ${p}: registration tar failed"; continue; }
+    r_ref="${REG_LOCAL}/nix-resolute-${p}:${RESOLUTE_TAG}"
+    r_final="${RESOLUTE_REPO}-${p}:${RESOLUTE_TAG}"
+    # Provenance labels mirror the per-app path (config-only; store blobs dedupe).
+    r_ref_lbl="$(app_label "${p}" 2)"; r_rev_lbl="$(app_label "${p}" 3)"
+    r_sp_lbl="$(app_label "${p}" 4)"; r_ver_lbl="$(app_label "${p}" 5)"
+    r_mut=( --env "NIX_APP_PROFILES=${p}" --label "dev.kasm.nix.app=${p}" \
+            --label "dev.kasm.nix.base-model=resolute-multi-store" \
+            --label "dev.kasm.nix.store-id=${id}" )
+    [[ -n "${r_ref_lbl}" ]] && r_mut+=( --label "dev.kasm.nix.ref=${r_ref_lbl}" )
+    [[ -n "${r_rev_lbl}" ]] && r_mut+=( --label "dev.kasm.nix.rev=${r_rev_lbl}" )
+    [[ -n "${r_sp_lbl}" ]]  && r_mut+=( --label "dev.kasm.nix.store-path=${r_sp_lbl}" )
+    [[ -n "${BUILT_AT}" ]]  && r_mut+=( --label "dev.kasm.nix.built-at=${BUILT_AT}" )
+    [[ -n "${GIT_SHA}" ]]   && r_mut+=( --label "org.opencontainers.image.revision=${GIT_SHA}" )
+    [[ -n "${r_ver_lbl}" ]] && r_mut+=( --label "org.opencontainers.image.version=${r_ver_lbl}" )
+    "${CRANE}" append --insecure -b "${rbase_ref}" "${r_args[@]}" -t "${r_ref}" \
+      && "${CRANE}" mutate --insecure "${r_ref}" "${r_mut[@]}" -t "${r_ref}" \
+      || { log "resolute ${p}: crane assemble FAILED"; continue; }
+    "${CONTAINER_CLI}" pull --tls-verify=false "${r_ref}" >/dev/null \
+      && "${CONTAINER_CLI}" tag "${r_ref}" "${r_final}" \
+      || { log "resolute ${p}: pull/tag FAILED"; continue; }
+    if [[ -n "${PUSH_REGISTRY:-}" ]]; then
+      "${CRANE}" copy --insecure "${r_ref}" "${PUSH_REGISTRY}/nix-resolute-${p}:${RESOLUTE_TAG}" \
+        || log "resolute ${p}: push FAILED"
+    fi
+    log "resolute app ready: ${r_final}"
+  done
 fi
 
 # Persist the wiring-digest record + the assembled-app list (scan/publish scope)

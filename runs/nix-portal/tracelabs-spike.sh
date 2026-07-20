@@ -73,13 +73,22 @@ log "spike config profiles: $(grep -c '^\[profiles\.' "${SPIKE_TOML}") (expect 3
 # ── 2. build (on the forge, via the DinD driver) ──────────────────────────
 # APP_BASE_IMAGE + NIX_CONFIG_FILE overrides are honoured by dind-build.sh.
 # SCOPED_BUILD=1 narrows to the 3 profiles; no PUSH.
-log "building tracelabs+firefox+torbrowser on ${RESOLUTE_BASE} (scoped, no push)"
+log "building tracelabs+firefox+torbrowser + resolute desktop image (scoped, no push)"
+# APP_BASE_IMAGE is used only to stage per-app partitions/Dockerfile.tracelabs;
+# tracelabs has no custom_startup.sh so the per-app (single-store) loop SKIPS it
+# — no broken /nix/store->/store image is emitted. The desktop image comes from
+# RESOLUTE_APPS below (multi-store: /nix-stores/tracelabs on the Resolute base).
 export APP_BASE_IMAGE="${RESOLUTE_BASE}"
+export RESOLUTE_APPS="tracelabs"
+export RESOLUTE_BASE_IMAGE="${RESOLUTE_BASE}"
 export NIX_CONFIG_FILE="${SPIKE_TOML}"
 export SCOPED_BUILD=1
 export PROFILES="tracelabs,firefox,torbrowser"
 export EMIT_APPS=1
 unset PUSH || true
 bash "${REPO}/runs/nix-portal/dind-build.sh"
+
+log "build done — resolute desktop image: localhost/nix-resolute-tracelabs:dev"
+log "next: verify /nix-stores/tracelabs unions + tools resolve, then push :nix"
 
 log "build done — run the dedup digest check (§3) next"
