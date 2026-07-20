@@ -197,6 +197,41 @@ testing; then implement §5 as the real architecture (fixing §4.1 jq-free
 activation en route, since it's needed either way), and retire the Noble
 per-app variant for TraceLabs.
 
+## 5b. v1 (full design-compliant) — BUILT 2026-07-20 (commit cf723d6)
+
+The Resolute image is now the **full v1**, not just browsers+3-tools:
+- **13 OSINT tools** resolve on PATH: nixpkgs (sherlock, sn0int, translate-shell,
+  exiftool, steghide, stegseek, tor, shodan) + 4 overlay derivations
+  (`bin/nix-kasm-overlay/pkgs/{spiderfoot,phoneinfoga,sublist3r,metagoofil}`,
+  pinned to upstream tags — not in nixpkgs) + Maltego.
+- **requires = [obsidian, chromium, firefox, brave, torbrowser]**, each pinned
+  to its published rev (chromium/brave/firefox `61b7c44`, obsidian/torbrowser
+  `fd146203`) so the deltas dedup byte-for-byte with the standalone images.
+- **Maltego keyring fix**: `bin/nix-kasm-overlay/overlay.nix` wraps nixpkgs
+  maltego with `-J-Dnetbeans.keyring.no.{native,master}=true` → the NetBeans
+  keyring no-ops instead of stalling at "loading modules" (no secret-service
+  in-container). NEEDS live GUI validation.
+- **TL desktop assets** (`src/ubuntu/install/nix/tracelabs/`): `post-build.sh`
+  seeds the TL Vault + CTF guides + launchers into
+  `/home/kasm-default-profile/Desktop`, overrides `bg_default.png` with the
+  TraceLabs wallpaper, and drops the Firefox OSINT policy at
+  `/etc/firefox/policies/`. Staged by `nix-crane-assemble`'s
+  `stage_resolute_wiring_tar` (post-build.sh only — no single-app custom_startup)
+  wired into the RESOLUTE_APPS loop.
+
+Rebuild recipe: (1) `GEN_ONLY=1 bash runs/nix-portal/tracelabs-spike.sh` to
+regenerate the gitignored `bin/nix-profiles-tracelabs-spike.toml` (mutagen syncs
+it to the forge); (2) `dind-build.sh` with `RESOLUTE_APPS=tracelabs`,
+`PROFILES=tracelabs,obsidian,chromium,firefox,brave,torbrowser`,
+`APP_BASE_IMAGE=RESOLUTE_BASE_IMAGE=localhost/nix-ubuntu-resolute:dev`,
+`SCOPED_BUILD=1`, `EMIT_APPS=1`. Per-tool inventory: `design/tracelabs-manifest.tsv`.
+
+Known-open (not blocking): Maltego GUI validation; browser OSINT *bookmark*
+seeding (firefox distribution.ini / chromium initial_bookmarks are install-dir
+mechanisms that don't map onto nix-store browsers — vault's `OSINT Resources.md`
+carries the links for now); the OSINT app-menu categories
+(`usr/share/desktop-directories/*.directory`) not yet wired.
+
 ## 6. Handy references
 - Working container this was validated against: `.140` docker, image
   `tracelabs-osint:nix` (Noble). Kasm caches by tag — force a re-pull if a
