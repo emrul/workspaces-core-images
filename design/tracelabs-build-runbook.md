@@ -4,11 +4,32 @@ Purpose: so the next agent (or human) doesn't re-derive the ~2-day debugging
 odyssey. This is the operational companion to `design/tracelabs-osint-image.md`
 (the design) and `design/tracelabs-vs-upstream.md` (the product diff).
 
-**Status (2026-07-20):** a **single-app-assembled** TraceLabs image on the
-**single-store Noble base** boots to a real XFCE desktop in Kasm, renders
-correctly, and Maltego launches. Three known gaps remain (§4). The likely
-long-term home is the **multi-store Resolute** approach (§5) — the owner's
-call, assessed cheap-ish below.
+**Status (2026-07-20, updated):** the **multi-store Resolute** image (§5) is
+BUILT, published as `tracelabs-osint:nix`, and verified booting via
+container-init on `.140` — nix-compose unions `/nix-stores/tracelabs`, jq is
+baked (§4.1 fixed), `requires` (firefox+torbrowser) expand and activate (3
+profiles → XFCE panel stays), all tools resolve (sherlock/maltego/sn0int/
+firefox/tor-browser), and 7 store-layer blobs dedupe byte-for-byte with the fat
+store. Built by `commit 798dfd6`. The visual Kasm render (default seccomp, GPU)
+is the remaining owner-side confirmation. §§1–4 below describe the SUPERSEDED
+single-store Noble path (kept for history); §5+§6 are the live Resolute build.
+
+**How to rebuild the Resolute image (the live path):**
+1. Resolute base with jq: `ci-scripts/nix-base-build.sh` with
+   `BASE_DISTROS=resolute` inside the forge DinD (see .gitlab-ci.yml `base:`
+   job — mount `containers` + repo ro, pass `BASE_BUILT_SHA`). Do **NOT** set
+   `NIX_STAGE_VOLUME` for the base bake: it mounts a foreign `/nix` into the
+   `nixos/nix` container and dangles its `/etc/nix/nix.conf` symlink → the bake
+   fails with `/etc/nix/nix.conf: No such file or directory`.
+2. Build+assemble: `runs/nix-portal/tracelabs-spike.sh` (sets
+   `RESOLUTE_APPS=tracelabs` + `APP_BASE_IMAGE`/`RESOLUTE_BASE_IMAGE=`
+   `localhost/nix-ubuntu-resolute:dev`), or invoke `dind-build.sh` with those
+   envs. Output: `localhost/nix-resolute-tracelabs:dev`. To re-run ONLY the
+   assembly after a code fix (skip the nix build), invoke `bin/nix-crane-assemble`
+   directly with `STAGING=<nix-build-stage-amd64 vol>/.build/layers` +
+   `RESOLUTE_APPS=tracelabs RESOLUTE_BASE_IMAGE=…` — the partitions + blobs
+   persist in the stage volume.
+3. Push `:nix` with the throwaway-token recipe (§3), pull on `.140`.
 
 ## 0. The architecture decision (owner, 2026-07-20)
 
@@ -103,7 +124,10 @@ nix-activate's *runtime* PATH. `expand_deps` silently skipped, only
 **Fix (owner direction 2026-07-20): bake jq via NIX into the Resolute base**,
 the same way KasmVNC/profile-sync are — NOT apt (the base is moving off apt
 deps). Three edits (done in source, need a Resolute base rebuild):
-`bin/nix-kasm-overlay/flake.nix` adds `jq = pkgs.jq` (nixpkgs passthrough);
+`bin/nix-kasm-overlay/flake.nix` adds `jq = pkgs.jq.bin` (nixpkgs passthrough —
+`.bin` output is REQUIRED: `pkgs.jq` is multi-output and `nix build .#jq | tail
+-1` grabbed the `-man` path with no `bin/jq`, so the base wiring silently
+skipped it → `expand_deps` stayed broken. Fixed in 798dfd6);
 `ci-scripts/nix-base-build.sh` adds `--pkg jq` to the `nix-bake-closure` call;
 `dockerfile-nix-ubuntu-resolute` takes `JQ_STORE_PATH` and symlinks
 `jq -> /usr/bin/jq`. (I first tried a jq-free `expand_deps`, then apt — both
