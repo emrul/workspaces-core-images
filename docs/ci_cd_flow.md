@@ -71,25 +71,39 @@ Three checks keep the model from silently degrading:
 3. **Promote report** (`build-nix-store-volume`). On a full-catalog build, emits an
    actionable `PROMOTE CANDIDATES` block (skipped on subset builds, where
    prevalence is meaningless).
-4. **Disk pre-flight gate** (`dind-build.sh`). Before the (large) build, enforce
-   `DISK_MIN_GB` free on the store, escalating reclaim: standard GC → nuke the Nix
-   cache → **fail**. Prevents an `ENOSPC` mid-build (which corrupts the warm store)
-   and is the enforcement half of the runner disk budget below.
+4. **Disk pre-flight gate + end-of-build reclaim** (`dind-build.sh`). Before the
+   (large) build, enforce `DISK_MIN_GB` free on the store, escalating reclaim:
+   standard GC → nuke the Nix cache → **fail** (prevents an `ENOSPC` mid-build,
+   which corrupts the warm store). After the build, reclaim its transient cache so
+   the downstream `scan-nix`/`publish` jobs — separate jobs on the same store —
+   start with headroom. Together these are the enforcement half of the runner disk
+   budget below.
 
 ## Runner requirements & disk budget
 
 The pipeline runs on a self-hosted `nix-builder` runner (shell executor,
 passwordless `sudo` for nerdctl, persistent `/srv/nix-build`). It is designed to
-**live within a fixed disk budget** rather than grow unbounded — three mechanisms
-keep it bounded, and the disk is sized so they rarely have to bite:
+**live within a fixed disk budget** rather than grow unbounded. Reclaim runs at
+**both ends of the build** — at the START (clears the *previous* run's finished
+churn) and at the END (clears *this* build's transient cache so the downstream
+jobs get headroom). The disk is sized so the guards rarely have to bite:
 
 | Consumer | Mechanism that bounds it | Steady size |
 |---|---|---|
 | Warm Nix build cache (`nix-build-stage-*`) | `NIX_STAGE_CAP_G` — GC resets it if exceeded | ≤ 150 GB |
-| Image working set (base + shared layers + ~45 per-app + fat store, **deduped**) | per-build prune of superseded `nix-*:dev` tags + dangling layers | **~34 GB measured** |
-| **Dangling build cache** (intermediate layers from `podman build`) | per-build + GC `podman builder prune -f` | ~0 (was the top offender — ~90 GB — until this was added) |
-| Stale anonymous volumes (old registry staging) | per-build + GC volume prune (targeted, keeps `nix-build-stage-*`) | ~0 (≈0–35 GB between GCs) |
+| Image working set (base + shared layers + ~45 per-app + fat store + resolute desktops, **deduped**) | per-build prune of superseded `nix-*:dev` tags + dangling layers | **~34 GB measured** |
+| **Dangling build cache** (intermediate layers from `podman build`) | **start- AND end-of-build** + GC `podman builder prune -f` | ~0 (was the top offender — ~90 GB — until this was added) |
+| Stale anonymous volumes (old registry staging) | start/end-of-build + GC volume prune (targeted, keeps `nix-build-stage-*`) | ~0 (≈0–35 GB between GCs) |
 | Build scratch / peak (crane staging, new layers before old pruned) | transient; reclaimed each run | ~40–60 GB peak |
+
+> **Why reclaim at the END of the build too** (added 2026-07-20): `scan-nix`
+> (needs ~40 GB export scratch) and `publish` run as *separate jobs after* the
+> build on the *same* store, and neither GCs. The start-of-build prune only clears
+> the previous run's churn, so this build's fresh ~90 GB of `podman build` cache
+> used to sit on the store through those jobs — they hit "No space left on device"
+> at git-checkout. `dind-build.sh` now reclaims that cache (dangling layers +
+> `builder prune -f` + stale volumes) the moment the build finishes, **keeping**
+> every `localhost/nix-*:dev` image (scan/publish consume them) and the Nix cache.
 
 > **Measured churn (forge, 2026-07-10):** a store showing 299 GB / 75 GB-free held
 > only ~34 GB of real images (51 active) — the rest was ~90 GB dangling build
@@ -103,7 +117,7 @@ keep it bounded, and the disk is sized so they rarely have to bite:
 
 | Resource | Spec | Rationale |
 |---|---|---|
-| **Disk** (`/srv/nix-build`, SSD) | **400 GB** | Measured steady store ~180–200 GB (≤150 GB cache + ~80 GB deduped images) + ~60 GB build peak + a ~150 GB free floor. 400 GB leaves comfortable churn headroom between GCs. |
+| **Disk** (`/srv/nix-build`, SSD) | **500 GB** | Sized from the formula below: `NIX_STAGE_CAP_G (150) + DISK_MIN_GB (200) + ~60 GB base/containerd/margin ≈ 410 GB` minimum → 500 GB leaves comfortable churn + cache-growth headroom. (400 GB is the absolute floor, and only with `DISK_MIN_GB=150`.) |
 | vCPU | **8** | `BUILD_PARALLEL=4` parallel Nix realizations, several compile from source. |
 | RAM | **32 GB** | 4 concurrent nix builds; some apps (electron/qt/LLVM) are memory-heavy. |
 | Build timeout | **4 h** | Cold full build measured ~25 min warm / ~1 h cold (cache re-seed); warm app-only rebuilds are minutes. |
@@ -118,21 +132,50 @@ keep it bounded, and the disk is sized so they rarely have to bite:
 > containerd task dir restarted the daemon mid-run — an argument for a *dedicated*
 > (uncontended) runner, not a bigger one.
 
-**Pipeline knobs to set for the dedicated runner** (CI/CD variables):
+**Pipeline knobs** (`.gitlab-ci.yml` CI/CD variables). Each is a lever on the disk
+budget — set them together, and size the disk from them (formula below):
 
 ```
-DISK_MIN_GB      = 150   # pre-flight free-space floor (fail if unmet after GC)
-NIX_STAGE_CAP_G  = 150   # warm-cache ceiling (GC resets above this)
-BUILD_PARALLEL   = 4     # raise only if vCPU/RAM allow
+DISK_MIN_GB      = 200   # pre-flight free-space floor (GC-then-fail if unmet)
+NIX_STAGE_CAP_G  = 150   # warm Nix-cache ceiling (GC resets it above this)
+BUILD_PARALLEL   = 4     # per-app build concurrency; raise only if vCPU/RAM allow
 ```
 
-> Current shared forge for reference: 465 GB total, ~75 GB free, store 299 GB
-> (overlay 192 GB incl. churn, Nix cache 73 GB, ~34 GB stale volumes). That's
-> **why** a 150 GB floor can't be met there today — the defaults ship at
-> `DISK_MIN_GB=100` so the shared box still builds; the dedicated runner raises it
-> to 150. If the working set ever legitimately can't fit the budget, the gate
-> **fails loudly** rather than silently corrupting the store — that's the signal
-> to grow the disk or trim the catalog.
+**What each one means:**
+
+- **`DISK_MIN_GB`** — free space the build insists on *before it starts*. If the
+  store has less, `dind-build.sh` escalates reclaim (GC → reset the Nix cache) and,
+  if still short, **fails loudly** rather than ENOSPC'ing mid-build (which would
+  corrupt the warm store). It is **not** the disk size — it is a *floor*, and it
+  must exceed the build's mid-run growth. A cold full catalog build grows **~150 GB**
+  (measured), so 200 GB gives ~35 % margin and leaves the build ending with room
+  for the end-of-build reclaim to return to `scan-nix`/`publish`.
+- **`NIX_STAGE_CAP_G`** — ceiling on the warm Nix build cache (`nix-build-stage-*`),
+  the largest *resident* consumer. The cache only grows (old generations after
+  nixpkgs bumps); above this ceiling, GC resets it (one slow re-seed). Pinning it
+  makes the total predictable — keep it the same value everywhere (CI passes it
+  into `nix-gc.sh`, whose standalone default of 250 the CI value overrides).
+- **`BUILD_PARALLEL`** — how many per-app Nix realizations run at once. A CPU/RAM
+  lever, not a disk one.
+
+**Ops sizing rule** — provision the store as:
+
+```
+total_store  >=  NIX_STAGE_CAP_G  +  DISK_MIN_GB  +  ~60 GB   (base images + containerd + margin)
+```
+
+With the recommended `cap=150 + floor=200` → **410 GB minimum; provision 500 GB.**
+The knobs and the disk move together: raising `DISK_MIN_GB` without growing the
+disk just makes the pre-flight gate reset the Nix cache (slow) or fail.
+
+> Current shared forge for reference: 465 GB total. It satisfies `DISK_MIN_GB=200`
+> as long as the Nix cache stays near its 150 GB cap (resident ≈ cache + base +
+> containerd ≈ 190 GB → ~275 GB free ≥ 200 floor). It's the working *dev* box, not
+> the production target — a **dedicated 500 GB runner** removes the contention that
+> caused the one historical mid-run failure (an external `sudo rm -rf` restarted
+> containerd). If the working set ever legitimately can't fit the budget, the gate
+> **fails loudly** rather than silently corrupting the store — the signal to grow
+> the disk or trim the catalog.
 
 ## Change-gating outcomes
 
