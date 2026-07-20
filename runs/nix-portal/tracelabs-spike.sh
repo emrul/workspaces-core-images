@@ -102,6 +102,14 @@ awk '/^\[profiles\./{exit} {print}' "${SRC_TOML}" > "${SPIKE_TOML}"
 
 log "v1 config profiles: $(grep -c '^\[profiles\.' "${SPIKE_TOML}") (expect 6: tracelabs + 5 requires)"
 
+# GEN_ONLY=1: stop after writing the config (used to (re)generate the gitignored
+# spike TOML locally so mutagen syncs it to the forge before the DinD build,
+# which reads /work read-only). No build.
+if [ "${GEN_ONLY:-0}" = "1" ]; then
+  log "GEN_ONLY=1 — config written to ${SPIKE_TOML}; skipping build"
+  exit 0
+fi
+
 # ── 2. build (on the forge, via the DinD driver) ──────────────────────────
 # APP_BASE_IMAGE + NIX_CONFIG_FILE overrides are honoured by dind-build.sh.
 # SCOPED_BUILD=1 narrows to the 3 profiles; no PUSH.
