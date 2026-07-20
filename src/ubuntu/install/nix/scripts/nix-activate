@@ -368,8 +368,13 @@ populate_desktop() {
 
 # ───── 7. user-context gio set trust ───────────────────────────────────
 # Runs as the OS user so gvfsd-metadata writes to ~/.local/share/gvfs-
-# metadata/. Trusts BOTH the menu shims and the Desktop copies so XFCE
-# launches them without the "untrusted launcher" prompt.
+# metadata/. Trusts the menu shims AND every Desktop launcher so XFCE
+# launches them without the "untrusted application launcher" prompt.
+# NB: this must cover NON-nix Desktop launchers too (e.g. TraceLabs' seeded
+# guide launchers) — the legacy trustdesktop.sh autostart is guarded by a
+# gvfs-metadata existence check and SKIPS on a persisted profile, leaving them
+# untrusted. nix-activate runs unconditionally every boot, so it's the reliable
+# place. Also mark them executable (XFCE treats a non-exec .desktop as untrusted).
 # /tmp/kasm-dbus.env was written by kasm-setup.service.
 trust_shims_as_user() {
   [ -f /tmp/kasm-dbus.env ] || {
@@ -381,8 +386,9 @@ trust_shims_as_user() {
     . /tmp/kasm-dbus.env
     export DBUS_SESSION_BUS_ADDRESS DBUS_SESSION_BUS_PID
     for f in /usr/share/applications/nix-*.desktop \
-             "$HOME"/Desktop/nix-*.desktop; do
+             "$HOME"/Desktop/*.desktop; do
       [ -e "$f" ] || continue
+      case "$f" in "$HOME"/Desktop/*) chmod +x "$f" 2>/dev/null || true ;; esac
       h=$(sha256sum "$f" | awk "{print \$1}")
       gio set -t string "$f" metadata::xfce-exe-checksum "$h" 2>/dev/null || true
     done

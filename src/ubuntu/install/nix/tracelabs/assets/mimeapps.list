@@ -1,5 +1,5 @@
 [Default Applications]
-application/pdf=nix-chromium.desktop
+application/pdf=nix-chromium-browser.desktop
 text/html=nix-firefox.desktop
 x-scheme-handler/http=nix-firefox.desktop
 x-scheme-handler/https=nix-firefox.desktop
