@@ -35,10 +35,15 @@ variables:
   NIX_BASES: ""             # publish-base filter; empty = every base in the store
   BUILD_PARALLEL: "4"       # per-app build concurrency in build-nix-store-volume
   ALLOW_STALE_BASE: ""      # set "1" to bypass the build's base-freshness guard
-  # Disk budget (enforced by dind-build.sh's pre-flight gate + nix-gc.sh). Tune
-  # these to the runner's provisioned disk — see docs/ci_cd_flow.md § Runner reqs.
-  # Dedicated-runner target: DISK_MIN_GB=150, NIX_STAGE_CAP_G=150 on a 500G store.
-  DISK_MIN_GB: "100"        # min free GB before build; GC-then-fail if unmet
+  # Disk budget (enforced by dind-build.sh's pre-flight gate + end-of-build reclaim
+  # + nix-gc.sh). Tune to the runner's provisioned disk — see docs/ci_cd_flow.md.
+  # OPS SIZING: provision the store at
+  #     total >= NIX_STAGE_CAP_G + DISK_MIN_GB + ~60G (base images + containerd + margin)
+  # A cold full catalog build GROWS ~150G (observed); DISK_MIN_GB must exceed that so
+  # the build completes without ENOSPC, and the end-of-build reclaim then returns the
+  # transient ~89G cache to scan-nix/publish. With cap=150 + floor=200 → 410G min;
+  # PROVISION 500G. Keep NIX_STAGE_CAP_G pinned (an unbounded cache breaks the budget).
+  DISK_MIN_GB: "200"        # min free GB before build; GC-then-fail if unmet
   NIX_STAGE_CAP_G: "150"    # cap the warm Nix build cache; GC resets it if over
   DIND_ROOT: "/srv/nix-build"
   DIND_IMG: "quay.io/podman/stable"
