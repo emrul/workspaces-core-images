@@ -248,18 +248,14 @@ export PIPX_HOME="${HOME}/.local/share/pipx"
 export PIPX_BIN_DIR="${HOME}/.local/share/pipx/bin"
 export PYTHONUSERBASE="${HOME}/.local/share/python"
 export PATH="${NPM_CONFIG_PREFIX}/bin:${PIPX_BIN_DIR}:${PYTHONUSERBASE}/bin:${PATH}"
-USERPKG
-    # Graphics-lib path (libEGL/GL/GLX from /opt/nix-libs): needed by nix
-    # single-app images, but in DESKTOP mode it must NOT be in the shell env —
-    # the system WM/compositor picks it up and the desktop renders blank. Nix
-    # apps still get it via nix-launch at launch time.
-    if [ "${DESKTOP_MODE:-0}" != "1" ]; then
-      cat <<'GFXLIB'
-# Narrow LD_LIBRARY_PATH: only the graphics-lib symlinks in /opt/nix-libs.
+# Narrow LD_LIBRARY_PATH: only the graphics-lib symlinks in
+# /opt/nix-libs (libEGL, libGL, libGLX, libGLdispatch). System
+# libc and friends are NOT in this dir, so nix-built binaries' bundled
+# glibc stays in effect — avoids the GLIBC_PRIVATE symbol mismatch a
+# broad path like /usr/lib/<arch>-linux-gnu would cause.
 [ -d /opt/nix-libs ] && \
     export LD_LIBRARY_PATH="/opt/nix-libs${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-GFXLIB
-    fi
+USERPKG
     if [ -n "${active_list}" ]; then
       active_csv="$(echo "${active_list}" | tr '\n' ',' | sed 's/,$//')"
       echo "NIX_APP_ACTIVE=\"${active_csv}\""
@@ -270,19 +266,8 @@ GFXLIB
         bin_paths="${KASM_PROFILE_DIR}/${p}/bin${bin_paths:+:}${bin_paths}"
         data_paths="${KASM_PROFILE_DIR}/${p}/share${data_paths:+:}${data_paths}"
       done
-      # nix tools on PATH (so terminals can run sherlock/sn0int/… ) in both
-      # modes — PATH doesn't affect the WM's library/icon resolution.
       echo "export PATH=\"${bin_paths}:\${PATH}\""
-      if [ "${DESKTOP_MODE:-0}" = "1" ]; then
-        # System share dirs FIRST so the shell's icon theme / gdk-pixbuf /
-        # glycin loaders resolve against the system (renders like the plain
-        # desktop); nix /share appended only so nothing that genuinely needs it
-        # is lost. Menu/desktop icons don't depend on this — the shims carry
-        # absolute Icon paths.
-        echo "export XDG_DATA_DIRS=\"\${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:${data_paths}\""
-      else
-        echo "export XDG_DATA_DIRS=\"${data_paths}:\${XDG_DATA_DIRS:-/usr/local/share:/usr/share}\""
-      fi
+      echo "export XDG_DATA_DIRS=\"${data_paths}:\${XDG_DATA_DIRS:-/usr/local/share:/usr/share}\""
     else
       echo "# (no active profiles)"
     fi
@@ -455,29 +440,6 @@ setup_narrow_lib_dir
 active="$(resolve_active | expand_deps | filter_existing | sort -u | grep -v '^$' || true)"
 log "activating: ${active:-<none>}"
 
-# ───── desktop vs single-app mode ─────────────────────────────────────
-# A DESKTOP profile (a full desktop of tools like Trace Labs OSINT, not one
-# app) must render its shell exactly like the plain distro desktop: the WM /
-# panel / xfdesktop are SYSTEM GTK apps and must run on the clean system
-# environment. Leaking the nix app-activation env into that shell breaks it
-# (nix /share shadows the system icon theme → broken icons; the graphics-lib
-# path perturbs rendering → blank/white desktop). So in desktop mode we keep
-# the full desktop session config (no single-app panel drop) AND keep the
-# shell env clean — the nix apps still appear in the menu via the shims (which
-# carry absolute Exec/Icon paths and run through nix-launch), so nothing about
-# app launching depends on polluting the shell.
-#
-# Signal is JQ-FREE on purpose: nix-activate cannot rely on jq being on its
-# PATH here (it isn't in the app images — the jq-dependent bits degrade to the
-# NIX_APP_PROFILES env fallback), so a jq-based _meta.json read never fires.
-# Use a baked marker file (the image build drops /etc/nix-desktop-mode for a
-# desktop profile) or the NIX_DESKTOP=1 runtime override (testing / operator).
-DESKTOP_MODE=0
-if [ "${NIX_DESKTOP:-0}" = "1" ] || [ -f /etc/nix-desktop-mode ]; then
-  DESKTOP_MODE=1
-fi
-[ "${DESKTOP_MODE}" = "1" ] && log "DESKTOP mode: full desktop session + clean shell env (apps via menu shims)"
-
 clear_shims
 write_profile_d "${active}"
 
@@ -487,10 +449,7 @@ if [ -n "${active}" ]; then
   done
   populate_desktop
   trust_shims_as_user
-  # Single-app no-panel layout ONLY outside desktop mode; a desktop keeps the
-  # full session config (panel started + managed by the session, like the
-  # plain distro desktop).
-  [ "${DESKTOP_MODE}" = "1" ] || apply_single_app_desktop "${active}"
+  apply_single_app_desktop "${active}"
 fi
 
 log "complete"
