@@ -43,6 +43,15 @@ cp -a "${A}/bookmarks/managed-bookmarks.json" "${D}/etc/brave/policies/managed/t
 mkdir -p "${D}/home/kasm-default-profile/.config/obsidian"
 cp -a "${A}/obsidian.json" "${D}/home/kasm-default-profile/.config/obsidian/obsidian.json"
 cp -a "${A}/mimeapps.list" "${D}/home/kasm-default-profile/.config/mimeapps.list"
+# Pre-trust the seeded vault. Obsidian records "Restricted mode off" (community
+# plugins trusted) in its Electron Local Storage leveldb, NOT a vault file — so
+# without this the "Do you trust the author of this vault?" prompt appears EVERY
+# session (ephemeral home) and the 5 bundled plugins (dataview/kanban/templater/
+# quickadd/tag-wrangler) stay disabled. Seed that tiny (~300B) trusted store.
+# Validated live: no prompt, plugins load. VERSION-PINNED to the image's Obsidian
+# — regenerate assets/obsidian-userdata if the obsidian package is bumped
+# (assets/obsidian-userdata/README.md).
+cp -a "${A}/obsidian-userdata/." "${D}/home/kasm-default-profile/.config/obsidian/"
 
 # 4. TraceLabs category icon (for the OSINT app-menu categories, Phase-1).
 mkdir -p "${D}/usr/share/icons/hicolor/scalable/categories"

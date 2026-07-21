@@ -2,6 +2,8 @@ target
 .idea
 *.iml
 *.log
+# but keep the pre-trusted Obsidian leveldb (its data file is a *.log)
+!src/ubuntu/install/nix/tracelabs/assets/obsidian-userdata/**/*.log
 
 # Editor swap files
 *.swp
