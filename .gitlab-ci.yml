@@ -494,7 +494,7 @@ scan-nix:
         -v "$CI_PROJECT_DIR:/artifacts" \
         -e NIX_PROFILES="$NIX_PROFILES" -e OUT_DIR=/artifacts -e DOCKER=podman \
         -e SCAN_MAX_APPS="${SCAN_MAX_APPS:-0}" -e SKIP_VULNIX="${SKIP_VULNIX:-0}" \
-        -e SCAN_ALL="${SCAN_ALL:-0}" \
+        -e SCAN_ALL="${SCAN_ALL:-0}" -e SKIP_FAT="${SKIP_FAT:-0}" \
         -e SBOM_PUBLISH_INTENT="$SBOM_PUBLISH_INTENT" \
         -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" \
         -e CI_PIPELINE_ID="$CI_PIPELINE_ID" -e CI_JOB_ID="$CI_JOB_ID" \
