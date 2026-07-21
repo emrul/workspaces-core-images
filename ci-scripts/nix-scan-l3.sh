@@ -147,6 +147,21 @@ fi
 
 # ── target list: changed apps (or capped all) + fat store ────────────────────
 in_filter() { [ -z "${FILTER}" ] && return 0; local x; for x in ${FILTER}; do [ "${x}" = "$1" ] && return 0; done; return 1; }
+# Resolute (multi-store DESKTOP) profiles ship no single-app :dev image — they
+# are scanned by the dedicated resolute loop below (scan_one mode 2), never the
+# per-app path. Compute the set early so the FILTER completeness check can
+# exclude them (else a changed resolute profile like tracelabs, absent from the
+# per-app image list, is misreported as a build failure).
+PROFILES_TOML="${PROFILES_TOML:-/work/bin/nix-profiles.toml}"
+resolute_profiles() {
+  awk '
+    /^\[profiles\./ { cur=$0; sub(/^\[profiles\./,"",cur); sub(/\].*/,"",cur) }
+    /^[[:space:]]*app_base[[:space:]]*=/ && cur!="" {
+      v=$0; sub(/^[^"]*"/,"",v); sub(/".*/,"",v); if (v=="resolute") print cur
+    }
+  ' "${PROFILES_TOML}" 2>/dev/null
+}
+is_resolute() { local p; for p in $(resolute_profiles); do [ "${p}" = "$1" ] && return 0; done; return 1; }
 mapfile -t all_apps < <("${DOCKER}" images --format '{{.Repository}}:{{.Tag}}' \
   | grep -E "^${NIX_APP_REPO}-[a-z0-9][a-z0-9-]*:dev$" \
   | grep -vE "^${NIX_APP_REPO}-(ubuntu|store|fedora|alpine|resolute)" \
@@ -189,6 +204,9 @@ if [ -n "${FILTER}" ]; then
   for want in ${FILTER}; do
     found=0; for a in "${apps[@]}"; do [ "${a}" = "${want}" ] && found=1 && break; done
     [ "${found}" = 1 ] && continue
+    # resolute profiles are scanned by their own loop, not the per-app path —
+    # never expected in apps[], so their absence here is not a build failure.
+    if is_resolute "${want}"; then continue; fi
     st="sidecar-unavailable"
     if [ -f "${BUILD_OUTPUT}/closure-diffs.json" ]; then
       st="$(jq -r --arg a "${want}" '.[$a].status // "absent-from-sidecar"' "${BUILD_OUTPUT}/closure-diffs.json")"
@@ -254,7 +272,6 @@ label() { "${DOCKER}" image inspect --format "{{ index .Config.Labels \"$2\" }}"
 # Report rows always carry kind:"candidate" + ref (candidate id) +
 # intended_ref (the publish join key, null without intent).
 SBOM_PUBLISH_INTENT="${SBOM_PUBLISH_INTENT:-0}"
-PROFILES_TOML="${PROFILES_TOML:-/work/bin/nix-profiles.toml}"
 kasm_name_for() {
   awk -v want="$1" '
     /^\[profiles\./ { cur=$0; sub(/^\[profiles\./,"",cur); sub(/\].*/,"",cur); name[cur]=cur }
@@ -282,18 +299,10 @@ sbom_ref() {  # $1=scan name → SBOM source-name (intended ref only with intent
 # Resolute (multi-store DESKTOP) profiles — app_base="resolute" in the TOML.
 # They ship no single-app :dev image (no custom_startup), so they never appear
 # in the image-derived app list above, yet their profile IS installed in the
-# staging volume. List them here so the vulnix advisory pass below can cover
-# their desktop-unique closure (e.g. tracelabs' OSINT tools + maltego). Full
-# syft/grype SBOM + attestation of the assembled desktop image arrives with the
-# resolute build/publish path (they need the built image + a multi-store export).
-resolute_profiles() {
-  awk '
-    /^\[profiles\./ { cur=$0; sub(/^\[profiles\./,"",cur); sub(/\].*/,"",cur) }
-    /^[[:space:]]*app_base[[:space:]]*=/ && cur!="" {
-      v=$0; sub(/^[^"]*"/,"",v); sub(/".*/,"",v); if (v=="resolute") print cur
-    }
-  ' "${PROFILES_TOML}" 2>/dev/null
-}
+# staging volume. resolute_profiles() (defined near the top, alongside the
+# FILTER completeness check that also consumes it) lists them so the vulnix
+# advisory pass and the dedicated resolute scan loop below can cover their
+# desktop-unique closure (e.g. tracelabs' OSINT tools + maltego).
 
 # ── one image: export → normalize → syft → grype → stats row ─────────────────
 scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
