@@ -115,9 +115,22 @@ export QT_QUICK_BACKEND=software
 export QSG_RHI_BACKEND=software
 export QT_XCB_GL_INTEGRATION=none
 
-# QtWebEngine in rootless container: bypass sandbox/zygote/dev-shm.
-export QTWEBENGINE_DISABLE_SANDBOX=1
-export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-seccomp-sandbox --disable-gpu --disable-software-rasterizer --no-zygote --single-process --disable-dev-shm-usage"
+# QtWebEngine rendering flags. Two modes:
+#   KASM_QTWEBENGINE_SANDBOX=1 — set by the launcher of a QtWebEngine app whose
+#     Kasm run_config carries the tuned seccomp (chrome.json: unprivileged
+#     clone/clone3/unshare/setns), e.g. angelfish. KEEP the real multi-process
+#     userns sandbox — same posture as standalone Chrome — by NOT disabling it
+#     and NOT passing --no-sandbox. Verified: angelfish opens with only
+#     chrome.json seccomp (no apparmor override needed).
+#   default — a QtWebEngine app with no tuned seccomp can't run the sandbox, so
+#     disable it. Either way NEVER pass --single-process: it aborts QtWebEngine's
+#     WebEngineContext init (crash-loop, no window). Multi-process throughout.
+if [ "${KASM_QTWEBENGINE_SANDBOX:-0}" = 1 ]; then
+    export QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu --disable-software-rasterizer --disable-dev-shm-usage"
+else
+    export QTWEBENGINE_DISABLE_SANDBOX=1
+    export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-seccomp-sandbox --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage"
+fi
 
 # Standalone Chromium/Chrome/Electron need their flags on argv — the
 # QTWEBENGINE_* env above only reaches Qt-EMBEDDED chromium.

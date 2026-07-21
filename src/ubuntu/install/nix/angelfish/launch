@@ -47,13 +47,21 @@ if [ "${ANGELFISH_MAXIMIZE:-1}" != 0 ] && command -v wmctrl >/dev/null 2>&1; the
     ) &
 fi
 
-# Hand off to nix-launch, which sets the dbus / XDG_RUNTIME_DIR env and the
-# rendering path. Angelfish renders in SOFTWARE: it is QtWebEngine, which binds
-# chromium's GL to Qt's own integration (SurfaceFactoryQt), ignores
-# --use-angle=vulkan, and qFatal-aborts on "Invalid visual ID" under VirtualGL —
-# so unlike standalone Chrome it cannot use the session GPU here. nix-launch's
-# GPU path is restricted to standalone chromium-family binaries; Angelfish (not
-# a chromium-named binary) correctly takes nix-launch's software path even when a
-# GPU is allocated. See nix-gpu-run and the GPU notes in design/nix.
-echo "angelfish-launch: handing off to nix-launch (software render; QtWebEngine GPU unsupported under VGL)" >&2
+# QtWebEngine keeps its real multi-process userns sandbox (KASM_QTWEBENGINE_SANDBOX=1
+# → nix-launch omits --no-sandbox/--single-process/--no-zygote). Angelfish's Kasm
+# run_config carries the tuned chrome.json seccomp (unprivileged clone/unshare/
+# setns), same as standalone Chrome, so the sandbox comes up. This replaces the
+# old --no-sandbox --single-process envelope, whose --single-process aborted
+# QtWebEngine's WebEngineContext init (crash-loop, no window). Validated live on
+# the published image with chrome.json seccomp alone (no apparmor override).
+export KASM_QTWEBENGINE_SANDBOX=1
+
+# Hand off to nix-launch for the dbus / XDG_RUNTIME_DIR env and rendering path.
+# Angelfish renders in SOFTWARE: it is QtWebEngine, which binds chromium's GL to
+# Qt's own integration (SurfaceFactoryQt), ignores --use-angle=vulkan, and
+# qFatal-aborts on "Invalid visual ID" under VirtualGL — so unlike standalone
+# Chrome it cannot use the session GPU here. nix-launch's GPU path is restricted
+# to standalone chromium-family binaries; Angelfish (not a chromium-named binary)
+# correctly takes nix-launch's software path even when a GPU is allocated.
+echo "angelfish-launch: handing off to nix-launch (software render; QtWebEngine GPU unsupported under VGL; sandbox retained)" >&2
 exec /usr/local/bin/nix-launch "${BIN}" "$@"
