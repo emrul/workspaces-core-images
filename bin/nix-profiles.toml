@@ -382,7 +382,10 @@ pkgs = ["nixpkgs#retroarch", "nixpkgs#sdl3^lib"]
 
 [profiles.minetest]
 # Renamed upstream: minetest → luanti. GPU app.
-pkgs = ["nixpkgs#luanti"]
+# sdl3^lib: luanti dlopens libSDL3.so.0 at startup (like retroarch/blender/
+# super-tux-kart) but it's NOT in the closure — without it it aborts "Failed
+# loading SDL3 library" and crash-loops with no window (testbench 2694514421).
+pkgs = ["nixpkgs#luanti", "nixpkgs#sdl3^lib"]
 
 [profiles.super-tux-kart]
 # GPU app (Irrlicht/Antarctica — needs a real GL context; no software fallback
