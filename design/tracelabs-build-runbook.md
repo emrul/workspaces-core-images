@@ -4,32 +4,69 @@ Purpose: so the next agent (or human) doesn't re-derive the ~2-day debugging
 odyssey. This is the operational companion to `design/tracelabs-osint-image.md`
 (the design) and `design/tracelabs-vs-upstream.md` (the product diff).
 
-**Status (2026-07-20, updated):** the **multi-store Resolute** image (§5) is
-BUILT, published as `tracelabs-osint:nix`, and verified booting via
-container-init on `.140` — nix-compose unions `/nix-stores/tracelabs`, jq is
-baked (§4.1 fixed), `requires` (firefox+torbrowser) expand and activate (3
-profiles → XFCE panel stays), all tools resolve (sherlock/maltego/sn0int/
-firefox/tor-browser), and 7 store-layer blobs dedupe byte-for-byte with the fat
-store. Built by `commit 798dfd6`. The visual Kasm render (default seccomp, GPU)
-is the remaining owner-side confirmation. §§1–4 below describe the SUPERSEDED
-single-store Noble path (kept for history); §5+§6 are the live Resolute build.
+**Status (2026-07-21, CI PIVOT COMPLETE):** TraceLabs is now a **first-class
+catalog profile** — `[profiles.tracelabs]` lives in the MAIN `bin/nix-profiles.toml`
+(`kasm_name = "tracelabs-osint"`, `fat_store = false`, `app_base = "resolute"`,
+`platforms = ["amd64"]`), and the standard `kasm-nix` pipeline builds → CVE-scans
+→ publishes → **attests/signs** `tracelabs-osint` end-to-end, exactly like every
+other app. The forge hand-assembly + hand-push path is **retired** (kept below only
+as a break-glass fallback). Verified green: pipeline 2693655030 (commit 2c1297d)
+— `attested=35 no-sbom=1 failed=0`, `tracelabs-osint` signed with its CycloneDX
+SBOM. The isolated spike config (`bin/nix-profiles-tracelabs-spike.toml` +
+`runs/nix-portal/tracelabs-spike.sh`) is **DEPRECATED/redundant** — the main TOML
+supersedes it; do not regenerate it. §§1–4 below are the SUPERSEDED single-store
+Noble path (kept for history); §5+§5b describe the live Resolute shape; the
+hard-won gotchas in §4/§5 still apply to the CI-built image.
 
-**How to rebuild the Resolute image (the live path):**
+**How to (re)build — the BAU CI path (default):**
+Trigger a pipeline on the `kasm-nix` branch. The build job auto-derives
+`RESOLUTE_APPS` from every `app_base="resolute"` profile in `bin/nix-profiles.toml`
+(so `tracelabs` is picked up with no extra wiring) and passes
+`RESOLUTE_BASE_IMAGE=localhost/nix-ubuntu-resolute:dev`. On a feature branch,
+scope + attest it explicitly:
+```
+glab ci run -R kasm-technologies/labs-sandbox/kasm-nix -b kasm-nix \
+  --variables-env NIX_PROFILES:tracelabs \
+  --variables-env SBOM_BACKFILL:1 \
+  --variables-env SKIP_FAT_SCAN:1 \
+  --variables-env DISK_MIN_GB:60      # forge-only override; see the disk note below
+```
+Use `glab ci run --variables-env` (NOT `glab api POST .../pipeline -f
+"variables[0][key]=…"` — that array form silently drops the vars). Verify with
+`glab api .../pipelines/<id>/variables`. **Forge disk:** the `.gitlab-ci.yml`
+default `DISK_MIN_GB=200` is the *production* pre-flight floor (provision ≥500G);
+it is UNMEETABLE on the 465G physical forge (build nukes the warm cache and still
+FATALs at 180G<200G) — so on forge you MUST override `DISK_MIN_GB` down (60 works;
+a cold full-catalog build then runs the disk to 0–3G but completes). GC forge to
+headroom first (`ci-scripts/nix-gc.sh` in the DinD; see §3 of the memory / the
+DISK BUDGET note) if it's tight.
+
+**How to hand-assemble locally (break-glass, no CI):**
+Uses the MAIN TOML — no spike config, no `--config` flag needed (both
+`build-nix-store-volume` and `dind-build.sh` default to `bin/nix-profiles.toml`):
 1. Resolute base with jq: `ci-scripts/nix-base-build.sh` with
    `BASE_DISTROS=resolute` inside the forge DinD (see .gitlab-ci.yml `base:`
    job — mount `containers` + repo ro, pass `BASE_BUILT_SHA`). Do **NOT** set
    `NIX_STAGE_VOLUME` for the base bake: it mounts a foreign `/nix` into the
    `nixos/nix` container and dangles its `/etc/nix/nix.conf` symlink → the bake
    fails with `/etc/nix/nix.conf: No such file or directory`.
-2. Build+assemble: `runs/nix-portal/tracelabs-spike.sh` (sets
-   `RESOLUTE_APPS=tracelabs` + `APP_BASE_IMAGE`/`RESOLUTE_BASE_IMAGE=`
-   `localhost/nix-ubuntu-resolute:dev`), or invoke `dind-build.sh` with those
-   envs. Output: `localhost/nix-resolute-tracelabs:dev`. To re-run ONLY the
-   assembly after a code fix (skip the nix build), invoke `bin/nix-crane-assemble`
-   directly with `STAGING=<nix-build-stage-amd64 vol>/.build/layers` +
+2. Build+assemble via `dind-build.sh` with the resolute envs (no `NIX_CONFIG_FILE`
+   → main TOML):
+   ```
+   RESOLUTE_APPS=tracelabs \
+   RESOLUTE_BASE_IMAGE=localhost/nix-ubuntu-resolute:dev \
+   EMIT_APPS=1 \
+   bash runs/nix-portal/dind-build.sh
+   # dev shortcut — narrow the build (partial fat store) to just tracelabs' closure:
+   #   SCOPED_BUILD=1 PROFILES=tracelabs,obsidian,chromium,firefox,brave,torbrowser
+   ```
+   Output: `localhost/nix-resolute-tracelabs:dev`. To re-run ONLY the assembly
+   after a code fix (skip the nix build), invoke `bin/nix-crane-assemble` directly
+   with `STAGING=<nix-build-stage-amd64 vol>/.build/layers` +
    `RESOLUTE_APPS=tracelabs RESOLUTE_BASE_IMAGE=…` — the partitions + blobs
    persist in the stage volume.
-3. Push `:nix` with the throwaway-token recipe (§3), pull on `.140`.
+3. Push `:nix` with the throwaway-token recipe (§3), pull on `.140`. (Prefer the
+   CI path — it publishes AND attests; a hand-push produces no attestation.)
 
 ## 0. The architecture decision (owner, 2026-07-20)
 
@@ -63,7 +100,13 @@ podman run --rm --entrypoint sh <base> -c \
 Noble (`localhost/nix-ubuntu:dev`): `NO-COMPOSE` / `NONE` → good.
 Resolute: has the `nix-compose` unit + `/nix-stores` → **do not** per-app-assemble on it.
 
-## 2. Build steps (single-store Noble)
+## 2. Build steps (single-store Noble) — SUPERSEDED
+
+> **Historical.** This whole section is the original single-store Noble
+> stepping-stone and its isolated spike TOML. TraceLabs is now the Resolute
+> multi-store profile in the MAIN `bin/nix-profiles.toml`, built via CI (see the
+> header). Do NOT use the spike TOML — it is deprecated. Kept only to explain the
+> old shape and why the pivot happened (§5).
 
 Everything runs on the **forge** (`ubuntu@51.195.190.65`) — that's where the
 Nix staging volume + Noble base live. `.140` has no staging volume.
@@ -73,6 +116,9 @@ Nix staging volume + Noble base live. `.140` has no staging volume.
    `runs/nix-portal/tracelabs-spike.sh`): the catalog `[base]/[gpu]/[layers.*]`
    verbatim + only `tracelabs` (+ `firefox`/`torbrowser` as `requires`),
    firefox/torbrowser pinned to the **published** rev so blobs dedup.
+   (Superseded: the main TOML's `[profiles.tracelabs]` now carries this — with
+   `requires = [obsidian, chromium, firefox, brave, torbrowser]` riding the
+   catalog's own published pins for the same three-way blob dedup.)
 2. **Build** (inside the DinD, via `ci-scripts/dind-run.sh`):
    ```
    bash bin/build-nix-store-volume \
@@ -99,7 +145,11 @@ Nix staging volume + Noble base live. `.140` has no staging volume.
 5. **Push** to the internal registry `:nix` (§3 for the push-cred recipe).
 6. Kasm workspace `run_config = {hostname, user}` — **no seccomp** (§4.2).
 
-## 3. Pushing from the forge (no standing registry creds there)
+## 3. Pushing from the forge (no standing registry creds there) — FALLBACK ONLY
+
+> CI now publishes AND attests `tracelabs-osint` automatically (see header) — a
+> hand-push produces no cosign attestation. Use this only to break-glass a
+> locally hand-assembled image (§ "hand-assemble locally") when CI is unavailable.
 
 `.140` holds only a *pull* deploy token; the forge holds none. Create a
 throwaway `write_registry` token with `glab`, use it, revoke it:
@@ -209,10 +259,10 @@ What it *costs* / to check:
   activation still goes through `expand_deps`).
 - The multi-store model is newer / less battle-tested than per-app.
 
-Recommended sequence: keep the working Noble single-store image for immediate
-testing; then implement §5 as the real architecture (fixing §4.1 jq-free
-activation en route, since it's needed either way), and retire the Noble
-per-app variant for TraceLabs.
+**DONE (2026-07-21):** this sequence was followed to completion — the Noble
+single-store variant is retired, TraceLabs ships as the Resolute multi-store
+profile in the main TOML, and it builds/scans/publishes/attests via CI (header).
+§4.1 was resolved by baking jq via nix into the Resolute base.
 
 ## 5b. v1 (full design-compliant) — BUILT 2026-07-20 (commit cf723d6)
 
@@ -236,12 +286,13 @@ The Resolute image is now the **full v1**, not just browsers+3-tools:
   `stage_resolute_wiring_tar` (post-build.sh only — no single-app custom_startup)
   wired into the RESOLUTE_APPS loop.
 
-Rebuild recipe: (1) `GEN_ONLY=1 bash runs/nix-portal/tracelabs-spike.sh` to
-regenerate the gitignored `bin/nix-profiles-tracelabs-spike.toml` (mutagen syncs
-it to the forge); (2) `dind-build.sh` with `RESOLUTE_APPS=tracelabs`,
-`PROFILES=tracelabs,obsidian,chromium,firefox,brave,torbrowser`,
-`APP_BASE_IMAGE=RESOLUTE_BASE_IMAGE=localhost/nix-ubuntu-resolute:dev`,
-`SCOPED_BUILD=1`, `EMIT_APPS=1`. Per-tool inventory: `design/tracelabs-manifest.tsv`.
+Rebuild recipe (now via the MAIN TOML — the spike script/TOML are deprecated):
+prefer the **CI path** in the header. For a local break-glass build, run
+`dind-build.sh` against the main `bin/nix-profiles.toml` (no `NIX_CONFIG_FILE`):
+`RESOLUTE_APPS=tracelabs`, `RESOLUTE_BASE_IMAGE=localhost/nix-ubuntu-resolute:dev`,
+`EMIT_APPS=1`, plus (dev shortcut) `SCOPED_BUILD=1
+PROFILES=tracelabs,obsidian,chromium,firefox,brave,torbrowser` to narrow the
+build to tracelabs' closure. Per-tool inventory: `design/tracelabs-manifest.tsv`.
 
 Known-open (not blocking): Maltego GUI validation; browser OSINT *bookmark*
 seeding (firefox distribution.ini / chromium initial_bookmarks are install-dir
@@ -250,9 +301,18 @@ carries the links for now); the OSINT app-menu categories
 (`usr/share/desktop-directories/*.directory`) not yet wired.
 
 ## 6. Handy references
-- Working container this was validated against: `.140` docker, image
-  `tracelabs-osint:nix` (Noble). Kasm caches by tag — force a re-pull if a
-  relaunch looks stale (`docker rmi` + pull, or bump the tag).
-- Source commits: `f1f15f0` (nix-activate desktop-mode + marker + custom_startup),
-  registry `9699619` (drop seccomp). Design at `design/tracelabs-osint-image.md`
-  rev 6.
+- Authoritative image: `tracelabs-osint:nix`, built + published + **attested** by
+  CI on `kasm-nix` (pipeline 2693655030). Kasm caches by tag — force a re-pull if
+  a relaunch looks stale (`docker rmi` + pull, or bump the tag).
+- Profile source of truth: `[profiles.tracelabs]` in `bin/nix-profiles.toml`.
+  CI wiring: `.gitlab-ci.yml` `build:` (RESOLUTE_APPS derivation),
+  `runs/nix-portal/dind-build.sh` (RESOLUTE_APPS→`--resolute-app`),
+  `bin/nix-crane-assemble` (resolute assembly), `ci-scripts/nix-scan-l3.sh`
+  (mode-2 multi-store scan + resolute completeness skip),
+  `ci-scripts/nix-publish.sh` (resolute publish pass).
+- Key commits: `dad0341` (profile folded into main TOML), `121f597` (build/
+  publish resolute path), `2c1297d` (scan-nix resolute-completeness fix →
+  attestation green). Design at `design/tracelabs-osint-image.md`.
+- Deprecated (do not use): `bin/nix-profiles-tracelabs-spike.toml`,
+  `runs/nix-portal/tracelabs-spike.sh` — superseded by the main TOML; safe to
+  delete once no local worktrees still reference them.
