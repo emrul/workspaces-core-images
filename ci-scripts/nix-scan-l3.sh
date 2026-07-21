@@ -37,7 +37,10 @@
 #   PARALLEL       concurrent app scans (default 2)
 #   SCAN_ALL       1 = scan every built app image (ignore assembled.txt/filter)
 #   SKIP_VULNIX    1 = skip the advisory vulnix pass
-#   SKIP_FAT       1 = allow a missing fat store (otherwise absence = failure)
+#   SKIP_FAT_SCAN  1 (DEFAULT) = skip the fat-store SBOM scan (~40G export; its
+#                  closure is the per-app+resolute union, already scanned). The
+#                  fat store is still built+published — only its scan is skipped.
+#                  0 = also scan it (needs a disk-roomy runner).
 #   VEX_FILE       OpenVEX statement file (default /work/security/vex/
 #                  kasm-nix.openvex.json — the repo mount). Statements with
 #                  status not_affected/false_positive are converted to grype
@@ -207,14 +210,20 @@ if { [ "${scan_scope}" = "SCAN_ALL" ] || [ "${scan_scope}" = "all-images" ]; } \
   log "CAP: (fat store still covers the union at store-path level, but dropped apps get NO per-image SBOM)"
   apps=("${apps[@]:0:${SCAN_MAX_APPS}}")
 fi
-# The fat store is emitted by EVERY build (PUBLISH_FAT_STORE contract) — its
-# absence is an infrastructure failure, not a skip. SKIP_FAT=1 opts out.
+# Fat-store SBOM scan. Its export needs ~40G transient scratch and its closure is
+# the UNION of the per-app + resolute closures that already get scanned here (plus
+# vulnix), so scanning it adds disk pressure for no new coverage. SKIPPED BY DEFAULT
+# (SKIP_FAT_SCAN=1). This skips the SCAN only — the fat store is still built and
+# published as normal. Set SKIP_FAT_SCAN=0 on a disk-roomy runner to also emit the
+# fat store's own SBOM/attestation.
 FAT_IMG="localhost/nix-store-${ARCH}:dev"
-if ! "${DOCKER}" image inspect "${FAT_IMG}" >/dev/null 2>&1; then
-  if [ "${SKIP_FAT:-0}" = "1" ]; then FAT_IMG=""; else
-    log "ERROR fat store ${FAT_IMG} absent (every build emits it; set SKIP_FAT=1 to opt out)"
-    build_failed+=("nix-store"); FAT_IMG=""
-  fi
+if [ "${SKIP_FAT_SCAN:-1}" = "1" ]; then
+  FAT_IMG=""; log "fat-store SBOM scan skipped (SKIP_FAT_SCAN=1; its closure = the per-app+resolute union, already scanned)"
+elif ! "${DOCKER}" image inspect "${FAT_IMG}" >/dev/null 2>&1; then
+  # Not skipping, but absent — the PUBLISH_FAT_STORE contract says every build emits
+  # it, so genuine absence during a requested scan is an infrastructure failure.
+  log "ERROR fat store ${FAT_IMG} absent (every build emits it; set SKIP_FAT_SCAN=1 to opt out)"
+  build_failed+=("nix-store"); FAT_IMG=""
 fi
 log "scanning apps: ${apps[*]:-<none>}   fat store: ${FAT_IMG:-absent}"
 if [ "${#apps[@]}" -eq 0 ] && [ -z "${FAT_IMG}" ] \

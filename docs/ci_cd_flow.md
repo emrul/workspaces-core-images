@@ -168,6 +168,13 @@ With the recommended `cap=150 + floor=200` → **410 GB minimum; provision 500 G
 The knobs and the disk move together: raising `DISK_MIN_GB` without growing the
 disk just makes the pre-flight gate reset the Nix cache (slow) or fail.
 
+**Scan-stage disk** — `scan-nix` exports each image to catalog it. The single
+biggest consumer is the **fat store** (~40 GB scratch), whose closure is just the
+union of the per-app + resolute closures already scanned (plus vulnix). So its
+SBOM scan is **skipped by default** (`SKIP_FAT_SCAN=1`) — this skips only the
+*scan*; the fat store is still built and published. On a disk-roomy runner set
+`SKIP_FAT_SCAN=0` to also emit the fat store's own SBOM/attestation.
+
 > Current shared forge for reference: 465 GB total. It satisfies `DISK_MIN_GB=200`
 > as long as the Nix cache stays near its 150 GB cap (resident ≈ cache + base +
 > containerd ≈ 190 GB → ~275 GB free ≥ 200 floor). It's the working *dev* box, not
