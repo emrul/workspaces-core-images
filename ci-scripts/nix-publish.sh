@@ -238,14 +238,20 @@ generate_report() { gen_md; gen_json; }
 
 # All per-app images from the build: localhost/nix-<profile>:dev, excluding
 # EVERY distro base (nix-ubuntu*, nix-fedora, nix-alpine — published separately
-# by nix-publish-base under their kasm-core-* names) and the fat store
-# (nix-store*). The prune keep-list (dind-build.sh/nix-gc.sh) preserves the
-# bases in the store, so an incomplete exclusion here republishes them as fake
-# "apps" (seen as alpine:nix / fedora:nix — pipeline 2683070693).
+# by nix-publish-base under their kasm-core-* names), the fat store (nix-store*),
+# and the resolute multi-store desktop images (nix-resolute-<app>*, published
+# below under their kasm_name by the dedicated resolute loop). The prune
+# keep-list (dind-build.sh/nix-gc.sh) preserves the bases in the store, so an
+# incomplete exclusion here republishes them as fake "apps" (seen as alpine:nix /
+# fedora:nix — pipeline 2683070693; and resolute-tracelabs:nix, a phantom double
+# of tracelabs-osint — pipeline 2696494819). NB the resolute exclusion relies on
+# RESOLUTE_REPO sharing the NIX_APP_REPO prefix (localhost/nix-resolute vs
+# localhost/nix); it is anchored to the "resolute-" segment so a real app whose
+# name merely contains "resolute" is unaffected.
 mapfile -t imgs < <(
   "${DOCKER}" images --format '{{.Repository}}:{{.Tag}}' \
     | grep -E "^${NIX_APP_REPO}-[a-z0-9][a-z0-9-]*:dev$" \
-    | grep -vE "^${NIX_APP_REPO}-(ubuntu|store|fedora|alpine)" \
+    | grep -vE "^${NIX_APP_REPO}-(ubuntu|store|fedora|alpine|resolute-)" \
     | sort -u
 )
 
