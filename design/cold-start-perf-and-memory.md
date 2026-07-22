@@ -145,7 +145,8 @@ The TCP listen socket inside Xvnc binds at ~470ms — well before xdpyinfo can s
 
 **Sub-100ms TTFL is unrealistic without modifying Xvnc itself** (lazy extension
 loading, deferred framebuffer alloc). The "exec Xvnc directly from container-init" change
-is the largest single lever and is purely on our side — the perl wrapper builds an
+is the largest single lever and is purely on our side (shipped as `kasm-xvnc`;
+see `design/kasm-xvnc-perl-bypass.md`) — the perl wrapper builds an
 argv vector that we can build identically.
 
 ---

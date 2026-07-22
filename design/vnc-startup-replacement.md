@@ -2,6 +2,11 @@
 
 Status: design proposal, pre-spike. Author: investigation captured 2026-05-03.
 
+> The perl `vncserver` bypass sketched under "Mapping vnc_startup.sh to
+> units" shipped as `kasm-xvnc`; its full write-up — including the
+> configurability-parity analysis and the argv re-capture procedure for
+> KasmVNC bumps — is `design/kasm-xvnc-perl-bypass.md`.
+
 ## Why
 
 `src/common/startup_scripts/vnc_startup.sh` is a 743-line bash script that

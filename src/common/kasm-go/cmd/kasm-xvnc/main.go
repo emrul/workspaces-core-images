@@ -24,6 +24,10 @@
 //     of $desktopLog; -Log *:stdout:30 emits to our pipe at INFO
 //     level, matching the OOTB vncserver perl wrapper -- level 100
 //     turns on per-frame DEBUG and floods the container journal)
+//
+// Full rationale, configurability-parity analysis (what the yaml
+// bypass does and doesn't lose), and the argv re-capture procedure
+// for KasmVNC version bumps: design/kasm-xvnc-perl-bypass.md.
 package main
 
 import (
