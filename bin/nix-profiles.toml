@@ -435,6 +435,8 @@ platforms = ["amd64"]
 # app_base is inert (the build passes --app-base-image); amd64 only (tor-browser
 # is x86_64/i686). See design/tracelabs-osint-image.md and the build runbook.
 [profiles.tracelabs]
+# upstream: tracelabs/tlosint-vm @ 71d9815401ce3f061dbf65e509f57073fa1e2be1
+# Sync procedure when upstream releases: design/tracelabs-upstream-sync.md
 kasm_name = "tracelabs-osint"
 fat_store = false
 platforms = ["amd64"]
