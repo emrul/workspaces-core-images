@@ -34,6 +34,10 @@ APP_REPO="${APP_REPO:-localhost/nix}"
 APP_TAG="${APP_TAG:-dev}"
 CONTAINER_CLI="${CONTAINER_CLI:-podman}"
 ARCH="${ARCH:-amd64}"
+# podman needs ${TLS_FLAG} to talk to the insecure 127.0.0.1:5000 staging
+# registry; docker has no such flag (it treats 127.0.0.0/8 registries as insecure
+# by default), so it must expand to nothing under docker. Used unquoted below.
+if [[ "${CONTAINER_CLI}" == *podman* ]]; then TLS_FLAG="--tls-verify=false"; else TLS_FLAG=""; fi
 # ── Resolute multi-store apps (design/nix-workspace-as-code.md) ──────────────
 # A DESKTOP image built on the Resolute nix base instead of a single-app Noble
 # base. Same byte-identical store partition tars (→ /store, dedupe with the fat
@@ -179,7 +183,7 @@ fat_labels=( --label "dev.kasm.nix.build-arch=${ARCH}" )
 [[ -n "${BUILT_AT}" ]]     && fat_labels+=( --label "dev.kasm.nix.built-at=${BUILT_AT}" )
 [[ -n "${GIT_SHA}" ]]      && fat_labels+=( --label "org.opencontainers.image.revision=${GIT_SHA}" )
 "${CRANE}" mutate --insecure "${fat_ref}" -t "${fat_ref}" "${fat_labels[@]}"
-"${CONTAINER_CLI}" pull --tls-verify=false "${fat_ref}" >/dev/null
+"${CONTAINER_CLI}" pull ${TLS_FLAG} "${fat_ref}" >/dev/null
 "${CONTAINER_CLI}" tag "${fat_ref}" "${FAT_TAG}"
 log "fat store ready: ${FAT_TAG}"
 
@@ -268,7 +272,7 @@ assemble_app() {
     "${CRANE}" append --insecure -b "${base_ref}" "${a_args[@]}" -t "${app_ref}" \
       && "${CRANE}" mutate --insecure "${app_ref}" "${mut[@]}" -t "${app_ref}" \
       || { printf 'assemble\n' > "${RESULTS}/${p}.fail"; return 0; }
-    "${CONTAINER_CLI}" pull --tls-verify=false "${app_ref}" >/dev/null \
+    "${CONTAINER_CLI}" pull ${TLS_FLAG} "${app_ref}" >/dev/null \
       && "${CONTAINER_CLI}" tag "${app_ref}" "${final}" \
       || { printf 'pull\n' > "${RESULTS}/${p}.fail"; return 0; }
     if [[ -n "${PUSH_REGISTRY:-}" ]]; then
@@ -283,7 +287,7 @@ if [[ "${#apps[@]}" -gt 0 ]]; then
   [[ -n "${APP_BASE_IMAGE:-}" ]] || fail "APP_BASE_IMAGE required to assemble per-app images"
   base_ref="${REG_LOCAL}/nixbase:${APP_TAG}"
   "${CONTAINER_CLI}" tag "${APP_BASE_IMAGE}" "${base_ref}"
-  "${CONTAINER_CLI}" push --tls-verify=false "${base_ref}" >/dev/null
+  "${CONTAINER_CLI}" push ${TLS_FLAG} "${base_ref}" >/dev/null
   mk_symlink_tar
 
   _np="$( { command -v nproc >/dev/null 2>&1 && nproc; } 2>/dev/null || echo 4 )"
@@ -329,7 +333,7 @@ resolute_ready() {
 if [[ -n "${RESOLUTE_APPS}" ]] && resolute_ready; then
   rbase_ref="${REG_LOCAL}/nixresolutebase:${RESOLUTE_TAG}"
   "${CONTAINER_CLI}" tag "${RESOLUTE_BASE_IMAGE}" "${rbase_ref}"
-  "${CONTAINER_CLI}" push --tls-verify=false "${rbase_ref}" >/dev/null
+  "${CONTAINER_CLI}" push ${TLS_FLAG} "${rbase_ref}" >/dev/null
   for p in ${RESOLUTE_APPS}; do
     [[ -f "${STAGING}/Dockerfile.${p}" ]] || { log "resolute: no Dockerfile.${p} (build with --emit-app-images and --profile ${p}) — skipping"; continue; }
     id="${p}"
@@ -361,7 +365,7 @@ if [[ -n "${RESOLUTE_APPS}" ]] && resolute_ready; then
     "${CRANE}" append --insecure -b "${rbase_ref}" "${r_args[@]}" -t "${r_ref}" \
       && "${CRANE}" mutate --insecure "${r_ref}" "${r_mut[@]}" -t "${r_ref}" \
       || { log "resolute ${p}: crane assemble FAILED"; continue; }
-    "${CONTAINER_CLI}" pull --tls-verify=false "${r_ref}" >/dev/null \
+    "${CONTAINER_CLI}" pull ${TLS_FLAG} "${r_ref}" >/dev/null \
       && "${CONTAINER_CLI}" tag "${r_ref}" "${r_final}" \
       || { log "resolute ${p}: pull/tag FAILED"; continue; }
     if [[ -n "${PUSH_REGISTRY:-}" ]]; then
