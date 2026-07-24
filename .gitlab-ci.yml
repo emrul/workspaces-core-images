@@ -677,8 +677,10 @@ assess:
         echo "nothing scanned this run — no assessment to produce"; exit 0
       fi
       sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w" \
-        -e CI_COMMIT_SHA -e CI_PROJECT_PATH -e CI_PIPELINE_ID -e CI_JOB_ID \
-        -e CI_PIPELINE_SOURCE -e CI_COMMIT_BRANCH -e CI_DEFAULT_BRANCH \
+        -e CI_COMMIT_SHA="$CI_COMMIT_SHA" -e CI_PROJECT_PATH="$CI_PROJECT_PATH" \
+        -e CI_PIPELINE_ID="$CI_PIPELINE_ID" -e CI_JOB_ID="$CI_JOB_ID" \
+        -e CI_PIPELINE_SOURCE="$CI_PIPELINE_SOURCE" \
+        -e CI_COMMIT_BRANCH="${CI_COMMIT_BRANCH:-}" -e CI_DEFAULT_BRANCH="$CI_DEFAULT_BRANCH" \
         -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         "$DIND_IMG" bash -c '
