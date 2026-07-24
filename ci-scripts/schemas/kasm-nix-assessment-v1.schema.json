@@ -1,0 +1,407 @@
+{
+  "$defs": {
+    "ArtifactAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Candidate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "matches_artifact": {
+          "$ref": "#/$defs/MatchesArtifact"
+        },
+        "profile": {
+          "minLength": 1,
+          "title": "Profile",
+          "type": "string"
+        },
+        "publication": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Publication"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sbom": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SbomBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "profile",
+        "matches_artifact"
+      ],
+      "title": "ArtifactAssessment",
+      "type": "object"
+    },
+    "Candidate": {
+      "additionalProperties": false,
+      "properties": {
+        "config_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Config Digest",
+          "type": "string"
+        },
+        "ref": {
+          "minLength": 1,
+          "title": "Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "config_digest"
+      ],
+      "title": "Candidate",
+      "type": "object"
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "complete_for_requested_scope": {
+          "title": "Complete For Requested Scope",
+          "type": "boolean"
+        },
+        "failed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Failed",
+          "type": "array"
+        },
+        "not_built": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Not Built",
+          "type": "array"
+        },
+        "requested": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requested",
+          "type": "array"
+        },
+        "scanned": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scanned",
+          "type": "array"
+        }
+      },
+      "required": [
+        "complete_for_requested_scope",
+        "requested",
+        "scanned",
+        "not_built",
+        "failed"
+      ],
+      "title": "Coverage",
+      "type": "object"
+    },
+    "MatchesArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "MatchesArtifact",
+      "type": "object"
+    },
+    "Publication": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "pushed",
+            "skipped_equivalent",
+            "failed"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "candidate_config_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Config Digest"
+        },
+        "equivalence_basis": {
+          "minLength": 1,
+          "title": "Equivalence Basis",
+          "type": "string"
+        },
+        "intended_ref": {
+          "minLength": 1,
+          "title": "Intended Ref",
+          "type": "string"
+        },
+        "manifest_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Manifest Digest"
+        },
+        "remote_config_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Config Digest"
+        }
+      },
+      "required": [
+        "intended_ref",
+        "action",
+        "equivalence_basis"
+      ],
+      "title": "Publication",
+      "type": "object"
+    },
+    "SbomBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "attestation_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Attestation Digest",
+          "type": "string"
+        },
+        "content_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Content Digest",
+          "type": "string"
+        },
+        "result": {
+          "enum": [
+            "verified",
+            "failed",
+            "missing"
+          ],
+          "title": "Result",
+          "type": "string"
+        },
+        "source_name": {
+          "minLength": 1,
+          "title": "Source Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_name",
+        "content_digest",
+        "attestation_digest",
+        "result"
+      ],
+      "title": "SbomBinding",
+      "type": "object"
+    },
+    "Scanner": {
+      "additionalProperties": false,
+      "properties": {
+        "database_built": {
+          "minLength": 1,
+          "title": "Database Built",
+          "type": "string"
+        },
+        "database_id": {
+          "minLength": 1,
+          "title": "Database Id",
+          "type": "string"
+        },
+        "grype": {
+          "minLength": 1,
+          "title": "Grype",
+          "type": "string"
+        },
+        "syft": {
+          "minLength": 1,
+          "title": "Syft",
+          "type": "string"
+        }
+      },
+      "required": [
+        "syft",
+        "grype",
+        "database_id",
+        "database_built"
+      ],
+      "title": "Scanner",
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "assessment_job_id": {
+          "minLength": 1,
+          "title": "Assessment Job Id",
+          "type": "string"
+        },
+        "attestation_job_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attestation Job Id"
+        },
+        "commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Commit",
+          "type": "string"
+        },
+        "pipeline_id": {
+          "minLength": 1,
+          "title": "Pipeline Id",
+          "type": "string"
+        },
+        "pipeline_kind": {
+          "enum": [
+            "default_branch",
+            "merge_request",
+            "schedule",
+            "web",
+            "trigger"
+          ],
+          "title": "Pipeline Kind",
+          "type": "string"
+        },
+        "project": {
+          "minLength": 1,
+          "title": "Project",
+          "type": "string"
+        },
+        "publish_job_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publish Job Id"
+        },
+        "scan_job_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scan Job Id"
+        }
+      },
+      "required": [
+        "project",
+        "pipeline_id",
+        "commit",
+        "assessment_job_id",
+        "pipeline_kind"
+      ],
+      "title": "Source",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactAssessment"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "assessment_kind": {
+      "enum": [
+        "candidate",
+        "release",
+        "rescan"
+      ],
+      "title": "Assessment Kind",
+      "type": "string"
+    },
+    "coverage": {
+      "$ref": "#/$defs/Coverage"
+    },
+    "scanner": {
+      "$ref": "#/$defs/Scanner"
+    },
+    "schema": {
+      "title": "Schema",
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/Source"
+    }
+  },
+  "required": [
+    "schema",
+    "assessment_kind",
+    "source",
+    "scanner",
+    "coverage",
+    "artifacts"
+  ],
+  "title": "Assessment",
+  "type": "object"
+}

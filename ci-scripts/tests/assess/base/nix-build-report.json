@@ -1,0 +1,50 @@
+{
+  "run": {
+    "gitSha": "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12",
+    "baseRef": "nixos-25.05",
+    "baseRev": "cafecafecafecafecafecafecafecafecafecafe",
+    "scope": "",
+    "baseAffected": "0",
+    "metrics": {},
+    "pipelineId": "1234",
+    "jobId": "5000"
+  },
+  "images": [
+    {
+      "profile": "chrome",
+      "kasmName": "chrome",
+      "dest": "registry.example.test/kasm-nix/chrome:nix",
+      "status": "updated",
+      "action": "pushed",
+      "rev": "deadbeef",
+      "version": "138.0",
+      "storePath": "/nix/store/aaa-profile",
+      "prevStorePath": "/nix/store/old",
+      "candidateConfigDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "manifestDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "remoteConfigDigest": "",
+      "equivalenceBasis": "pushed",
+      "changedPackages": null
+    },
+    {
+      "profile": "obsidian",
+      "kasmName": "obsidian",
+      "dest": "registry.example.test/kasm-nix/obsidian:nix",
+      "status": "unchanged",
+      "action": "skipped",
+      "rev": "deadbeef",
+      "version": "1.6",
+      "storePath": "/nix/store/bbb-profile",
+      "prevStorePath": "/nix/store/bbb-profile",
+      "candidateConfigDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+      "manifestDigest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "remoteConfigDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+      "equivalenceBasis": "rootfs.diff_ids",
+      "changedPackages": null
+    }
+  ],
+  "summary": {
+    "updated": 1,
+    "unchanged": 1
+  }
+}

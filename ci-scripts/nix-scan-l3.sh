@@ -111,6 +111,12 @@ export GRYPE_DB_CACHE_DIR=/tmp/grype-db
 log "updating grype vulnerability DB"
 "${GRYPE}" db update -q || fail "grype db update failed"
 DB_BUILT="$("${GRYPE}" db status -o json 2>/dev/null | jq -r '.built // .Built // "unknown"' 2>/dev/null || echo unknown)"
+# Content-addressed DB identity for the assessment envelope (BP-02): the
+# remediator distinguishes "finding gone because source changed" from
+# "finding gone because the DB moved" by this value, so it must identify the
+# DB content, not just its build timestamp.
+DB_ID="$("${GRYPE}" db status -o json 2>/dev/null | jq -r '.checksum // .Checksum // empty' 2>/dev/null || true)"
+[ -n "${DB_ID}" ] || DB_ID="built:${DB_BUILT}"
 
 # ── OpenVEX → grype ignore rules ──────────────────────────────────────────────
 # security/vex/kasm-nix.openvex.json is the canonical triage record (OpenVEX,
@@ -527,12 +533,12 @@ fi
 VULNIX_VER="$(cat "${VULNIX_DIR}/vulnix-version.txt" 2>/dev/null || echo n/a)"
 jq -s --arg syft "${SYFT_VERSION}" --arg grype "${GRYPE_VERSION}" \
       --arg vulnix "${VULNIX_VER}" \
-      --arg db_built "${DB_BUILT}" --arg sha "${CI_COMMIT_SHA:-}" \
+      --arg db_built "${DB_BUILT}" --arg db_id "${DB_ID}" --arg sha "${CI_COMMIT_SHA:-}" \
       --arg vex_file "$([ -f "${VEX_FILE}" ] && basename "${VEX_FILE}" || echo "")" \
       --argjson vex_rules "${VEX_RULES}" \
       --argjson failed "$(printf '%s\n' "${failed[@]:-}" | jq -R . | jq -s 'map(select(length>0))')" \
       --argjson not_built "$(printf '%s\n' "${missing_requested[@]:-}" | jq -R . | jq -s 'map(select(length>0))')" \
-      '{scanners:{syft:$syft,grype:$grype,vulnix:$vulnix,grype_db_built:$db_built},
+      '{scanners:{syft:$syft,grype:$grype,vulnix:$vulnix,grype_db_built:$db_built,grype_db_checksum:$db_id},
         vex:{file:$vex_file,rules:$vex_rules},
         commit:$sha, failed:$failed, not_built:$not_built, images:.}' \
       "${WORK}/rows/"*.json > "${OUT_DIR}/nix-scan-report.json" 2>/dev/null \

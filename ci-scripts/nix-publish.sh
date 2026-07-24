@@ -219,6 +219,7 @@ gen_json() {
     --slurpfile diff "${diffs}" --slurpfile metrics "${metrics}" --slurpfile labels "${labels}" \
     --arg gitSha "${CI_COMMIT_SHA:-unknown}" --arg scope "${NIX_PROFILES:-}" \
     --arg baseAffected "${NIX_BASE_AFFECTED:-}" \
+    --arg pipelineId "${CI_PIPELINE_ID:-}" --arg jobId "${CI_JOB_ID:-}" \
     --rawfile results "${RESULTS}" \
     '($diff[0]//{}) as $D | ($labels[0]//{}) as $L |
      ($results | split("\n") | map(select(length>0)|split("\t"))
@@ -228,7 +229,8 @@ gen_json() {
               remoteConfigDigest:(.[11] // ""), equivalenceBasis:(.[12] // ""),
               changedPackages: ($D[.[0]].detail // null)})) as $imgs |
      {run:{gitSha:$gitSha, baseRef:($L.base.ref//null), baseRev:($L.base.rev//null),
-           scope:$scope, baseAffected:$baseAffected, metrics:($metrics[0]//{})},
+           scope:$scope, baseAffected:$baseAffected,
+           pipelineId:$pipelineId, jobId:$jobId, metrics:($metrics[0]//{})},
       images:$imgs,
       summary:($imgs|group_by(.status)|map({key:.[0].status,value:length})|from_entries)}' \
     > "${json}" && echo "[nix-publish] wrote ${json}"

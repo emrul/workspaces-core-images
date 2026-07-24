@@ -102,6 +102,24 @@ vex-lint:
   script:
     - bash ci-scripts/tests/vex-lint-test.sh
 
+# ── assess-test: regression-test the assessment-envelope producer ───────────
+# nix-assess.py is the BP-02/BP-03 fail-closed join (see the kasm-nix-remediator
+# design). Its negative fixtures are committed; verified whenever the producer,
+# the fixtures, or the schema contract change. Runs in $DIND_IMG for python3.
+assess-test:
+  stage: prepare
+  needs: []
+  rules:
+    - if: '$NIX_GC == "1"'
+      when: never
+    - changes:
+        - ci-scripts/nix-assess.py
+        - ci-scripts/tests/assess-test.sh
+        - ci-scripts/tests/assess/**
+        - ci-scripts/schemas/**
+  script:
+    - sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w:ro" "$DIND_IMG" bash /w/ci-scripts/tests/assess-test.sh
+
 # ── prepare: change-gating → NIX_PROFILES dotenv ────────────────────────────
 prepare:
   stage: prepare
@@ -598,6 +616,55 @@ security-page:
     expire_in: 30 days
     paths:
       - security.json
+
+# ── assess: BP-02/BP-03 assessment envelope — the remediator's input ─────────
+# Fail-closed join of this pipeline's three machine reports (scan-nix rows +
+# publish mappings + sbom-attach attestations) into ONE schema-versioned
+# kasm-nix-assessment/v1 envelope. Release kind on publishing pipelines,
+# candidate kind on MR pipelines (no publication claims). A missing report,
+# an unmapped scan row, a config-digest mismatch, or a published occurrence
+# without a verified attestation FAILS this job — after writing the truthful
+# envelope. Findings never fail it (that's the remediator's business).
+# skopeo (installed on demand) resolves existing .att digests for content-
+# identical skips and the docker manifest-digest fallback.
+assess:
+  stage: test
+  needs:
+    - scan-nix
+    - job: publish
+      optional: true
+    - job: sbom-publish
+      optional: true
+  rules:
+    - if: '$NIX_GC == "1"'
+      when: never
+    - if: '$FORCE_PUBLISH == "1"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - |
+      if [ ! -f nix-scan-report.json ]; then
+        echo "nothing scanned this run — no assessment to produce"; exit 0
+      fi
+      sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w" \
+        -e CI_COMMIT_SHA -e CI_PROJECT_PATH -e CI_PIPELINE_ID -e CI_JOB_ID \
+        -e CI_PIPELINE_SOURCE -e CI_COMMIT_BRANCH -e CI_DEFAULT_BRANCH \
+        -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
+        -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+        "$DIND_IMG" bash -c '
+          set -uo pipefail
+          command -v skopeo >/dev/null 2>&1 || dnf install -y -q skopeo >/dev/null 2>&1 || true
+          python3 /w/ci-scripts/nix-assess.py --workdir /w --out /w/assessment.json; rc=$?
+          chown "${HOST_UID}:${HOST_GID}" /w/assessment.json 2>/dev/null || true
+          exit "$rc"
+        '
+  artifacts:
+    when: always
+    expire_in: 90 days
+    paths:
+      - assessment.json
 
 # ── testbench: post-publish app assurance (downstream pipeline) ──────────────
 # Fire-and-forget trigger of kasm-nix-testbench: it fetches this pipeline's

@@ -1,0 +1,14 @@
+{
+  "source_commit": "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12",
+  "pipeline_id": "1234",
+  "job_id": "5002",
+  "images": [
+    {
+      "profile": "chrome",
+      "ref": "registry.example.test/kasm-nix/chrome:nix",
+      "manifest_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "attestation_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "result": "attested+signed"
+    }
+  ]
+}

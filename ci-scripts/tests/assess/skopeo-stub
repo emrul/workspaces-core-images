@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# skopeo stub for assess-test: resolves .att tags to a fixed digest so the
+# skipped_equivalent attestation-existence check can pass offline. Set
+# ASSESS_STUB_EMPTY=1 to simulate "no attestation exists on the registry".
+set -euo pipefail
+[ "${ASSESS_STUB_EMPTY:-0}" = "1" ] && exit 1
+ref="${*: -1}"
+case "${ref}" in
+  *".att") echo "sha256:9999999999999999999999999999999999999999999999999999999999999999" ;;
+  *)       echo "sha256:6666666666666666666666666666666666666666666666666666666666666666" ;;
+esac

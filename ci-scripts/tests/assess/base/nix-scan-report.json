@@ -1,0 +1,76 @@
+{
+  "scanners": {
+    "syft": "1.18.0",
+    "grype": "0.115.0",
+    "vulnix": "n/a",
+    "grype_db_built": "2026-07-20T04:00:00Z",
+    "grype_db_checksum": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+  },
+  "vex": {
+    "file": "kasm-nix.openvex.json",
+    "rules": 1
+  },
+  "commit": "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12",
+  "failed": [],
+  "not_built": [],
+  "images": [
+    {
+      "name": "chrome",
+      "image": "localhost/nix-chrome:dev",
+      "image_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "store_path": "/nix/store/aaa-profile",
+      "rev": "deadbeef",
+      "artifact": {
+        "kind": "candidate",
+        "ref": "candidate/kasm-technologies/labs-sandbox/kasm-nix@ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12/nix-chrome",
+        "intended_ref": "registry.example.test/kasm-nix/chrome:nix",
+        "sbom_source_name": "registry.example.test/kasm-nix/chrome:nix",
+        "config_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+        "source_commit": "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12",
+        "pipeline_id": "1234",
+        "scan_job_id": "5001"
+      },
+      "packages": {
+        "total": 100,
+        "nix": 90
+      },
+      "cves": {
+        "unique": 5,
+        "critical": 0,
+        "high": 1,
+        "fixed_critical": 0,
+        "vexed": 0,
+        "fixed_critical_raw": 0
+      }
+    },
+    {
+      "name": "obsidian",
+      "image": "localhost/nix-obsidian:dev",
+      "image_id": "5555555555555555555555555555555555555555555555555555555555555555",
+      "store_path": "/nix/store/bbb-profile",
+      "rev": "deadbeef",
+      "artifact": {
+        "kind": "candidate",
+        "ref": "candidate/kasm-technologies/labs-sandbox/kasm-nix@ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12/nix-obsidian",
+        "intended_ref": "registry.example.test/kasm-nix/obsidian:nix",
+        "sbom_source_name": "registry.example.test/kasm-nix/obsidian:nix",
+        "config_digest": "5555555555555555555555555555555555555555555555555555555555555555",
+        "source_commit": "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12",
+        "pipeline_id": "1234",
+        "scan_job_id": "5001"
+      },
+      "packages": {
+        "total": 80,
+        "nix": 70
+      },
+      "cves": {
+        "unique": 2,
+        "critical": 0,
+        "high": 0,
+        "fixed_critical": 0,
+        "vexed": 0,
+        "fixed_critical_raw": 0
+      }
+    }
+  ]
+}
