@@ -403,6 +403,7 @@ publish:
         -v "$CI_PROJECT_DIR:/artifacts" \
         -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" -e NIX_PROFILES="" \
         -e NIX_BASE_AFFECTED="$NIX_BASE_AFFECTED" -e CI_COMMIT_SHA="$CI_COMMIT_SHA" \
+        -e CI_PIPELINE_ID="$CI_PIPELINE_ID" -e CI_JOB_ID="$CI_JOB_ID" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
         "$DIND_IMG" bash -c '
