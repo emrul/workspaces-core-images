@@ -14,6 +14,45 @@ fi
 DISPLAY=:1
 export DISPLAY
 
+# Wait for the X server to ACCEPT connections — not merely to exist.
+#
+# Our unit is After=kasmvnc.service, but that service is Type=simple, so the
+# ordering only guarantees the Xvnc *process* was spawned. Upstream got this
+# wait for free: vnc_startup.sh drove the perl `vncserver` wrapper, which polls
+# the display and returns only once the server is up. kasm-xvnc deliberately
+# bypasses that wrapper and execs Xvnc directly, so the wait has to be explicit
+# here — it was lost in the port, not by design.
+#
+# Without it, startxfce4 runs against a display that is still refusing
+# connections and its `xrdb -merge` silently fails ("xrdb: Connection refused",
+# observed in the field 2026-07-28). The session then has NO X resources, which
+# is why the desktop can come up unthemed on a slower host while looking fine
+# on a faster one.
+#
+# Probe with xrdb: it is the tool whose failure we are preventing, and
+# install_xfce_ui.sh installs it. xdpyinfo is only pulled in by the KDE and
+# openbox variants, so it cannot be relied on here — fall back to the socket,
+# which kasm-setup clears before Xvnc starts, so it is never stale.
+_XRDB="$(command -v xrdb 2>/dev/null || true)"
+_x_accepting() {
+    if [ -n "${_XRDB}" ]; then
+        "${_XRDB}" -query >/dev/null 2>&1
+    else
+        [ -S /tmp/.X11-unix/X1 ]
+    fi
+}
+_wait_secs="${KASM_X_WAIT_SECS:-30}"
+_deadline=$(( $(date +%s) + _wait_secs ))
+until _x_accepting; do
+    if [ "$(date +%s)" -ge "${_deadline}" ]; then
+        # Degrade, never hang: a themed desktop is better than no desktop.
+        echo "kasm-window-manager: WARNING ${DISPLAY} still not accepting after ${_wait_secs}s;" \
+             "starting the desktop anyway (X resources may be missing)" >&2
+        break
+    fi
+    sleep 0.2
+done
+
 if [ "${START_XFCE4:-0}" = "1" ] || [ "${START_DE:-}" = xfce4-session ]; then
     if [ -n "${KASM_ENABLE_ZINK:-}" ] && [ -n "${KASM_EGL_CARD:-}" ] && [ -n "${KASM_RENDERD:-}" ]; then
         export LIBGL_KOPPER_DRI2=1 MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink
