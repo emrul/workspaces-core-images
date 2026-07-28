@@ -258,13 +258,18 @@ assemble_app() {
     # Per-app provenance labels (config-only; store layers still dedupe by digest).
     # Read from applabels.tsv (no jq); crane rejects empty values, so add only
     # labels whose value is non-empty.
-    local lbl_ref lbl_rev lbl_sp lbl_ver
+    local lbl_ref lbl_rev lbl_sp lbl_ver lbl_sec
     lbl_ref="$(app_label "${p}" 2)"; lbl_rev="$(app_label "${p}" 3)"
     lbl_sp="$(app_label "${p}" 4)";  lbl_ver="$(app_label "${p}" 5)"
+    # col 7: the seccomp profile this workspace REQUIRES (nix-profiles.toml).
+    # Stamped so the requirement travels with the artifact — a consumer can read
+    # it off the image instead of knowing it. "chrome" is the ordinary case.
+    lbl_sec="$(app_label "${p}" 7)"
     local mut=( --env "NIX_APP_PROFILES=${p}" --label "dev.kasm.nix.app=${p}" )
     [[ -n "${lbl_ref}" ]]  && mut+=( --label "dev.kasm.nix.ref=${lbl_ref}" )
     [[ -n "${lbl_rev}" ]]  && mut+=( --label "dev.kasm.nix.rev=${lbl_rev}" )
     [[ -n "${lbl_sp}" ]]   && mut+=( --label "dev.kasm.nix.store-path=${lbl_sp}" )
+    [[ -n "${lbl_sec}" ]]  && mut+=( --label "dev.kasm.seccomp.profile=${lbl_sec}" )
     [[ -n "${BASE_REV}" ]] && mut+=( --label "dev.kasm.nix.base-rev=${BASE_REV}" )
     [[ -n "${BUILT_AT}" ]] && mut+=( --label "dev.kasm.nix.built-at=${BUILT_AT}" )
     [[ -n "${GIT_SHA}" ]]  && mut+=( --label "org.opencontainers.image.revision=${GIT_SHA}" )
@@ -353,12 +358,14 @@ if [[ -n "${RESOLUTE_APPS}" ]] && resolute_ready; then
     # Provenance labels mirror the per-app path (config-only; store blobs dedupe).
     r_ref_lbl="$(app_label "${p}" 2)"; r_rev_lbl="$(app_label "${p}" 3)"
     r_sp_lbl="$(app_label "${p}" 4)"; r_ver_lbl="$(app_label "${p}" 5)"
+    r_sec_lbl="$(app_label "${p}" 7)"
     r_mut=( --env "NIX_APP_PROFILES=${p}" --label "dev.kasm.nix.app=${p}" \
             --label "dev.kasm.nix.base-model=resolute-multi-store" \
             --label "dev.kasm.nix.store-id=${id}" )
     [[ -n "${r_ref_lbl}" ]] && r_mut+=( --label "dev.kasm.nix.ref=${r_ref_lbl}" )
     [[ -n "${r_rev_lbl}" ]] && r_mut+=( --label "dev.kasm.nix.rev=${r_rev_lbl}" )
     [[ -n "${r_sp_lbl}" ]]  && r_mut+=( --label "dev.kasm.nix.store-path=${r_sp_lbl}" )
+    [[ -n "${r_sec_lbl}" ]] && r_mut+=( --label "dev.kasm.seccomp.profile=${r_sec_lbl}" )
     [[ -n "${BUILT_AT}" ]]  && r_mut+=( --label "dev.kasm.nix.built-at=${BUILT_AT}" )
     [[ -n "${GIT_SHA}" ]]   && r_mut+=( --label "org.opencontainers.image.revision=${GIT_SHA}" )
     [[ -n "${r_ver_lbl}" ]] && r_mut+=( --label "org.opencontainers.image.version=${r_ver_lbl}" )

@@ -356,9 +356,15 @@ DEFAULT_REF="$(jq -r '.nixpkgs.ref' "${STAGE_IN}/profiles.json")"
 # volume's profiles (nix profile install appends → "already provides" errors);
 # every profile is therefore reset before install (reset_profile below).
 REFMAP="${STAGE_IN}/refmap.tsv"        # cache: <orig-ref>\t<rev>
-APPLABELS="${STAGE_IN}/applabels.tsv"  # per-app: name\tref\trev\tstorepath\tversion\tinputKey
+APPLABELS="${STAGE_IN}/applabels.tsv"  # per-app: name\tref\trev\tstorepath\tversion\tinputKey\tseccomp
 : > "${REFMAP}"
 : > "${APPLABELS}"
+
+# Seccomp requirement, declared per profile in nix-profiles.toml. Carried into
+# applabels.tsv → an image label, so a workspace's elevated requirement travels
+# WITH the artifact instead of being remembered in the registry. Absent = the
+# ordinary chrome profile.
+seccomp_for() { jq -r --arg p "$1" '.profiles[$p].seccomp // "chrome"' "${STAGE_IN}/profiles.json"; }
 
 # resolve_rev <ref> → concrete rev (github .locked.rev, else .locked.narHash).
 # Cached in REFMAP. Empty (offline / unresolvable) degrades gracefully.
@@ -602,8 +608,8 @@ while IFS= read -r p; do
       p_sp="$(readlink -f "${KASM_PROFILE_DIR}/$p" 2>/dev/null || true)"
       p_ver="$(jq -r --arg a "$p" '.apps[$a].version // ""' \
                  "${OUTPUT_IN}/labels.prev.json" 2>/dev/null || true)"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$p" "$p_ref_orig" "$p_rev" "$p_sp" "$p_ver" "$p_key" >> "${APPLABELS}"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$p" "$p_ref_orig" "$p_rev" "$p_sp" "$p_ver" "$p_key" "$(seccomp_for "$p")" >> "${APPLABELS}"
       continue
     fi
   fi
@@ -639,8 +645,8 @@ while IFS= read -r p; do
                             eval --raw --impure $P_OVERRIDE "${p_first}.version" \
                             2>/dev/null || true)" ;;
     esac
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$p" "$p_ref_orig" "$p_rev" "$p_sp" "$p_ver" "$p_key" >> "${APPLABELS}"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$p" "$p_ref_orig" "$p_rev" "$p_sp" "$p_ver" "$p_key" "$(seccomp_for "$p")" >> "${APPLABELS}"
   else
     echo "[inner] WARN profile install FAILED: $p — skipping (catalog continues)" >&2
     echo "$p" >> "${STAGE_IN}/failed.txt"

@@ -110,6 +110,9 @@ pkgs = ["nixpkgs#chromium"]
 ref  = "github:NixOS/nixpkgs/nixos-unstable"
 
 [profiles.onlyoffice]
+# seccomp: bwrap — nixpkgs wraps it in a buildFHSEnv/bubblewrap sandbox; see
+#           src/ubuntu/install/nix/onlyoffice/launch.
+seccomp = "bwrap"
 pkgs      = ["nixpkgs#onlyoffice-desktopeditors"]
 kasm_name = "only-office"
 # Track unstable: 25.05 ships 9.0.0.172, whose CEF null-derefs at startup on
@@ -292,6 +295,8 @@ pkgs = ["nixpkgs#telegram-desktop"]
 pkgs = ["nixpkgs#teams-for-linux"]
 
 [profiles.zoom]
+# seccomp: bwrap — nixpkgs zoom-us runs inside an FHS/bwrap sandbox.
+seccomp = "bwrap"
 pkgs      = ["nixpkgs#zoom-us"]
 # nixpkgs ships an x86_64-linux build only.
 platforms = ["amd64"]
@@ -339,6 +344,8 @@ pkgs = ["nixpkgs#blender", "nixpkgs#sdl3^lib"]
 
 # ── Dev tools ─────────────────────────────────────────────────────────
 [profiles.insomnia]
+# seccomp: bwrap — Electron app whose sandbox needs the mount family.
+seccomp = "bwrap"
 pkgs = ["nixpkgs#insomnia"]
 
 [profiles.postman]
@@ -396,6 +403,8 @@ pkgs = ["nixpkgs#luanti", "nixpkgs#sdl3^lib"]
 pkgs = ["nixpkgs#superTuxKart", "nixpkgs#sdl3^lib"]
 
 [profiles.steam]
+# seccomp: bwrap — steam-run is an FHS/bwrap sandbox (nix-bwrap-run).
+seccomp = "bwrap"
 # nixpkgs ships steam as an FHS-wrapped derivation (its own chroot env).
 # x86_64 only; needs GPU + i386 userspace, both handled by the wrapper.
 #
@@ -435,6 +444,12 @@ platforms = ["amd64"]
 # app_base is inert (the build passes --app-base-image); amd64 only (tor-browser
 # is x86_64/i686). See design/tracelabs-osint-image.md and the build runbook.
 [profiles.tracelabs]
+# seccomp: bwrap — resolute desktop: Ubuntu 26.04 routes even GTK3 icon loading
+#           through glycin, which decodes inside `bwrap --unshare-all`. A
+#           profile that permits userns but denies the mount family fails in a
+#           way glycin does not recognise, so it never falls back and GTK
+#           aborts xfce4-panel on the fallback icon (2026-07-28).
+seccomp = "bwrap"
 # upstream: tracelabs/tlosint-vm @ 71d9815401ce3f061dbf65e509f57073fa1e2be1
 # Sync procedure when upstream releases: design/tracelabs-upstream-sync.md
 kasm_name = "tracelabs-osint"
