@@ -137,7 +137,11 @@ attest_one() {  # $1=profile $2=dest $3=mapping-manifest-digest
     jrow "${out}" "${profile}" "${dest}" "${dig}" "" "attest-failed"
     rm -f "${sbom}"; return 0
   fi
-  if ! "${COSIGN}" sign --key env://COSIGN_PRIVATE_KEY --tlog-upload=false --yes "${repo_ref}@${dig}"; then
+  # --recursive signs every child manifest of an index as well as the index
+  # itself. Publish emits an index even for a single architecture, so adopting
+  # this now means adding arm64 does not change what verification must check.
+  if ! "${COSIGN}" sign --key env://COSIGN_PRIVATE_KEY --tlog-upload=false --yes \
+       --recursive "${repo_ref}@${dig}"; then
     log "ERROR ${profile}: cosign sign failed"
     printf 'failed' > "${out}.status"
     jrow "${out}" "${profile}" "${dest}" "${dig}" "" "sign-failed"

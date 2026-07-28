@@ -49,6 +49,28 @@ in_filter() { [ -z "${FILTER}" ] && return 0; local x; for x in ${FILTER}; do [ 
 run() { if [ "${DRY_RUN}" = 1 ]; then echo "  DRY: $*"; else "$@"; fi; }
 
 echo "[nix-publish-base] target: ${REGISTRY_NS}/<kasm-core-*>:${KASM_TAG}"
+# Publish an image INDEX rather than a bare manifest, so the platform is
+# visible to clients that select before pulling (see nix-publish.sh for the
+# full reasoning). One linux/amd64 descriptor today; arm64 is one more
+# `manifest add` when it exists.
+push_index() { # $1=dest
+  if [[ "${DOCKER}" == *podman* ]]; then
+    local list="${1}-idx"
+    "${DOCKER}" manifest rm "${list}" >/dev/null 2>&1 || true
+    run "${DOCKER}" manifest create "${list}" || return 1
+    run "${DOCKER}" manifest add "${list}" "containers-storage:${1}" || return 1
+    run "${DOCKER}" manifest push --all "${list}" "docker://${1}" || return 1
+    "${DOCKER}" manifest rm "${list}" >/dev/null 2>&1 || true
+  else
+    run "${DOCKER}" push "$1" || return 1
+    if command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then
+      run docker buildx imagetools create -t "$1" "$1" || return 1
+    else
+      echo "[nix-publish-base] WARN no buildx: ${1} published as a bare manifest" >&2
+    fi
+  fi
+}
+
 pushed=0; skipped=0; missing=0; failed=()
 while IFS='|' read -r local_img repo; do
   [ -n "${local_img}" ] || continue
@@ -60,7 +82,7 @@ while IFS='|' read -r local_img repo; do
   fi
   dest="${REGISTRY_NS}/${repo}:${KASM_TAG}"
   echo "[nix-publish-base] ${local_img} → ${dest}"
-  if run "${DOCKER}" tag "${local_img}" "${dest}" && run "${DOCKER}" push "${dest}"; then
+  if run "${DOCKER}" tag "${local_img}" "${dest}" && push_index "${dest}"; then
     pushed=$((pushed+1))
   else
     echo "[nix-publish-base] WARN push failed: ${repo}" >&2; failed+=("${repo}")

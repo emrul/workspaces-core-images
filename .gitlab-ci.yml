@@ -415,6 +415,15 @@ publish:
         -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
         "$DIND_IMG" bash -c '
           set -uo pipefail
+          # nix-publish needs skopeo+jq to read the PUBLISHED image: the
+          # content-identical skip (rootfs.diff_ids), the previous store-path
+          # label, and the index→platform-child descent all go through them.
+          # quay.io/podman/stable ships neither, so without this the helpers
+          # returned empty, content_state() always said "unknown", and every
+          # profile re-pushed every run — the skip has never actually fired in
+          # CI (pipeline 2703225764: 34/34 "pushed").
+          command -v skopeo >/dev/null 2>&1 || dnf install -y -q skopeo >/dev/null 2>&1 || true
+          command -v jq     >/dev/null 2>&1 || dnf install -y -q jq     >/dev/null 2>&1 || true
           echo "$REG_PASS" | podman login "$REG" -u "$REG_USER" --password-stdin || exit 1
           DOCKER=podman bash /work/ci-scripts/nix-publish.sh; rc=$?
           # Always surface the report (even on partial push failure) before exiting.

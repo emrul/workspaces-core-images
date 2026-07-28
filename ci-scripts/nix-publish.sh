@@ -100,23 +100,76 @@ remote_label() { command -v skopeo >/dev/null 2>&1 && skopeo inspect --format "{
 # Consumers (sbom-publish, security page, the remediator) promote a scan
 # row to "published" ONLY via this mapping — never from scan-side intent.
 local_config_digest()    { "${DOCKER}" image inspect --format '{{.Id}}' "$1" 2>/dev/null || true; }
-# push + capture the manifest digest. --digestfile is podman-only; under
-# docker fall back to a plain push (digest resolved as "" — consumers treat
-# a missing manifestDigest on a pushed row as resolvable-from-registry).
+# Publish an image INDEX, not a bare manifest.
+#
+# A bare `podman push` of a single-arch image publishes
+# application/vnd.oci.image.manifest.v1+json, which carries NO platform
+# descriptor — architecture exists only inside the config blob. Clients that
+# select a platform BEFORE pulling therefore cannot tell the image is amd64
+# only: an arm64 host pulls it and dies at runtime with "exec format error"
+# instead of failing fast, and `docker buildx imagetools inspect` shows no
+# Platform line at all. Wrapping the manifest in an index
+# (application/vnd.oci.image.index.v1+json) with one linux/amd64 descriptor
+# makes the image self-describing. Adding arm64 later is one more
+# `manifest add` against the same list — the shape does not change again.
+#
+# The recorded digest becomes the INDEX digest, which is what the tag resolves
+# to and therefore what cosign attests/signs and what consumers verify.
 push_dig=""
-push_and_digest() { # $1=dest → sets $push_dig
+push_and_digest() { # $1=dest → sets $push_dig (index digest when available)
   push_dig=""
   if [[ "${DOCKER}" == *podman* ]]; then
-    run "${DOCKER}" push --digestfile "${REPORT_DIR}/.push-digest" "$1" || return 1
+    local list="${1}-idx"
+    "${DOCKER}" manifest rm "${list}" >/dev/null 2>&1 || true
+    run "${DOCKER}" manifest create "${list}" || return 1
+    run "${DOCKER}" manifest add "${list}" "containers-storage:${1}" || return 1
+    run "${DOCKER}" manifest push --all \
+      --digestfile "${REPORT_DIR}/.push-digest" "${list}" "docker://${1}" || return 1
     push_dig="$(cat "${REPORT_DIR}/.push-digest" 2>/dev/null || true)"; rm -f "${REPORT_DIR}/.push-digest"
+    "${DOCKER}" manifest rm "${list}" >/dev/null 2>&1 || true
   else
+    # docker: buildx imagetools can wrap an already-pushed manifest in an index.
     run "${DOCKER}" push "$1" || return 1
+    if command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then
+      run docker buildx imagetools create -t "$1" "$1" || return 1
+    else
+      echo "[nix-publish] WARN no buildx: ${1} published as a bare manifest (no platform descriptor)" >&2
+    fi
   fi
 }
 remote_manifest_digest() { command -v skopeo >/dev/null 2>&1 && skopeo inspect --format '{{.Digest}}' "docker://$1" 2>/dev/null || true; }
+
+# An index has no .config and no rootfs — the platform child manifest does.
+# Both equivalence helpers below MUST descend into it, or they silently return
+# empty for every index-published image, content_state() can never say "same",
+# and every profile re-pushes forever (losing the rootfs.diff_ids equivalence
+# basis the assessment envelope records).
+PUB_ARCH="${PUB_ARCH:-amd64}"
+# Strip the TAG only. `${ref%%:*}` is wrong: it cuts at the first colon, which
+# for registry:5000/app:nix yields "registry" and produced
+# docker://127.0.0.1@sha256:… in the prototype. A colon is a tag separator only
+# when it appears after the last slash.
+repo_of() { # $1=ref → ref without its :tag
+  local name="${1##*/}"
+  if [[ "${name}" == *:* ]]; then echo "${1%:*}"; else echo "$1"; fi
+}
+child_ref() { # $1=ref → ref pinned to the platform child, or $1 if not an index
+  command -v skopeo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || { echo "$1"; return; }
+  local raw mt child
+  raw="$(skopeo inspect --raw "docker://$1" 2>/dev/null || true)"
+  [[ -z "${raw}" ]] && { echo "$1"; return; }
+  mt="$(printf '%s' "${raw}" | jq -r '.mediaType // empty' 2>/dev/null || true)"
+  case "${mt}" in
+    *image.index.v1+json|*manifest.list.v2+json)
+      child="$(printf '%s' "${raw}" | jq -r --arg a "${PUB_ARCH}" \
+        '[.manifests[] | select(.platform.architecture==$a and (.platform.os=="linux"))][0].digest // empty' 2>/dev/null || true)"
+      if [[ -n "${child}" ]]; then echo "$(repo_of "$1")@${child}"; else echo "$1"; fi ;;
+    *) echo "$1" ;;
+  esac
+}
 remote_config_digest() {
   command -v skopeo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
-  skopeo inspect --raw "docker://$1" 2>/dev/null | jq -r '.config.digest // empty' 2>/dev/null || true
+  skopeo inspect --raw "docker://$(child_ref "$1")" 2>/dev/null | jq -r '.config.digest // empty' 2>/dev/null || true
 }
 
 # Classify by comparing published (prev) store-path to this build's (new).
@@ -139,7 +192,8 @@ classify() { # $1=prevSP $2=newSP → new|updated|unchanged
 local_diffids()  { "${DOCKER}" image inspect --format '{{json .RootFS.Layers}}' "$1" 2>/dev/null | tr -d ' ' || true; }
 remote_diffids() { # config blob carries rootfs.diff_ids; needs skopeo+jq
   command -v skopeo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
-  skopeo inspect --config "docker://$1" 2>/dev/null | jq -c '.rootfs.diff_ids' 2>/dev/null || true
+  # …and the config lives under the platform child when the tag is an index.
+  skopeo inspect --config "docker://$(child_ref "$1")" 2>/dev/null | jq -c '.rootfs.diff_ids' 2>/dev/null || true
 }
 # → same | changed | new | unknown  (unknown/new/changed all push; only same skips)
 content_state() { # $1=local-img $2=remote-ref
