@@ -1,0 +1,75 @@
+#!/bin/sh
+# kasm-relay-client — run a KasmVNC unix-relay client only when its relay is
+# actually there, and give up quietly when it is not.
+#
+#   kasm-relay-client <TOGGLE_VAR> <relay-path> <program> [args...]
+#
+# Xvnc owns the relay sockets (kasm-xvnc passes -UnixRelay printer:/tmp/printer
+# and smartcard:/tmp/smartcard); printer.service and smartcard.service are the
+# *clients* that connect to them. Socket activation is deliberately not used —
+# it raced Xvnc for the same path (see the note in printer.service).
+#
+# Two problems this fixes, both seen in one field log (2026-07-28):
+#
+#   1. kasm-xvnc creates each relay only `if isEnabled(env, KASM_SVC_<X>)`, but
+#      the client units had no matching gate. With KASM_SVC_SMARTCARD off, Xvnc
+#      created no smartcard relay and the bridge was started anyway, logging
+#      "[Errno 2] No such file or directory" every 2.5s for the life of the
+#      session. The unit's StartLimitBurst never engages because the bridge
+#      retries internally instead of exiting, so nothing bounds the noise.
+#
+#   2. Even when enabled, the client can start before Xvnc has created the
+#      relay — the same class of race as the window-manager/X-readiness one,
+#      since kasmvnc.service is Type=simple and only guarantees the process was
+#      spawned.
+#
+# ConditionEnvironment= cannot express this. container-init compares exactly and
+# treats an unset variable as unmet ("have \"\", want \"1\""), whereas
+# kasm-xvnc's isEnabled() treats unset/empty as ENABLED. Gating the unit that
+# way would silently disable smartcard for anyone who does not set the variable
+# while Xvnc still created the relay. So the toggle is evaluated here, with
+# exactly kasm-xvnc's semantics.
+#
+# Exits 0 (not a failure) when disabled or when the relay never appears, so
+# Restart=on-failure does not turn a legitimately-absent feature into a restart
+# loop.
+set -eu
+
+[ "$#" -ge 3 ] || {
+    echo "kasm-relay-client: usage: <TOGGLE_VAR> <relay-path> <program> [args...]" >&2
+    exit 2
+}
+_var="$1"
+_relay="$2"
+shift 2
+_name="$(basename "$1")"
+
+# Mirror of isEnabled() in cmd/kasm-xvnc/main.go: unset or empty means enabled;
+# only an explicit 0/false/no/off (any case) disables. Keep the two in step.
+_enabled() {
+    eval "_v=\${$1-}"
+    [ -z "${_v}" ] && return 0
+    case "$(printf '%s' "${_v}" | tr '[:upper:]' '[:lower:]')" in
+        0 | false | no | off) return 1 ;;
+    esac
+    return 0
+}
+
+if ! _enabled "${_var}"; then
+    echo "kasm-relay-client: ${_var} is disabled — not starting ${_name}" >&2
+    exit 0
+fi
+
+_wait_secs="${KASM_RELAY_WAIT_SECS:-30}"
+_deadline=$(( $(date +%s) + _wait_secs ))
+until [ -S "${_relay}" ]; do
+    if [ "$(date +%s)" -ge "${_deadline}" ]; then
+        echo "kasm-relay-client: relay ${_relay} did not appear within ${_wait_secs}s" \
+             "(${_var} is enabled, so Xvnc was expected to create it) —" \
+             "not starting ${_name}" >&2
+        exit 0
+    fi
+    sleep 0.2
+done
+
+exec "$@"

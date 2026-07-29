@@ -13,7 +13,10 @@ Type=simple
 User=${KASM_OS_USER:-kasm-user}
 Group=${KASM_OS_GROUP:-kasm-user}
 WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
-ExecStart=/dockerstartup/smartcard/kasm_smartcard_bridge --relay /tmp/smartcard
+# Gated + relay-waited by kasm-relay-client: KASM_SVC_SMARTCARD uses kasm-xvnc's
+# default-enabled semantics, which ConditionEnvironment= cannot express,
+# and the relay is created by Xvnc so it may not exist yet.
+ExecStart=/usr/local/bin/kasm-relay-client KASM_SVC_SMARTCARD /tmp/smartcard /dockerstartup/smartcard/kasm_smartcard_bridge --relay /tmp/smartcard
 Restart=on-failure
 RestartSec=2s
 StartLimitBurst=3

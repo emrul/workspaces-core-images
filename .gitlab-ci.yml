@@ -259,10 +259,13 @@ base-check:
 base:
   stage: base
   needs: [base-check]
-  # A full multi-distro rebuild (3× core + nix) plus serial retries can exceed
-  # GitLab's 1h default; the old per-distro jobs each built one distro. Give it
-  # room (the build job is 4h).
-  timeout: 3h
+  # A full multi-distro rebuild (4× core + nix) plus serial retries can exceed
+  # GitLab's 1h default; the old per-distro jobs each built one distro. Measured
+  # 2026-07-29 on a cold store: all four distros in parallel took 122.8 min, so
+  # 3h left only ~57 min of headroom for a slower host or a serial retry pass.
+  # Matched to the build job's 4h. (The 3h failure that exposed this was a
+  # dind-run.sh hang after a SUCCESSFUL build, not slow work — fixed separately.)
+  timeout: 4h
   rules:
     - if: '$NIX_GC == "1"'
       when: never

@@ -15,7 +15,10 @@ Type=simple
 User=${KASM_OS_USER:-kasm-user}
 Group=${KASM_OS_GROUP:-kasm-user}
 WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
-ExecStart=/dockerstartup/printer/kasm_printer_service --directory ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/PDF --relay /tmp/printer
+# Gated + relay-waited by kasm-relay-client: KASM_SVC_PRINTER uses kasm-xvnc's
+# default-enabled semantics, which ConditionEnvironment= cannot express,
+# and the relay is created by Xvnc so it may not exist yet.
+ExecStart=/usr/local/bin/kasm-relay-client KASM_SVC_PRINTER /tmp/printer /dockerstartup/printer/kasm_printer_service --directory ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/PDF --relay /tmp/printer
 Restart=on-failure
 RestartSec=2s
 StartLimitBurst=3
