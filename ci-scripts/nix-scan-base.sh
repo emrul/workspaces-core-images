@@ -107,7 +107,9 @@ while IFS='|' read -r local_img repo; do
   if ! "${DOCKER}" save -o "${tar}" "${local_img}"; then
     echo "[nix-scan-base] WARN save failed: ${repo}" >&2; failed+=("${repo}"); rm -rf "$(dirname "${tar}")"; continue
   fi
-  if TRIVY_REPORT="${OUT_DIR}/trivy-report-${repo}.xml" TRIVY_INPUT="${tar}" \
+  # SCAN_* rather than TRIVY_*: the TRIVY_ prefix is trivy's own env-var
+  # namespace and leaks into the scanner as flags (see ci-scripts/scan).
+  if SCAN_REPORT_XML="${OUT_DIR}/trivy-report-${repo}.xml" SCAN_INPUT_TAR="${tar}" \
        bash "${SCRIPT_DIR}/scan" image "${local_img}"; then
     scanned=$((scanned+1))
   else
