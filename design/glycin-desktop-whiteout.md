@@ -276,7 +276,25 @@ installs bubblewrap specifically for that. A passthrough would silently strip
 those apps' FHS namespace. tracelabs has no FHS app, which is why the session
 above is clean.
 
-**Proposed shape (not yet implemented):** a *dispatching* wrapper —
+**IMPLEMENTED** as `src/ubuntu/install/xfce/bwrap_dispatch.sh`, installed by
+`install_xfce_ui.sh` (guarded on `/usr/libexec/glycin-loaders` existing, so
+pre-glycin bases are untouched) with the real binary moved to
+`/usr/bin/bwrap.real`; `nix-bwrap-run` now prefers `bwrap.real` directly.
+Validated on the hardened host (`restrict=1`): all three branches correct —
+non-glycin target reaches the real bwrap (still fails RTM_NEWADDR there, i.e.
+sandbox intact), a glycin target passes through and the loader runs, and a missing
+`bwrap.real` refuses with exit 127. Full desktop session: panel alive, 0
+`Bail out!`, 0 pixbuf warnings, 0 icon failures, 0 refusals.
+
+**LIMIT — FHS apps still need the host sysctl.** On `restrict=1` the dispatcher
+correctly routes buildFHSEnv apps to the real bwrap, and the real bwrap cannot
+run there: stock `only-office:nix` logs `bwrap: setting up uid map: Permission
+denied` ×98 and the app never starts. With the sysctl at 0, the same image starts
+(9 processes). Pre-existing and independent of the dispatcher — but it means a
+hardened fleet needs BOTH the dispatcher (desktop) and one of § 5's host-level
+options (FHS apps).
+
+The original proposed shape, for reference — a *dispatching* wrapper:
 keep the real binary at `/usr/bin/bwrap.real`, and have `/usr/bin/bwrap`
 passthrough only when the target is a glycin loader
 (`/usr/libexec/glycin-loaders/`), else `exec /usr/bin/bwrap.real "$@"`. Point

@@ -287,3 +287,32 @@ Name=Desktop Icon Trust
 Exec=/dockerstartup/trustdesktop.sh
 EOL
 chmod +x /etc/xdg/autostart/desktop-icons.desktop
+
+# ── glycin/bwrap dispatcher (see design/glycin-desktop-whiteout.md) ───────────
+# On glycin-era bases (Ubuntu 25.10+/Resolute) gdk-pixbuf decodes images through
+# glycin, which runs its loaders under `bwrap --unshare-all`. Where bwrap cannot
+# complete its setup — a partial seccomp profile, docker-default AppArmor, or a
+# host with kernel.apparmor_restrict_unprivileged_userns=1 (Ubuntu 23.10+ default
+# and the CIS-hardened Kasm host image) — the loader exits 1, GTK turns the
+# failed icon load into a fatal assertion, and xfce4-panel dies: desktop with
+# icon labels, no icons, no panel. The host case cannot be fixed by any
+# container-side security_opt, so it is handled in the image.
+#
+# Upstream's bwrap_wrapper.sh (KASM-8257) is a blanket passthrough, which would
+# also strip the FHS mount namespace from buildFHSEnv apps (onlyoffice, steam)
+# that nix-bwrap-run runs through a REAL bwrap. bwrap_dispatch.sh passes through
+# ONLY for /usr/libexec/glycin-loaders/ targets and execs the real bubblewrap for
+# everything else.
+#
+# Installed only when glycin is actually present, so pre-glycin bases (24.04 and
+# older) keep a stock /usr/bin/bwrap and behave exactly as before.
+if [ -d /usr/libexec/glycin-loaders ] && [ -x /usr/bin/bwrap ]; then
+  if [ ! -e /usr/bin/bwrap.real ]; then
+    mv /usr/bin/bwrap /usr/bin/bwrap.real
+  fi
+  cp "$(dirname "$0")/bwrap_dispatch.sh" /usr/bin/bwrap
+  chmod 0755 /usr/bin/bwrap /usr/bin/bwrap.real
+  echo "installed glycin/bwrap dispatcher (real bubblewrap at /usr/bin/bwrap.real)"
+else
+  echo "no /usr/libexec/glycin-loaders or no bwrap — dispatcher not needed on this base"
+fi

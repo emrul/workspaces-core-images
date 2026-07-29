@@ -29,7 +29,12 @@
 # program is exec'd unchanged, so callers can route everything through here.
 set -u
 
+# Prefer bwrap.real: on glycin-era bases /usr/bin/bwrap is our dispatcher (see
+# install_xfce_ui.sh / design/glycin-desktop-whiteout.md). The dispatcher would
+# route us to the real binary anyway, but going straight there keeps FHS apps
+# independent of that logic — they MUST have a real bubblewrap for --overlay-src.
 BWRAP=/usr/bin/bwrap
+[ -x /usr/bin/bwrap.real ] && BWRAP=/usr/bin/bwrap.real
 prog="${1:-}"
 [ -n "${prog}" ] || { echo "nix-bwrap-run: no program given" >&2; exit 2; }
 
