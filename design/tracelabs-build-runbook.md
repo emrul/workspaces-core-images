@@ -187,6 +187,15 @@ won't be in the *menu* (no `.desktop`); they're on PATH via the profile —
 launch from a terminal.
 
 ### 4.2 security_opt: use the DESKTOP profile (apparmor=unconfined + bwrap.json) — CORRECTED
+> **2026-07-29: root-caused and reproduced — see `design/glycin-desktop-whiteout.md`.**
+> The conclusion below is correct, with two refinements that matter when
+> debugging: (1) `chrome.json` fails **even with** `apparmor=unconfined` (its
+> EPERM comes from seccomp's CAP_SYS_ADMIN-gated mount family, not AppArmor), and
+> (2) a container with **no** custom seccomp is *fine* — glycin detects that it
+> cannot create a userns and decodes unsandboxed. Only the middle states break,
+> which is why a plain `docker run` and a privileged DinD both fail to reproduce
+> it. The perms fix (`5c7e695`) was a separate, real bug; it was not the cause of
+> this one.
 **Earlier (WRONG) conclusion:** "drop seccomp, run default." That was a
 misdiagnosis. The blank/broken desktop was caused by the **0600 asset perms**
 (§ the mutagen chmod fix) — a missing/unreadable icon fell back to
