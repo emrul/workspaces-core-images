@@ -115,6 +115,44 @@ local_config_digest()    { "${DOCKER}" image inspect --format '{{.Id}}' "$1" 2>/
 #
 # The recorded digest becomes the INDEX digest, which is what the tag resolves
 # to and therefore what cosign attests/signs and what consumers verify.
+# A registry push streams gigabytes of blobs over a long-lived HTTPS PATCH, so a
+# single dropped TCP connection anywhere across ~36 apps used to fail the whole
+# job — and with it sbom-publish, security-page and assess, which is how the
+# remediator loses its assessment envelope. Observed 2026-07-29 (pipeline
+# 2714340414): 35 of 36 pushed, inkscape died on
+#   writing blob: Patch ".../blobs/uploads/...": use of closed network connection
+# and the next app pushed fine on the same code path. Transient, so retry it.
+# PUSH_ATTEMPTS=1 restores the old fail-fast behaviour.
+# push_err carries the last failure's tail so the JUnit report can name a cause
+# instead of just "failed". Output is TEE'd, not captured: a push moves gigabytes
+# and swallowing its progress would leave the job silent for minutes, which is
+# exactly the shape of the dind-run hang we just spent an afternoon on.
+push_err=""
+push_with_retry() { # $1=description $2...=command → sets $push_err on failure
+  local what="$1"; shift
+  if [[ "${DRY_RUN}" == 1 ]]; then echo "  DRY: $*"; push_err=""; return 0; fi
+  local attempts="${PUSH_ATTEMPTS:-3}" n=1 rc log
+  log="$(mktemp)"
+  while :; do
+    "$@" 2>&1 | tee "${log}"
+    rc="${PIPESTATUS[0]}"
+    if [ "${rc}" -eq 0 ]; then
+      [ "${n}" -gt 1 ] && echo "[nix-publish] ${what}: succeeded on attempt ${n}"
+      push_err=""; rm -f "${log}"; return 0
+    fi
+    # Keep the tail only — a full push log is megabytes and would bloat the XML.
+    push_err="$(grep -iE 'error|fatal|denied|refused|timeout|EOF' "${log}" | tail -3)"
+    [ -n "${push_err}" ] || push_err="$(tail -3 "${log}")"
+    if [ "${n}" -ge "${attempts}" ]; then
+      echo "[nix-publish] ${what}: FAILED after ${n} attempt(s) (rc=${rc})" >&2
+      rm -f "${log}"; return 1
+    fi
+    echo "[nix-publish] ${what}: attempt ${n}/${attempts} failed (rc=${rc}), retrying in $((n*10))s" >&2
+    sleep $((n*10))
+    n=$((n+1))
+  done
+}
+
 push_dig=""
 push_and_digest() { # $1=dest → sets $push_dig (index digest when available)
   push_dig=""
@@ -123,13 +161,13 @@ push_and_digest() { # $1=dest → sets $push_dig (index digest when available)
     "${DOCKER}" manifest rm "${list}" >/dev/null 2>&1 || true
     run "${DOCKER}" manifest create "${list}" || return 1
     run "${DOCKER}" manifest add "${list}" "containers-storage:${1}" || return 1
-    run "${DOCKER}" manifest push --all \
+    push_with_retry "push ${1}" "${DOCKER}" manifest push --all \
       --digestfile "${REPORT_DIR}/.push-digest" "${list}" "docker://${1}" || return 1
     push_dig="$(cat "${REPORT_DIR}/.push-digest" 2>/dev/null || true)"; rm -f "${REPORT_DIR}/.push-digest"
     "${DOCKER}" manifest rm "${list}" >/dev/null 2>&1 || true
   else
     # docker: buildx imagetools can wrap an already-pushed manifest in an index.
-    run "${DOCKER}" push "$1" || return 1
+    push_with_retry "push ${1}" "${DOCKER}" push "$1" || return 1
     if command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then
       run docker buildx imagetools create -t "$1" "$1" || return 1
     else
@@ -347,6 +385,13 @@ ensure_skopeo || echo "[nix-publish] WARN skopeo unavailable — every image wil
 ensure_jq || echo "[nix-publish] WARN jq unavailable — content compare degraded; images may re-push" >&2
 
 pushed=0; failed=()
+# Per-profile failure reasons for the JUnit report. push_err is overwritten by
+# the next push, so it is captured here at the moment of failure.
+PUSH_ERRORS="${REPORT_DIR}/push-errors.tsv"; : > "${PUSH_ERRORS}" 2>/dev/null || PUSH_ERRORS=""
+note_failure() { # $1=profile $2=reason
+  [[ -n "${PUSH_ERRORS}" ]] || return 0
+  printf '%s\t%s\n' "$1" "$(printf '%s' "${2:-no error output captured}" | tr '\n\t' '  ')" >> "${PUSH_ERRORS}"
+}
 # Publish one local image to its kasm-named registry ref with a content-based push
 # skip. Shared by the per-app images and the resolute multi-store desktop images.
 # Mutates the globals pushed/failed; every other var is local.
@@ -395,6 +440,7 @@ publish_one() {
            "${cand_cfg}" "${push_dig}" "" "pushed"
   else
     echo "[nix-publish] WARN push failed: ${profile}" >&2; failed+=("${profile}"); action=failed; status_=failed
+    note_failure "${profile}" "${push_err}"
     record "${profile}" "${kn}" "${dest}" "${status_}" "${action}" "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}" \
            "${cand_cfg}" "" "" ""
   fi
@@ -471,6 +517,7 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
       pushed=$((pushed+1)); faction=pushed; fbasis="pushed"
     else
       echo "[nix-publish] WARN fat store push failed" >&2; failed+=("nix-store"); faction=failed; fstat=failed
+      note_failure "nix-store" "${push_err}"
       fbasis=""; push_dig=""
     fi
     record "nix-store" "nix-store" "${fat_dest}" "${fstat}" "${faction}" "${fnew}" "" "${fnew}" "${fprev}" \
@@ -481,8 +528,56 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
   fi
 fi
 
+# JUnit report → GitLab's "Tests" tab (artifacts:reports:junit). One testcase per
+# profile so a failure is a named, clickable row carrying the registry's own error
+# text, instead of something you find by scrolling 20 minutes of push log.
+# Every non-pushed outcome is a <skipped>, not a pass: a green row must mean
+# "pushed", or a skip-everything run would read as a successful publish.
+write_junit() {
+  local xml="${REPORT_DIR}/publish-junit.xml"
+  [[ -s "${RESULTS}" ]] || return 0
+  local total=0 nfail=0 nskip=0
+  # Attribute values are XML-escaped; & first, or it would re-escape the others.
+  esc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
+  local body="" profile kn dest status_ action reason
+  while IFS=$'\t' read -r profile kn dest status_ action _; do
+    [[ -n "${profile}" ]] || continue
+    total=$((total+1))
+    case "${action}" in
+      pushed)
+        body+="    <testcase classname=\"nix-publish\" name=\"$(esc "${profile}") → $(esc "${dest}")\"/>"$'\n' ;;
+      failed)
+        nfail=$((nfail+1))
+        reason=""
+        [[ -n "${PUSH_ERRORS}" && -f "${PUSH_ERRORS}" ]] && \
+          reason="$(awk -F'\t' -v p="${profile}" '$1==p {print $2}' "${PUSH_ERRORS}" | tail -1)"
+        [[ -n "${reason}" ]] || reason="push failed (no error output captured)"
+        body+="    <testcase classname=\"nix-publish\" name=\"$(esc "${profile}") → $(esc "${dest}")\">"$'\n'
+        body+="      <failure message=\"$(esc "${reason}")\" type=\"push-failed\">$(esc "push to ${dest} failed after ${PUSH_ATTEMPTS:-3} attempt(s):
+${reason}")</failure>"$'\n'
+        body+="    </testcase>"$'\n' ;;
+      *)
+        nskip=$((nskip+1))
+        body+="    <testcase classname=\"nix-publish\" name=\"$(esc "${profile}") → $(esc "${dest}")\">"$'\n'
+        body+="      <skipped message=\"$(esc "${action:-skipped}") ($(esc "${status_}"))\"/>"$'\n'
+        body+="    </testcase>"$'\n' ;;
+    esac
+  done < "${RESULTS}"
+  {
+    echo '<?xml version="1.0" encoding="UTF-8"?>'
+    echo '<testsuites>'
+    printf '  <testsuite name="nix-publish" tests="%s" failures="%s" skipped="%s">\n' \
+      "${total}" "${nfail}" "${nskip}"
+    printf '%s' "${body}"
+    echo '  </testsuite>'
+    echo '</testsuites>'
+  } > "${xml}"
+  echo "[nix-publish] junit → ${xml} (${total} cases, ${nfail} failed, ${nskip} skipped)"
+}
+
 # Consolidated build-run report (never fails the publish result).
 generate_report || echo "[nix-publish] WARN report generation failed" >&2
+write_junit     || echo "[nix-publish] WARN junit generation failed" >&2
 
 echo "[nix-publish] done: pushed=${pushed} failed=${#failed[@]} ${failed[*]:-}"
 [[ ${#failed[@]} -eq 0 ]]
