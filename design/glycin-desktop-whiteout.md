@@ -80,6 +80,27 @@ and they are two independent gates:
 **`chrome.json` is not a partial fix — it is the worst option**, because it
 converts a working unsandboxed decode into a desktop crash.
 
+## 3b. Full-session A/B (the actual desktop, not just the loader)
+
+The table above probes the loader. This is the whole desktop: same host
+(192.168.1.140), same image, two `docker run` sessions differing only in
+`--security-opt`.
+
+| run | `Bail out!` | "Could not load a pixbuf" | xfce4-panel | xfdesktop / xfwm4 |
+|---|---|---|---|---|
+| `seccomp=chrome.json`, no apparmor opt | **3** | many | **0 — dead** | 1 / 1 |
+| `seccomp=bwrap.json` + `apparmor=unconfined` | 0 | 0 | 1 — alive | 1 / 1 |
+
+The broken run reproduces the field log line for line, including the same
+`Failed to load image "/usr/share/extra/icons/icon_default.png"` sequence. Note
+which processes die: the **panel** is gone while xfdesktop and xfwm4 survive —
+i.e. a desktop with icon labels, no panel, no icons. Exactly the screenshot.
+
+Note this was reproduced on the host where the bug "doesn't happen". It doesn't
+happen *through Kasm* there because Kasm applies the correct `run_config`; the
+host is not what protects it. Bypass Kasm and pass the broken option set and the
+same host fails identically.
+
 ## 4. Why it breaks on the SaaS fleet and not on 192.168.1.140
 
 **Not the host.** The obvious suspect was the Ubuntu 23.10+ sysctl:
