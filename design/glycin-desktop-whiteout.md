@@ -1,7 +1,9 @@
 # The "white desktop, icon labels only" failure — root cause
 
-**Status:** root-caused and reproduced 2026-07-29 (previous attempts failed to
-reproduce; see § 6 for why). Applies to every Resolute-based desktop image
+**Status:** root-caused and reproduced 2026-07-29, on both an unhardened host
+(by reconstructing the broken config) and on the real CIS L2 hardened SaaS host
+image (where the config we ship is *itself* broken — § 4). Previous attempts
+failed to reproduce; see § 6 for why. Applies to every Resolute-based desktop image
 (tracelabs-osint, the fat-store desktops), and to any Ubuntu 25.10+ base.
 
 **Symptom:** the session comes up with a blank/white desktop showing desktop
@@ -104,49 +106,81 @@ same host fails identically.
 
 ## 4. Why it breaks on the SaaS fleet and not on 192.168.1.140
 
-**Not the host.** The obvious suspect was the Ubuntu 23.10+ sysctl:
+**It IS the host — via a mechanism the first test missed.** Measured on a
+throwaway instance built from the SaaS host image itself
+(`Kasm-Ubuntu 24.04 x86_64 - CIS Level 2 Hardened - Ver 2.2.4`, docker 29.6.1,
+same version as 192.168.1.140):
 
-| host | `kernel.apparmor_restrict_unprivileged_userns` |
-|---|---|
-| forge (Ubuntu 26.04) | 1 |
-| OCI runner (Ubuntu 24.04) | 1 |
-| 192.168.1.140 (Ubuntu 24.04) | **0** |
+| config | .140 (`restrict_unprivileged_userns=0`) | CIS L2 host (`=1`) |
+|---|---|---|
+| docker default seccomp | OK (glycin falls back) | OK (glycin falls back) |
+| `chrome.json` | FAIL — EPERM at `make / slave` | FAIL — EPERM at `make / slave` |
+| `bwrap.json`, docker-default apparmor | FAIL — EACCES at `make / slave` | FAIL — EACCES at `make / slave` |
+| **`bwrap.json` + `apparmor=unconfined`** | **OK** | **FAIL — `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`** |
+| `bwrap.json` + `apparmor=kasm-app-bwrap` | — | FAIL — EACCES at `make / slave` |
+| `bwrap.json` + `apparmor=kasm-desktop` | — | OK, but only because userns creation is *denied* → fallback |
 
-That difference is real but **causally irrelevant**: the 2×2 `unshare -U`
-matrix is byte-identical on a `=1` host and the `=0` host (default seccomp
-fails, `bwrap.json` succeeds, AppArmor unconfined changes nothing). Ubuntu's
-`docker-default`/`nerdctl-default` profile already grants `userns`, so the
-sysctl never bites. Do not chase it.
+**The configuration we ship as correct does not work on the hardened host.** On
+`=1`, bwrap now gets *past* namespace creation and the mount setup and dies later
+bringing up loopback in its new network namespace — i.e. it lacks
+`CAP_NET_ADMIN` inside the namespace it just created. That is Ubuntu's
+`apparmor_restrict_unprivileged_userns` behaviour: a process that creates an
+unprivileged userns without an explicit `userns` grant is transitioned into a
+restricted profile, so it does *not* hold full capabilities inside its own
+namespace. No AppArmor AVC is logged, which is why it looks like a plain EPERM.
 
-**The actual variable is the workspace record's `run_config` in that
-deployment's own database.** The registry entry passed through three states in
-a single day:
+Proven by flipping one bit on that host and changing nothing else:
 
-| commit | date | `security_opt` | icons | browsers |
-|---|---|---|---|---|
-| `4b84f6c` | 2026-07-20 | `chrome.json` only | **BROKEN** | ok |
-| `9699619` | 2026-07-20 | *removed entirely* | ok (unsandboxed) | **broken** (need userns) |
-| `4aa0d22` | 2026-07-20 | `apparmor=unconfined` + `bwrap.json` | ok | ok |
+```
+sysctl kernel.apparmor_restrict_unprivileged_userns=0
+  bwrap.json + apparmor=unconfined → bwrap reaches execvp; pixbuf OK 128x128
+sysctl kernel.apparmor_restrict_unprivileged_userns=1   (hardened default)
+  bwrap.json + apparmor=unconfined → bwrap: loopback: Failed RTM_NEWADDR; pixbuf FAIL
+```
 
-A deployment that imported TraceLabs while the entry was at `4b84f6c` holds a
-permanently broken `run_config`. The registry does expose the change — the
-per-workspace `sha` in `list.json` is a content hash of the workspace folder
-(`processing/processjson.js`: `hashElement(folder)`), so it moved when
-`workspace.json` did — but the *image tag never changes* (`:nix`), so nothing
-about the running image signals it, and an existing workspace record is only
-rewritten when someone applies the registry update.
+**CORRECTION to an earlier version of this document**, which claimed the sysctl
+was "real but causally irrelevant — do not chase it". That was wrong, and the
+error is instructive: the test behind it was `unshare -U true`, which only proves
+a namespace can be *created*. The restriction does not block creation — it strips
+capabilities *inside* the namespace, which only shows up at a later bwrap step.
+Testing namespace creation and calling the question closed was the mistake.
 
-The symptom set identifies which stale state a deployment is in:
+### 4.1 The STIG makes this worse, mechanically
 
-- **white desktop, labels only** → `chrome.json` state, or `bwrap.json` without
-  `apparmor=unconfined`
-- **desktop fine, but Chromium/obsidian/Electron won't start** → the
-  no-`security_opt` state
+`workspaces-stigs` (release/1.18.1) `apply_docker_stigs.sh`, control V-235812:
 
-The field log is the first case: glycin chose the Bwrap mechanism (the bwrap
-command line appears in the error and there is no "running without sandbox"
-warning), which means userns *was* permitted — so that container had a Kasm
-seccomp profile but not a working mount path.
+```sh
+docker inspect --format '{{ .Id }}: SecurityOpt={{ .HostConfig.SecurityOpt }}' \
+  | grep -i --quiet unconfined   &&  log_failure "V-235812" "found container with seccomp unconfined."
+```
+
+It greps for the *string* `unconfined` anywhere in `SecurityOpt`. Our required
+`apparmor=unconfined` matches, so a correctly-configured Nix desktop is reported
+as **V-235812 FAIL — "seccomp unconfined"** even though seccomp is a custom
+profile. An operator remediating that finding removes `apparmor=unconfined`,
+which lands the workspace in the row above it: EACCES at `make / slave`, white
+desktop. A STIG-audited fleet is pushed into the bug; an unaudited box is not.
+
+Otherwise the docker STIG is benign here: it only mutates daemon.json
+ownership/permissions, `userland-proxy`, `ip`, and log driver/opts — no seccomp
+override, no userns-remap, no AppArmor changes. `apply_kasm_stigs.sh` adds
+`no-new-privileges` to the *Kasm service* containers via docker-compose, not to
+workspace containers.
+
+### 4.2 Registry history is a second, independent way to land in a broken state
+
+The registry entry passed through three states on 2026-07-20:
+
+| commit | `security_opt` | icons | browsers |
+|---|---|---|---|
+| `4b84f6c` | `chrome.json` only | **BROKEN** | ok |
+| `9699619` | *removed entirely* | ok (unsandboxed) | **broken** (need userns) |
+| `4aa0d22` | `apparmor=unconfined` + `bwrap.json` | ok on `=0` hosts | ok |
+
+A deployment that imported at `4b84f6c` holds a broken `run_config`
+independently of the host. The `sha` in `list.json` is a content hash of the
+workspace folder, so the registry does expose the change — but the image tag
+never moves (`:nix`), so nothing about the running image signals it.
 
 ## 5. Diagnosis and fix
 
@@ -169,10 +203,35 @@ bwrap --unshare-all --die-with-parent --chdir / --ro-bind /usr /usr --dev /dev /
 #   "execvp … No such file or directory"              → sandbox OK (probe bound no /bin)
 ```
 
-**Fix, deployment side:** the workspace's `run_config.security_opt` must be
-`["apparmor=unconfined", "seccomp=<bwrap.json>"]`. Apply the registry update, or
-delete and re-add the workspace, or edit `run_config` directly. The registry has
-published the correct value since `4aa0d22`.
+**Fix depends on the host's `apparmor_restrict_unprivileged_userns`:**
+
+- **Host at `0`** (192.168.1.140, and any pre-23.10 host): the workspace's
+  `run_config.security_opt` must be
+  `["apparmor=unconfined", "seccomp=<bwrap.json>"]`. The registry has published
+  this since `4aa0d22`; apply the registry update, or delete and re-add the
+  workspace, or edit `run_config` directly.
+- **Host at `1`** (the CIS L2 hardened image, i.e. the SaaS fleet): **no
+  `run_config` alone fixes it.** Options, in order of preference:
+  1. Set `kernel.apparmor_restrict_unprivileged_userns=0` on workspace hosts
+     (persist via sysctl.d). Works — measured. Cost: it re-enables unprivileged
+     userns host-wide, which is the protection CIS added. Defensible on a host
+     whose *only* job is running workspace containers that already need userns
+     for Chromium/Electron sandboxes, but it is a real posture change and needs
+     sign-off.
+  2. An AppArmor profile carrying an explicit `userns` grant so no restrictive
+     transition happens, used as `apparmor=kasm-app-bwrap` instead of
+     `unconfined` — which would ALSO clear the V-235812 false positive in § 4.1.
+     **Our current profiles do not achieve this** (measured: `kasm-app-bwrap`
+     still fails EACCES at `make / slave`; `kasm-desktop` denies namespace
+     creation outright). This is the right long-term fix and it is unfinished
+     work, not a setting.
+  3. Accept unsandboxed image decode: any configuration where userns creation is
+     *denied* makes glycin fall back and icons work (that is why the
+     default-seccomp row is healthy). But Chromium/Electron then lose their
+     namespace sandbox, so this trades one breakage for another.
+
+Whichever route, **verify with the § 5 probe rather than by reading config** —
+three different layers can produce the same white screen.
 
 ## 6. Why this could not be fixed in the image, and why earlier attempts failed
 
