@@ -48,6 +48,41 @@ fi
 # stack_perm). Same rationale as nix-launch.
 unset LD_LIBRARY_PATH
 
+# ── first-run splash ─────────────────────────────────────────────────────────
+# Steam's bootstrap + steamwebhelper (CEF) take ~60s (≈100s on first launch,
+# which also downloads the latest client) to draw ANY window — the blank desktop
+# reads as "broken" and generates support tickets. Flags (-cef-disable-gpu,
+# -nobootstrapupdate, -noverifyfiles) don't move this; it's inherent to steam's
+# multi-process boot. So show a lightweight pulsing "Steam is starting…" until
+# steam's own window appears (or a 210s cap). Best-effort and fully detached:
+# a splash failure must never affect the launch. Only on the first launch of a
+# session (guarded by a per-session stamp) so restarts don't re-nag.
+_splash_stamp="${XDG_RUNTIME_DIR:-/tmp}/.steam-splash-shown"
+if command -v zenity >/dev/null 2>&1 && [ ! -e "${_splash_stamp}" ]; then
+    : > "${_splash_stamp}" 2>/dev/null || true
+    (
+        exec >/dev/null 2>&1
+        fifo="$(mktemp -u)"; mkfifo "${fifo}" 2>/dev/null || exit 0
+        zenity --progress --pulsate --no-cancel --auto-close \
+            --title="Steam" --width=400 \
+            --text="Steam is starting…
+First launch downloads the latest client and can take a minute." < "${fifo}" &
+        zpid=$!
+        exec 3>"${fifo}"          # hold the pipe open so the bar keeps pulsing
+        i=0
+        while [ "${i}" -lt 210 ]; do
+            kill -0 "${zpid}" 2>/dev/null || break
+            # close once steam's real client window is up (not the tiny
+            # steamwebhelper helper windows, whose title ends in "helper").
+            if wmctrl -l 2>/dev/null | grep -qiE 'sign in to steam| steam$'; then break; fi
+            sleep 2; i=$((i+2))
+        done
+        echo 100 >&3 2>/dev/null   # auto-close the dialog
+        exec 3>&-; rm -f "${fifo}" 2>/dev/null
+        kill "${zpid}" 2>/dev/null
+    ) &
+fi
+
 # The 32-bit client always gets its software GLX visual from /run/opengl-driver-32;
 # if a GPU is allocated, 64-bit games additionally see NVIDIA via /run/opengl-driver.
 if nix-gpu-run --available; then

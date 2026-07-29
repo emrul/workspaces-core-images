@@ -28,8 +28,9 @@ Three links in the chain, and the third is what makes it catastrophic:
 1. `bwrap` cannot complete its sandbox setup, so the loader process exits 1.
 2. gdk-pixbuf returns a `gdk-pixbuf-error-quark` error for the icon.
 3. **GTK treats a failed icon load as a fatal assertion** (`Bail out!`) — so
-   `xfce4-panel`, `xfdesktop` and `xfwm4` die. The labels you see are what
-   xfdesktop had already drawn before it aborted.
+   whichever process hit it dies. Measured (§ 3b): `xfce4-panel` dies;
+   `xfdesktop` and `xfwm4` survive, having already drawn the icon *labels* —
+   which is why the screen shows labels, no panel, no icons.
 
 The trigger is the *fallback icon*: any missing icon resolves to
 `image-missing.svg`, which is an SVG, which goes to `glycin-svg`, which aborts
