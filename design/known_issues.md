@@ -98,3 +98,77 @@ perception until a bake option lands.
 --gpus all`, then read `~/.local/share/Steam/logs/console-linux.txt` — the
 `Downloading Update` → `Extracting package` → `Update complete, launching…`
 sequence is the ~55 s. (testbench catch, 2026-07-17.)
+
+---
+
+## 2. FHS/bubblewrap apps (only-office, steam) don't start on hardened hosts
+
+**Symptom.** On a host with `kernel.apparmor_restrict_unprivileged_userns=1`, a
+buildFHSEnv app workspace never draws a window. The session comes up, the desktop
+works, but the app is simply absent. Log fills with:
+
+```
+[custom-startup] bwrap: setting up uid map: Permission denied
+```
+
+Measured on a throwaway built from the SaaS host image
+(`Kasm-Ubuntu 24.04 x86_64 - CIS Level 2 Hardened - Ver 2.2.4`), stock
+`only-office:nix`, `security_opt = ["apparmor=unconfined", "seccomp=<bwrap.json>"]`:
+
+| host sysctl | uid-map errors | app processes |
+|---|---|---|
+| `restrict_unprivileged_userns=1` (hardened default) | 98 | **0 — never starts** |
+| `restrict_unprivileged_userns=0` | 0 | **9 — works** |
+
+Nothing else changed between those two rows.
+
+**Root cause.** nixpkgs wraps these apps in `buildFHSEnv`, so `nix-launch` →
+`nix-bwrap-run` runs them under a **real** bubblewrap to give them a real
+`/nix/store` under their FHS root. Ubuntu 23.10+ transitions any process that
+creates an unprivileged user namespace *without an explicit AppArmor `userns`
+grant* into a restricted profile, so bwrap does not hold the capabilities it needs
+inside the namespace it just created — it fails at the uid map. `apparmor=unconfined`
+does **not** exempt it: the transition still happens (this is the same host-level
+mechanism that breaks glycin's icon loader, see `design/glycin-whiteout-tldr.md`).
+
+**Not the same bug as the desktop whiteout, and not fixed by the same change.**
+`bwrap_dispatch.sh` deliberately routes FHS apps to the real bwrap (a passthrough
+would silently strip their FHS mount namespace, which is worse). Verified: with the
+dispatcher installed the app still fails, with **0 dispatcher refusals** — dispatch
+was correct, the real bwrap simply cannot run there.
+
+**Why it's not fixed yet.** Both candidate fixes are host- or profile-side, not
+image-side:
+
+- **`kernel.apparmor_restrict_unprivileged_userns=0` on workspace hosts** (via
+  `sysctl.d`). Measured working. Cost: re-enables unprivileged userns host-wide,
+  which is the protection CIS added — needs sign-off, and it is a fleet-wide
+  posture change we cannot make from an image.
+- **An AppArmor profile carrying a working `userns` grant**, applied as
+  `apparmor=kasm-app-bwrap` instead of `unconfined`. This is the right long-term
+  answer and would also clear the `workspaces-stigs` V-235812 false positive
+  (it greps `SecurityOpt` for the string `unconfined`). **Our current profiles do
+  not achieve it** — measured on the hardened host: `kasm-app-bwrap` still fails
+  EACCES at `make / slave`, and `kasm-desktop` denies namespace creation outright.
+  Unfinished work, not a setting.
+
+**Scope.** Every `seccomp = "bwrap"` profile in `bin/nix-profiles.toml` that is an
+FHS wrapper — `only-office`, `steam` (`steam-run`), and anything else built with
+`buildFHSEnv`. Chromium/Electron apps are unaffected: `nix-launch` runs them with
+`--no-sandbox`, so they need no userns.
+
+**Evidence / how to reproduce.** On a `restrict=1` host:
+
+```sh
+sysctl kernel.apparmor_restrict_unprivileged_userns          # expect 1
+docker run -d --name oo --shm-size=1g -p 6901:6901 \
+  --security-opt seccomp=src/common/seccomp/bwrap.json \
+  --security-opt apparmor=unconfined -e VNC_PW=password \
+  registry.gitlab.com/.../only-office:nix
+docker logs oo 2>&1 | grep -c "setting up uid map"           # expect >0
+docker exec oo pgrep -fc DesktopEditors                      # expect 0
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 # then relaunch: works
+```
+
+(Found 2026-07-29 while validating the glycin desktop fix on the real SaaS host
+image.)
