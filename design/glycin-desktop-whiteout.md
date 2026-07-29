@@ -233,16 +233,82 @@ bwrap --unshare-all --die-with-parent --chdir / --ro-bind /usr /usr --dev /dev /
 Whichever route, **verify with the § 5 probe rather than by reading config** —
 three different layers can produce the same white screen.
 
-## 6. Why this could not be fixed in the image, and why earlier attempts failed
+## 5b. THE FIX: upstream's bwrap passthrough wrapper (KASM-8257)
 
-Every image-side escape was tested and closed:
+A second-opinion review (codex) found what this document previously got wrong.
+Upstream Kasm already hit this bug and wrote the fix in April 2026 —
+`ba4b118 KASM-8257 Convert bwrap to optional passthrough`,
+`src/ubuntu/install/xfce/bwrap_wrapper.sh`. Its own comment names the cause:
+
+> bwrap wrapper: bypass bubblewrap sandboxing. Privileged containers
+> (seccomp=unconfined, sysbox) allow bwrap to fully enforce namespace/seccomp
+> isolation, which breaks glycin's image loaders. This wrapper strips all
+> bwrap-specific flags and exec's the target command directly.
+
+**It never reaches our images.** `install_xfce_ui.sh` stages it only in the
+`DISTRO == "kali"` branch, installs it as `/usr/bin/bwrap.wrapper` (not `bwrap`),
+and **nothing ever activates it** — no runtime code references
+`bwrap.wrapper` anywhere in the tree. Confirmed absent from the running
+tracelabs image: `/usr/bin/bwrap.wrapper: No such file or directory`.
+
+Baked in as `/usr/bin/bwrap`, it fixes the desktop on the hardened host, in the
+configuration that otherwise fails:
+
+| hardened host (`restrict=1`), `bwrap.json` + `apparmor=unconfined` | xfce4-panel | `Bail out!` | pixbuf warnings | icon failures |
+|---|---|---|---|---|
+| stock image | **0 — dead** | 758 (crash loop) | 3 | 4 |
+| + passthrough `bwrap` | **1 — alive** | **0** | **0** | **0** |
+
+This is host-independent: no sysctl change, no `run_config` change, no AppArmor
+profile work. It also supersedes the § 5 decision tree for the desktop symptom.
+
+**Trade-off:** image decode then runs unsandboxed. That is the same posture the
+default-seccomp row already has (glycin's own fallback), so it is not a new
+exposure for those hosts — but it does remove a sandbox that *works* on
+`restrict=0` hosts. Untrusted-image decode is a real attack surface; upstream
+accepted this trade for the same reason.
+
+**Do NOT blanket-replace `/usr/bin/bwrap` in the Nix images.**
+`src/ubuntu/install/nix/scripts/nix-bwrap-run` sets `BWRAP=/usr/bin/bwrap` and
+needs a REAL bwrap (`--overlay-src`) to give buildFHSEnv apps (steam,
+onlyoffice) a real `/nix/store` under their FHS root; every nix dockerfile
+installs bubblewrap specifically for that. A passthrough would silently strip
+those apps' FHS namespace. tracelabs has no FHS app, which is why the session
+above is clean.
+
+**Proposed shape (not yet implemented):** a *dispatching* wrapper —
+keep the real binary at `/usr/bin/bwrap.real`, and have `/usr/bin/bwrap`
+passthrough only when the target is a glycin loader
+(`/usr/libexec/glycin-loaders/`), else `exec /usr/bin/bwrap.real "$@"`. Point
+`nix-bwrap-run` at `bwrap.real` explicitly. That keeps the FHS apps' sandbox and
+fixes the desktop everywhere.
+
+### Test-method traps (both bit this investigation)
+
+- **`/tmp` is `noexec` on the CIS host.** A wrapper bind-mounted from `/tmp`
+  cannot be executed inside the container; the error changes from "Loader
+  process exited early" to "Could not spawn", which looks like a different bug.
+  Two full-session runs were invalidated this way. Bake the file into a layer.
+- **`bridge: none` in the hardened daemon.json** means `docker build` `RUN`
+  steps have no network (`network bridge not found`). Use `COPY` with the source
+  file already mode 0755 instead of `RUN chmod`.
+
+## 6. Earlier claim that the image cannot fix this — WITHDRAWN
+
+**This section previously claimed no image-side fix existed. That was wrong —
+see § 5b.** The three escapes below are genuinely closed, but they are not the
+only options; the passthrough wrapper works and was already written upstream.
+The error was concluding "impossible" from three failed attempts instead of
+searching the tree for prior art:
 
 - **Remove the gdk-pixbuf↔glycin bridge.** Not possible on Resolute:
   `libgdk_pixbuf-2.0.so.0` links `libglycin-2.so.0` directly, and even
   librsvg2-common's `libpixbufloader_svg.so` links both librsvg *and* libglycin.
 - **Remove `/usr/bin/bwrap` so glycin falls back.** Tested: it does **not**
   fall back. Detection probes userns, not the binary — the loader still tries to
-  exec bwrap and dies. Icon decode still fails.
+  exec bwrap and dies. Icon decode still fails. (The fix is to *replace* bwrap
+  with a passthrough, not remove it — § 5b. Testing removal and stopping there
+  was the mistake.)
 - **Env-var override.** glycin 2.1.1 references exactly two variables
   (`GLYCIN_DATA_DIR`, `GLYCIN_SECCOMP_DEFAULT_ACTION`). `NotSandboxed` exists as
   a mechanism but cannot be selected from outside.
