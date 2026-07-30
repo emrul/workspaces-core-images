@@ -314,7 +314,20 @@ build:
       # NIX_BASE_AFFECTED is 0), unlike the commit-diff-only NIX_BASE_AFFECTED
       # (which stays the base-freshness GUARD signal in dind-build.sh).
       _reb="${BASE_DISTROS:-${NIX_BASES_REBUILD:-}}"
-      case " ${_reb} " in *" ubuntu "*) NIX_BASE_REBUILT=1 ;; *) NIX_BASE_REBUILT=0 ;; esac
+      # resolute counts too: the resolute multi-store desktop apps (tracelabs) are
+      # stacked on nix-ubuntu-resolute, so a resolute-only base rebuild must also
+      # re-assemble them or they keep the old base layer and the fix never ships —
+      # exactly the failure this flag was added for. Missed when the flag was
+      # written (2026-07-30: a resolute-only rebuild carrying bwrap_dispatch.sh
+      # would have published nothing). Re-stacking ubuntu-based apps against an
+      # unchanged ubuntu base is harmless: assembly only re-layers, and publish's
+      # content compare then finds them identical and skips the push.
+      case " ${_reb} " in *" ubuntu "*|*" resolute "*) NIX_BASE_REBUILT=1 ;; *) NIX_BASE_REBUILT=0 ;; esac
+      # FORCE_RESTACK=1: re-stack every warm app even though no base rebuilt in
+      # THIS pipeline. Needed when the base moved in an EARLIER pipeline (e.g. a
+      # scoped BASE_DISTROS run) and the catalog has to catch up, without paying
+      # for another base rebuild just to set this flag.
+      [ "${FORCE_RESTACK:-0}" = "1" ] && NIX_BASE_REBUILT=1
       echo "building profiles: ${NIX_PROFILES:-<all>}  (per-app parallel=${BUILD_PARALLEL}, eval-gate=${NIX_EVAL_GATE:-0}, ubuntu-base-rebuilt=${NIX_BASE_REBUILT})"
       # Resolute multi-store desktop apps (app_base="resolute" in the profile TOML)
       # are ALSO assembled onto the Resolute nix base. Derived from the TOML (not
