@@ -240,12 +240,16 @@ base-check:
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e BASE_DISTROS="${BASE_DISTROS:-}" \
         -e CHECK_UPSTREAM="${digest_check}" \
+        -e NIXPKGS_REF="$(sed -n '/^\[nixpkgs\]/,/^\[/{s/^ref *= *"\(.*\)"/\1/p}' bin/nix-profiles.toml | head -1)" \
         "$DIND_IMG" bash /work/ci-scripts/nix-base-check.sh)"
       echo "$out"
       stale="$(printf '%s\n' "$out" | sed -n 's/^NIX_BASES_STALE=//p' | tail -1)"
       reb="$(printf '%s\n' ${NIX_BASES_AFFECTED:-} ${stale} | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')"
       echo "distro bases to rebuild: '${reb}'  (affected='${NIX_BASES_AFFECTED:-}' stale='${stale}')"
       echo "NIX_BASES_REBUILD=${reb}" > base.env
+      # Pass the rev base-check resolved through to the base job, so the stamp
+      # it writes is the one the next check compares against.
+      printf '%s\n' "$out" | sed -n 's/^NIXPKGS_REV_RESOLVED=/NIXPKGS_REV_RESOLVED=/p' | tail -1 >> base.env
   artifacts:
     reports:
       dotenv: base.env
@@ -284,6 +288,7 @@ base:
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e BASE_DISTROS="${reb}" -e BUILD_PARALLEL="$BUILD_PARALLEL" \
         -e BASE_BUILT_SHA="$CI_COMMIT_SHA" \
+        -e NIXPKGS_REV="${NIXPKGS_REV_RESOLVED:-}" \
         "$DIND_IMG" bash /work/ci-scripts/nix-base-build.sh
 
 # ── build: fat store + per-app images (parallel) ────────────────────────────

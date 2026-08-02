@@ -70,7 +70,12 @@ EOF
   podman build --build-arg BASE_IMAGE="${src}" --build-arg DISTRO="${distarg}" \
     --build-arg BG_IMG="${bg}" "${core_extra[@]}" -f "${coredf}" -t "${coretag}" . || return 1
   echo "[base:${d}] building ${nixtag}"
-  # Stamp: builtsha (freshness guard) + the source image ref/digest (staleness check).
+  # Stamp: builtsha (freshness guard), the source image ref/digest, and the
+  # nixpkgs rev this base's store closure was built from. The last one exists
+  # because a base goes stale two ways independently — the distro image can sit
+  # still for weeks while nixpkgs ships CVE fixes daily, and comparing only the
+  # digest froze the catalogue at a three-month-old nixpkgs. nix-base-check.sh
+  # compares it against the resolved [nixpkgs].ref.
   if [ "${d}" = resolute ]; then
     # resolute's nix finish BAKES the Nix KasmVNC closure into the core (no
     # per-distro .deb). nix-bake-closure runs nix in a nixos/nix container (DIND
@@ -96,6 +101,7 @@ EOF
       --label "kasm.base.builtsha=${BASE_BUILT_SHA:-unknown}" \
       --label "dev.kasm.base.src-image=${src}" \
       --label "dev.kasm.base.src-digest=${digest}" \
+      --label "dev.kasm.base.nixpkgs-rev=${NIXPKGS_REV:-unknown}" \
       && rc=0 || rc=1
     rm -rf "${ctx}"
     [ "${rc}" = 0 ] || return 1
@@ -104,6 +110,7 @@ EOF
       --label "kasm.base.builtsha=${BASE_BUILT_SHA:-unknown}" \
       --label "dev.kasm.base.src-image=${src}" \
       --label "dev.kasm.base.src-digest=${digest}" \
+      --label "dev.kasm.base.nixpkgs-rev=${NIXPKGS_REV:-unknown}" \
       -f "${nixdf}" -t "${nixtag}" . || return 1
   fi
   echo "[base:${d}] done: $(podman image inspect -f '{{.Id}}' "${nixtag}") src-digest=${digest:-unknown}"
