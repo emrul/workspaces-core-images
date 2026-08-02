@@ -204,12 +204,20 @@ exists, so a stale base is scanned *as it is* and reported as clean-for-itself.
 Neither job answers "is a newer package available upstream that we have not
 taken?".
 
-**Contrast with the Nix side, which does not have this problem.** A profile with
-a floating `ref` (e.g. `[nixpkgs].ref = nixos-26.05`) re-resolves the branch on
-every build, so an upstream fix is absorbed without anyone re-pinning. That is
-how openssl 3.6.2 → 3.6.3 became available to the tracelabs profile with no
-source change at all (2026-08-02). The deb/rpm/apk layer has no equivalent
-mechanism — a digest is not a floating ref.
+**The Nix side has the same bug, one layer down.** This entry originally
+claimed the opposite — that a floating `ref` re-resolves every build so upstream
+fixes are absorbed automatically. That is true of *profiles* and false of the
+*base*, which is where it matters: `ci-scripts/nix-base-check.sh` decided
+staleness purely on the upstream image digest and never looked at the nixpkgs
+rev. The base was therefore frozen at whatever nixpkgs was current when the
+distro image last moved — three months, in the case measured on 2026-08-02 —
+shipping openssl 3.6.2 and an unpatched perl long after `nixos-26.05` carried
+fixes for both. Exactly this bug, on a different package manager.
+
+It is fixed for Nix (the base now carries a `dev.kasm.base.nixpkgs-rev` stamp
+that `base-check` compares), which is what makes the deb/rpm/apk gap the
+remaining half rather than a separate curiosity. The two layers still need
+independent freshness signals; neither inherits the other's.
 
 **Why it is not fixed yet.** It needs a second staleness signal, and the cheap
 form of that signal is a judgement call we have not made: which pending updates
