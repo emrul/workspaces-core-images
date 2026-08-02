@@ -19,6 +19,29 @@
     in {
       overlays.default = import ./overlay.nix;
 
+      # The whole of nixpkgs WITH the overlay applied, so a plain package can be
+      # installed through it: path:/config/kasm-overlay#<attr>.
+      #
+      # This exists because `packages` cannot carry a security fix into a
+      # transitive dependency. The overlay's perl backport (CVE-2026-13221) has
+      # to reach everything that links perl, and `nix profile install
+      # github:NixOS/nixpkgs/<rev>#openssl` evaluates against PLAIN nixpkgs — no
+      # overlay, so plain perl in its closure. Resolving the same attribute
+      # through here instead applies the overlay to the entire dependency graph.
+      # Measured: overriding perl changes openssl's store path, which is both
+      # the proof it propagates and the reason a change here rebuilds most of
+      # the catalogue.
+      #
+      # Attribute paths are nixpkgs' own, nesting included (xorg.libX11), since
+      # this IS a nixpkgs package set. Anything the overlay does not name passes
+      # through untouched — apart from a new hash where perl is in its closure.
+      legacyPackages = forAllSystems (system:
+        import nixpkgs {
+          inherit system;
+          overlays = [ self.overlays.default ];
+          config.allowUnfree = true;
+        });
+
       # One packages.<system>.<profile> per self-hosted app. bin/nix-profiles.toml
       # references these as path:/config/kasm-overlay#<profile>.
       packages = forAllSystems (system:

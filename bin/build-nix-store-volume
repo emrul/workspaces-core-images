@@ -421,12 +421,43 @@ nix_install() {
   ln -sfn "$prof_path" "${KASM_GCROOT_DIR}/$(basename "$prof_path")"
 }
 
+# Plain nixpkgs attrs resolve THROUGH the kasm overlay when it is present, so a
+# security override in the overlay reaches transitive dependencies.
+#
+# `nix profile install github:NixOS/nixpkgs/<rev>#openssl` evaluates against
+# plain nixpkgs: no overlay, so plain perl in openssl's closure. That is how the
+# tracelabs image carried a perl the overlay had already patched — the override
+# only ever applied to packages installed as path:…#<name>, never to the
+# thousands pulled in as dependencies. Routing the same attribute through
+# `path:/config/kasm-overlay#openssl` (its legacyPackages output, see the
+# overlay flake) applies the overlay to the whole graph.
+#
+# Callers MUST pair this with `--override-input nixpkgs <ref>` — see
+# overlay_input_flags — or the overlay resolves against its own committed lock
+# instead of the build's rev. Getting exactly that wrong is what pinned a
+# three-month-old nixpkgs into the image.
+#
+# Falls back to the plain ref when the overlay is not mounted, so a build
+# without it still works — just without any override.
+OVERLAY_DIR="${OVERLAY_DIR:-/config/kasm-overlay}"
+
 rewrite_attr() {
   attr="$1"; ref="$2"
   case "$attr" in
-    nixpkgs#*) printf '%s#%s\n' "$ref" "${attr#nixpkgs#}" ;;
+    nixpkgs#*)
+      if [ -d "${OVERLAY_DIR}" ]; then
+        printf 'path:%s#%s\n' "${OVERLAY_DIR}" "${attr#nixpkgs#}"
+      else
+        printf '%s#%s\n' "$ref" "${attr#nixpkgs#}"
+      fi ;;
     *)         printf '%s\n' "$attr" ;;
   esac
+}
+
+# Word-split deliberately at the call sites (like P_OVERRIDE): empty when the
+# overlay is absent, so the command line is unchanged in that case.
+overlay_input_flags() {
+  [ -d "${OVERLAY_DIR}" ] && printf -- '--override-input nixpkgs %s' "$1"
 }
 
 collect_attrs() {
@@ -485,7 +516,8 @@ nix_install "${KASM_PROFILE_DIR}/bootstrap" \
 reset_profile _base
 collect_attrs '.base.pkgs[]' "${DEFAULT_REF}" \
   | xargs nix --extra-experimental-features 'nix-command flakes' \
-      profile install --impure --profile "${KASM_PROFILE_DIR}/_base"
+      profile install --impure $(overlay_input_flags "${DEFAULT_REF}") \
+      --profile "${KASM_PROFILE_DIR}/_base"
 ln -sfn "${KASM_PROFILE_DIR}/_base" "${KASM_GCROOT_DIR}/_base"
 
 # ── 4b. _gpu support profile (optional) ────────────────────────────────
@@ -517,7 +549,8 @@ if jq -e '.gpu.pkgs | length > 0' "${STAGE_IN}/profiles.json" >/dev/null 2>&1; t
         --profile "${KASM_PROFILE_DIR}/_gpu"
   [ -n "${_gpu_plain}" ] && printf '%s\n' "${_gpu_plain}" \
     | xargs nix --extra-experimental-features 'nix-command flakes' \
-        profile install --impure --profile "${KASM_PROFILE_DIR}/_gpu"
+        profile install --impure $(overlay_input_flags "${DEFAULT_REF}") \
+        --profile "${KASM_PROFILE_DIR}/_gpu"
   ln -sfn "${KASM_PROFILE_DIR}/_gpu" "${KASM_GCROOT_DIR}/_gpu"
 fi
 
@@ -539,7 +572,7 @@ if jq -e '(.layers // {}) | length > 0' "${STAGE_IN}/profiles.json" >/dev/null 2
     reset_profile "_layer-${lname}"
     collect_attrs ".layers.\"$lname\".pkgs[]" "$l_ref" \
       | xargs nix --extra-experimental-features 'nix-command flakes' \
-          profile install --impure \
+          profile install --impure $(overlay_input_flags "$l_ref") \
           --profile "${KASM_PROFILE_DIR}/_layer-${lname}"
     ln -sfn "${KASM_PROFILE_DIR}/_layer-${lname}" \
             "${KASM_GCROOT_DIR}/_layer-${lname}"
@@ -577,10 +610,19 @@ while IFS= read -r p; do
   # (no manual flake.lock re-pin, unlike gpu/steam overlays). Unset when the ref
   # is unresolvable (offline) — the overlay's committed default then applies.
   # See design/nix-self-hosted-packages.md.
+  #
+  # The grep that used to gate this is gone: rewrite_attr now routes EVERY
+  # nixpkgs attr through the overlay too (so an override reaches transitive
+  # dependencies), which means essentially every profile resolves against the
+  # overlay flake and every one of them needs the input override. Gating on
+  # "does this profile mention path:…kasm-overlay" would have left plain
+  # profiles silently resolving against the overlay's committed lock — the
+  # exact failure that pinned a three-month-old nixpkgs into the image.
   P_OVERRIDE=""
-  if printf '%s\n' "$p_pkgs" | grep -q '^path:/config/kasm-overlay' && [ -n "$p_ref" ]; then
-    P_OVERRIDE="--override-input nixpkgs $p_ref"
-    echo "  ($p uses kasm-overlay → --override-input nixpkgs $p_ref)" >&2
+  if [ -n "$p_ref" ]; then
+    P_OVERRIDE="$(overlay_input_flags "$p_ref")"
+    [ -n "$P_OVERRIDE" ] \
+      && echo "  ($p resolves via kasm-overlay → --override-input nixpkgs $p_ref)" >&2
   fi
   # eval-gate (NIX_EVAL_GATE=1): if this profile's input key is byte-identical to
   # the previous build's (same rev + attrs + overlay sources) AND the warm profile
