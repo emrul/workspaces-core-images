@@ -249,8 +249,24 @@ elif ! "${DOCKER}" image inspect "${FAT_IMG}" >/dev/null 2>&1; then
   log "ERROR fat store ${FAT_IMG} absent (every build emits it; set SKIP_FAT_SCAN=1 to opt out)"
   build_failed+=("nix-store"); FAT_IMG=""
 fi
-log "scanning apps: ${apps[*]:-<none>}   fat store: ${FAT_IMG:-absent}"
-if [ "${#apps[@]}" -eq 0 ] && [ -z "${FAT_IMG}" ] \
+# Resolute desktop images are named nix-resolute-<profile>:dev and are
+# deliberately excluded from all_apps (they need the multi-store union, scan_one
+# mode 2), so an "apps" count of zero does not mean there is nothing here. A
+# profile whose only artifact is a resolute desktop — tracelabs, fat_store=false
+# and no single-app emit — produces an empty assembled.txt and an empty
+# all_apps, and the exit below used to fire before the resolute loop ever ran.
+# The image was sitting in the daemon, freshly built, and the job reported
+# success having scanned nothing. Count them before deciding.
+resolute_present=0
+for _rp in $(resolute_profiles); do
+  [ -n "${_rp}" ] || continue
+  { [ "${SCAN_ALL:-0}" = "1" ] || [ -z "${FILTER}" ] || in_filter "${_rp}"; } || continue
+  "${DOCKER}" image inspect "${NIX_APP_REPO}-resolute-${_rp}:dev" >/dev/null 2>&1 \
+    && resolute_present=$((resolute_present + 1))
+done
+
+log "scanning apps: ${apps[*]:-<none>}   resolute desktops: ${resolute_present}   fat store: ${FAT_IMG:-absent}"
+if [ "${#apps[@]}" -eq 0 ] && [ -z "${FAT_IMG}" ] && [ "${resolute_present}" -eq 0 ] \
    && [ "${#missing_requested[@]}" -eq 0 ] && [ "${#build_failed[@]}" -eq 0 ]; then
   log "nothing to scan"; exit 0
 fi
