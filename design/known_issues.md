@@ -172,3 +172,79 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 # then relaunch: w
 
 (Found 2026-07-29 while validating the glycin desktop fix on the real SaaS host
 image.)
+
+---
+
+## 3. Distro base rots between upstream image re-tags (no archive freshness check)
+
+**Symptom.** A distro base can sit for weeks carrying deb/rpm/apk packages for
+which the vendor has already published security updates. Nothing rebuilds it and
+nothing reports it, because the only staleness signal is the upstream image
+digest — and Ubuntu, Fedora and Alpine all ship archive security updates
+*without* re-tagging the base image.
+
+**Root cause.** Two independent facts that are each fine alone:
+
+1. `package_rules.sh` **does** upgrade everything — `apt-get upgrade -y` (:28),
+   `dnf upgrade -y --refresh` (:18), `apk upgrade --available` (:24). But it only
+   runs *when a base is actually rebuilt*.
+2. `base-check` decides "is this base stale" by comparing the **upstream image
+   digest** (`.gitlab-ci.yml` → `CHECK_UPSTREAM=1` → `ci-scripts/nix-base-check.sh`).
+
+So the trigger asks "has the vendor re-tagged the image?" while the risk is "has
+the vendor published a package update?". Those diverge for as long as the vendor
+leaves a tag alone, which for an LTS point release is typically weeks. During
+that window the built base is a frozen snapshot of the archive at last rebuild
+and drifts further from it every day.
+
+**Why the scans do not catch it either.** `scan-nix` is nix-store only — the L3
+scan of the tracelabs profile returns zero `pkg:deb` findings by construction.
+The deb layer is `scan-base`'s job, and that scans whatever base currently
+exists, so a stale base is scanned *as it is* and reported as clean-for-itself.
+Neither job answers "is a newer package available upstream that we have not
+taken?".
+
+**Contrast with the Nix side, which does not have this problem.** A profile with
+a floating `ref` (e.g. `[nixpkgs].ref = nixos-26.05`) re-resolves the branch on
+every build, so an upstream fix is absorbed without anyone re-pinning. That is
+how openssl 3.6.2 → 3.6.3 became available to the tracelabs profile with no
+source change at all (2026-08-02). The deb/rpm/apk layer has no equivalent
+mechanism — a digest is not a floating ref.
+
+**Why it is not fixed yet.** It needs a second staleness signal, and the cheap
+form of that signal is a judgement call we have not made: which pending updates
+should force a rebuild. Upgrading on *any* pending package churns the base
+constantly for cosmetic updates; upgrading only on security-flagged packages
+needs per-distro plumbing (`apt-get -s dist-upgrade` against the security
+pocket, `dnf updateinfo --security`, `apk version -l '<'`), and each distro
+reports differently. There is also a cadence question — a daily archive check is
+cheap, a daily base rebuild is not.
+
+**The fix.** Add an archive-freshness check alongside the digest comparison in
+`base-check`, keeping the digest as the cheap fast path:
+
+- run a **dry-run** upgrade inside the current base image, per distro, and emit
+  the list of packages with a pending update;
+- mark the base stale when any such package is one we actually ship (intersect
+  with the installed set, not the whole archive);
+- prefer the security pocket where the distro distinguishes one, so routine
+  version churn does not force rebuilds;
+- surface the list even when it does not trigger, so "we are N days behind the
+  archive" is visible rather than implied.
+
+This is deliberately the same shape as the eval-gate on the Nix side: a cheap
+key comparison first, a real check only when it might matter.
+
+**Scope.** Every distro base — the bug is in the trigger, not in
+`package_rules.sh`, which already does the right thing once invoked. Affects
+`ubuntu`, `fedora`, `alpine` and `resolute` equally.
+
+**Not to be confused with** issue 2 or the Nix-side CVE path. This one is purely
+about the distro package layer, and no amount of nixpkgs currency addresses it —
+just as `apt upgrade` does not address a nix-store CVE. The two layers are
+independent and need independent freshness signals.
+
+(Raised 2026-08-02 while establishing why five Criticals in the tracelabs
+profile had no available fix. They were all nix-store or vendored-crate
+findings, which is what prompted the question of whether the deb layer had an
+equivalent blind spot. It does.)
