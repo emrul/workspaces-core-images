@@ -112,9 +112,35 @@ in
   # provider → the in-memory no-op provider (no prompt, no stall). Wrapping the
   # launcher (not editing the read-only store conf) survives nix-activate's shim
   # regeneration. TraceLabs-only (design/tracelabs-osint-image.md §2, runbook §4.4).
+  #
+  # Also pinned FORWARD of nixpkgs. nixpkgs ships 4.11.1 on every channel —
+  # unstable and master included — and that build bundles undertow-core
+  # 2.2.38.Final and bcprov-jdk18on 1.82, carrying CVE-2025-12543 and
+  # CVE-2025-14813. Upstream 4.12.1 ships 2.2.39.Final and 1.84, which are
+  # precisely the fixed versions, so the CVEs go away with the version rather
+  # than with any patching of the bundle.
+  #
+  # Swapping the JARs in place was the alternative and is worse: bcprov is a
+  # signed JCE provider, so only BouncyCastle's own artifact will load, it
+  # appears in two NetBeans module directories, and NetBeans records a CRC per
+  # file in update_tracking that would need rewriting to stay consistent.
+  #
+  # Revert to `prev.maltego` once nixpkgs catches up. Verified by listing the
+  # bundled JAR manifests in the 4.12.1 zip before making the change.
+  maltego-4-12-1 = prev.maltego.overrideAttrs (old: rec {
+    version = "4.12.1";
+    # The upstream derivation interpolates finalAttrs.version into the URL, so
+    # the src must be restated to carry the matching hash. fetchzip hashes the
+    # unpacked tree, not the archive.
+    src = prev.fetchzip {
+      url = "https://downloads.maltego.com/maltego-v4/linux/Maltego.v${version}.linux.zip";
+      hash = "sha256-r9YS0Rg/8E0SMT9xbKkgBZc1u01H8hV3p+H1Xskfd4k=";
+    };
+  });
+
   maltego = prev.symlinkJoin {
-    name = "maltego-nokeyring-${prev.maltego.version or "ce"}";
-    paths = [ prev.maltego ];
+    name = "maltego-nokeyring-${final.maltego-4-12-1.version}";
+    paths = [ final.maltego-4-12-1 ];
     nativeBuildInputs = [ prev.makeWrapper ];
     postBuild = ''
       if [ -e "$out/bin/maltego" ]; then
