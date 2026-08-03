@@ -484,22 +484,30 @@ gate_input_key() {
   command -v sha256sum >/dev/null 2>&1 || { printf ''; return 0; }
   _gattrs="$(jq -r --arg p "$_gp" '.profiles[$p].pkgs[]' \
                "${STAGE_IN}/profiles.json" 2>/dev/null | sort)"
+  # Hash the overlay whenever the overlay can affect this profile AT ALL. Since
+  # 96830d6 every `nixpkgs#x` attr is REWRITTEN through the overlay by
+  # rewrite_attr, so gating on the raw attr string containing
+  # "path:/config/kasm-overlay" misses every profile that reaches the overlay by
+  # rewrite — which is all of them. That is one of the ways this gate could skip a
+  # profile whose overlay sources had changed.
   _govl=""
-  if printf '%s\n' "${_gattrs}" | grep -q '^path:/config/kasm-overlay'; then
-    _govl="$( { for _a in ${_gattrs}; do
-                  case "${_a}" in
-                    path:/config/kasm-overlay#*)
-                      _app="${_a#path:/config/kasm-overlay#}"
-                      find "/config/kasm-overlay/pkgs/${_app}" -type f 2>/dev/null ;;
-                  esac
-                done
-                # shared overlay machinery (flake.nix, overlay.nix, lib/*.nix, lock)
-                find /config/kasm-overlay -maxdepth 2 \
-                     \( -name '*.nix' -o -name 'flake.lock' \) 2>/dev/null
-              } | sort -u | xargs sha256sum 2>/dev/null | awk '{print $1}' | sort \
+  if [ -d "${OVERLAY_DIR}" ]; then
+    # WHOLE tree, every file type. The previous version hashed only *.nix and
+    # flake.lock at maxdepth 2 plus pkgs/<app> for apps named literally in the
+    # profile. That missed anything deeper that is not a .nix — notably
+    # pkgs/perl/CVE-2026-13221.patch, a SECURITY PATCH whose content can change a
+    # derivation while the key stayed identical. A gate whose contract is "the
+    # store path is a pure function of the inputs" must hash every input.
+    _govl="$( find "${OVERLAY_DIR}" -type f ! -path '*/.git/*' 2>/dev/null \
+              | sort -u | xargs sha256sum 2>/dev/null | awk '{print $1}' | sort \
               | sha256sum | awk '{print $1}' )"
     # Overlay in play but its sources couldn't be hashed → don't risk a stale skip.
-    [ -n "${_govl}" ] || { printf ''; return 0; }
+    # NOTE `xargs sha256sum` with EMPTY input runs sha256sum with no args, which
+    # reads stdin and emits the hash of nothing — a CONSTANT, not an empty string.
+    # So an unreadable overlay would sail past a plain -n check and pin the key to
+    # a value independent of the overlay. Count the files instead.
+    _gnf="$( find "${OVERLAY_DIR}" -type f ! -path '*/.git/*' 2>/dev/null | wc -l | tr -d ' ' )"
+    [ -n "${_govl}" ] && [ "${_gnf:-0}" -gt 0 ] || { printf ''; return 0; }
   fi
   printf '%s\n%s\n%s\n' "${_grev}" "${_gattrs}" "${_govl}" \
     | sha256sum | awk '{print $1}'
@@ -636,7 +644,24 @@ while IFS= read -r p; do
   if [ "${NIX_EVAL_GATE:-0}" = "1" ] && [ -n "$p_key" ] && [ -e "${KASM_PROFILE_DIR}/$p" ]; then
     p_prevkey="$(jq -r --arg a "$p" '.apps[$a].inputKey // ""' \
                    "${OUTPUT_IN}/labels.prev.json" 2>/dev/null || true)"
-    if [ -n "$p_prevkey" ] && [ "$p_key" = "$p_prevkey" ]; then
+    # Log BOTH keys, always. Previously only the verdict was logged, so a WRONG
+    # match was indistinguishable from a right one and the 2026-08-03 skip of a
+    # security fix could only be found by diffing the shipped SBOM. A gate that
+    # cannot be audited from its own log is not a gate.
+    echo "  [eval-gate] $p key=${p_key:0:12} prev=${p_prevkey:0:12}" >&2
+    # The key attests to the INPUTS. Also confirm the warm profile on disk is the
+    # store path the previous build recorded: a profile left behind by a different
+    # build would otherwise be kept and reported as "unchanged". Folded into the
+    # same condition rather than nested, so the block keeps exactly one `fi`.
+    p_prevstore="$(jq -r --arg a "$p" '.apps[$a].storePath // ""' \
+                     "${OUTPUT_IN}/labels.prev.json" 2>/dev/null || true)"
+    p_nowstore="$(readlink -f "${KASM_PROFILE_DIR}/$p" 2>/dev/null || true)"
+    p_store_ok=1
+    if [ -n "$p_prevstore" ] && [ -n "$p_nowstore" ] && [ "$p_prevstore" != "$p_nowstore" ]; then
+      p_store_ok=0
+      echo "  [eval-gate] $p store mismatch — warm=$p_nowstore prev=$p_prevstore → REBUILDING" >&2
+    fi
+    if [ -n "$p_prevkey" ] && [ "$p_key" = "$p_prevkey" ] && [ "$p_store_ok" = "1" ]; then
       echo "  [eval-gate] $p unchanged (inputKey match) — keeping warm profile, skipping reinstall" >&2
       ln -sfn "${KASM_PROFILE_DIR}/$p" "${KASM_GCROOT_DIR}/$p"
       echo "$p" >> "${STAGE_IN}/built.txt"

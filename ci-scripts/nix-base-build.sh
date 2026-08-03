@@ -94,6 +94,7 @@ EOF
       --pkg recorder --pkg webcam --pkg gamepad --pkg jq \
       --dockerfile /work/dockerfile-nix-ubuntu-resolute \
       --overlay /work/bin/nix-kasm-overlay \
+      ${NIXPKGS_REV:+--nixpkgs-rev "${NIXPKGS_REV}"} \
       --context "${ctx}" \
       --docker podman --nix-runner container \
       --nix-image "${NIX_STAGE_IMAGE:-docker.io/nixos/nix:latest}" \

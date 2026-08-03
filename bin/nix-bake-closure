@@ -38,6 +38,16 @@ DOCKER="${DOCKER:-docker}"
 NIX_IMAGE="${NIX_IMAGE:-docker.io/nixos/nix:latest}"
 NIX_RUNNER="${NIX_RUNNER:-auto}"        # auto | host | container
 NIX_VOLUME="${NIX_VOLUME:-}"            # persistent /nix store volume (container runner)
+# nixpkgs revision to build the overlay against. Without it the build resolves
+# the overlay's COMMITTED flake.lock pin, which is bumped only "when convenient"
+# (see bin/nix-kasm-overlay/flake.nix) — so the baked closure silently lags the
+# revision the caller believes it is building, while the base image gets stamped
+# dev.kasm.base.nixpkgs-rev=<caller's rev>. Observed: the resolute `services`
+# store shipped openssl-3.6.2 from the lock's d407951 (2026-07-05) inside an
+# image labelled 531670d8, so a CVE fixed in the newer revision could not be
+# picked up by a base rebuild and the staleness check compared against a label
+# that did not describe what was built.
+NIXPKGS_REV="${NIXPKGS_REV:-}"          # e.g. 531670d871c0e2... ; empty = use the lock
 STORE_ID="${STORE_ID:-}"               # non-empty → stage a multi-store store at
                                        #   <ctx>/nix-stores/<id>/store (for nix-compose),
                                        #   instead of the single-mount <ctx>/nix-closure/nix.
@@ -66,6 +76,9 @@ Usage: nix-bake-closure --base IMG --tag IMG [--pkg ATTR]... [options]
                         base-stamp labels nix-base-check/publish-base read
   --docker CMD          docker|podman (default: docker)
   --nix-runner MODE     auto|host|container (default: auto)
+  --nixpkgs-rev REV     build the overlay against this nixpkgs revision
+                        (--override-input). Omit to use the overlay's committed
+                        flake.lock, which LAGS and is almost never what CI wants.
   --nix-image IMG       nixos/nix image for container runner (default: docker.io/nixos/nix:latest)
   --nix-volume NAME     persistent /nix store volume for the container runner
   --store-id ID         stage as a multi-store store at <context>/nix-stores/ID/store
@@ -90,6 +103,7 @@ while [ $# -gt 0 ]; do
     --label)       LABELS+=("--label" "$2"); shift 2 ;;
     --docker)      DOCKER="$2"; shift 2 ;;
     --nix-runner)  NIX_RUNNER="$2"; shift 2 ;;
+    --nixpkgs-rev) NIXPKGS_REV="$2"; shift 2 ;;
     --nix-image)   NIX_IMAGE="$2"; shift 2 ;;
     --nix-volume)  NIX_VOLUME="$2"; shift 2 ;;
     --store-id)    STORE_ID="$2"; shift 2 ;;
@@ -122,6 +136,31 @@ fi
 
 log() { echo "[nix-bake-closure] $*" >&2; }
 
+# Refuse to STAMP a nixpkgs revision we did not BUILD against. This is the exact
+# defect observed on 2026-08-03: the caller labelled the image
+# dev.kasm.base.nixpkgs-rev=531670d8 while the bake resolved the overlay's
+# committed lock (d407951, 2026-07-05), so the `services` closure shipped
+# openssl-3.6.2 inside an image whose label claimed a revision where it was
+# already fixed. A label that does not describe the artifact is worse than no
+# label: nix-base-check trusts it to decide staleness, so the stale base looked
+# current and could never be rebuilt.
+for _l in "${LABELS[@]:-}"; do
+  case "${_l}" in
+    dev.kasm.base.nixpkgs-rev=|dev.kasm.base.nixpkgs-rev=unknown) : ;;
+    dev.kasm.base.nixpkgs-rev=*)
+      if [ -z "${NIXPKGS_REV}" ]; then
+        echo "nix-bake-closure: refusing to stamp ${_l} without --nixpkgs-rev —" >&2
+        echo "  the bake would resolve the overlay's committed flake.lock, so the" >&2
+        echo "  label would not describe what was built. Pass --nixpkgs-rev." >&2
+        exit 1
+      fi
+      if [ "${_l#dev.kasm.base.nixpkgs-rev=}" != "${NIXPKGS_REV}" ]; then
+        echo "nix-bake-closure: label rev '${_l#dev.kasm.base.nixpkgs-rev=}' != build rev '${NIXPKGS_REV}'" >&2
+        exit 1
+      fi ;;
+  esac
+done
+
 # upper-case + s/-/_/ so `profile-sync` -> PROFILE_SYNC_STORE_PATH
 argname() { echo "$1" | tr '[:lower:]-' '[:upper:]_'; }
 
@@ -130,6 +169,16 @@ if [ "${NIX_RUNNER}" = "auto" ]; then
   if command -v nix >/dev/null 2>&1; then NIX_RUNNER="host"; else NIX_RUNNER="container"; fi
 fi
 log "nix runner: ${NIX_RUNNER}"
+
+# Word-split deliberately at the call sites: empty when no rev was given, so the
+# command line is unchanged and the lock is used (local `nix build` convenience).
+OVERRIDE=""
+if [ -n "${NIXPKGS_REV}" ]; then
+  OVERRIDE="--override-input nixpkgs github:NixOS/nixpkgs/${NIXPKGS_REV}"
+  log "overlay nixpkgs input overridden -> ${NIXPKGS_REV}"
+else
+  log "WARNING: no --nixpkgs-rev given; building against the overlay's committed flake.lock"
+fi
 
 # ── build packages + stage their closure into the build context ──────────────
 # Staging uses a tar pipe (not cp -al) so it works non-root: nix store dirs are
@@ -148,7 +197,7 @@ if [ "${NIX_RUNNER}" = "host" ]; then
   # Host /nix persists across commands, so build → closure → stage can be steps.
   for pkg in "${PKGS[@]}"; do
     log "nix build .#${pkg}"
-    out="$( cd "${OVERLAY_DIR}" && nix build --impure --no-link --print-out-paths ".#${pkg}" | tail -1 )"
+    out="$( cd "${OVERLAY_DIR}" && nix build --impure --no-link --print-out-paths ${OVERRIDE} ".#${pkg}" | tail -1 )"
     [ -n "${out}" ] || { echo "nix-bake-closure: empty out path for ${pkg}" >&2; exit 1; }
     log "  ${pkg} -> ${out}"
     OUT_PATHS+=("${out}")
@@ -174,7 +223,7 @@ else
 set -eu
 : > /out/outpaths.txt
 for a in $ATTRS; do
-  o=$(nix build --impure --no-link --print-out-paths "$a" | tail -1)
+  o=$(nix build --impure --no-link --print-out-paths $OVERRIDE "$a" | tail -1)
   [ -n "$o" ] || { echo "empty out path for $a" >&2; exit 1; }
   printf '%s %s\n' "$a" "$o" >> /out/outpaths.txt
 done
@@ -186,7 +235,7 @@ INNER
   # has no DNS, so nix build/shell can't resolve channels.nixos.org/cache.nixos.org.
   "${DOCKER}" run --rm --network host \
     "${vol_arg[@]}" \
-    -e ATTRS="${attrs}" \
+    -e ATTRS="${attrs}" -e OVERRIDE="${OVERRIDE}" \
     -v "${OVERLAY_DIR}:/overlay" -v "${CLOSURE_DIR}:/out" -w /overlay \
     "${NIX_IMAGE}" \
     sh -euc 'mkdir -p /etc/nix && printf "experimental-features = nix-command flakes\n" > /etc/nix/nix.conf && exec nix shell nixpkgs#coreutils nixpkgs#gnutar nixpkgs#gnused --command sh /out/_inner.sh'

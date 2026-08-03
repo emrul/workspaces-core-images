@@ -2,8 +2,8 @@
   "@context": "https://openvex.dev/ns/v0.2.0",
   "@id": "https://kasm-nix-registry.emrul.dev/vex/kasm-nix.openvex.json",
   "author": "kasm-nix image pipeline (emrul.islam@kasmweb.com)",
-  "timestamp": "2026-08-03T21:00:00Z",
-  "version": 3,
+  "timestamp": "2026-08-04T00:00:00Z",
+  "version": 4,
   "statements": [
     {
       "vulnerability": {
@@ -27,9 +27,9 @@
     {
       "vulnerability": {
         "name": "CVE-2026-13221",
-        "description": "Perl regexp memory corruption with large tries (Perl/perl5 GH #23388); nixpkgs ships 5.42.0 without the guard on every channel"
+        "description": "Perl through 5.43.9 produces silently INCORRECT regex matches when an alternation of >65535 fixed-string branches compiles into a trie (Perl_study_chunk 16-bit field overflow). False positives AND false negatives; no debugging pragma required."
       },
-      "timestamp": "2026-08-03T21:00:00Z",
+      "timestamp": "2026-08-04T00:00:00Z",
       "products": [
         {
           "@id": "https://kasm-nix-registry.emrul.dev/catalog#profile=tracelabs",
@@ -40,9 +40,29 @@
           ]
         }
       ],
+      "status": "affected",
+      "action_statement": "RETRACTION. A previous revision of this document (v3) asserted not_affected with justification vulnerable_code_not_in_execute_path. THAT WAS WRONG and the suppression has been removed. The error: the not_affected claim rested on the defect requiring the `use re \"Debug\"` pragma to trigger. It does not. The authoritative CVE record states Perl \"produce[s] silently incorrect regular expression matches\" \u2014 false positive AND false negative matches \u2014 and that \"when such a pattern gates an access or filtering decision, the result is wrong\". The pragma only converts the silent miscompilation into a visible \"regexp memory corruption\" abort, which is why the upstream GitHub report describes a crash. Local experiments that found \"no crash without the pragma\" were testing for the crash symptom, not for incorrect matching, and therefore never tested the actual vulnerability. The 73-script `perl -c -Mre=Debug` audit recorded in security/evidence/ has the same defect of premise: it detects the abort, so it cannot establish absence of silent miscompilation. CURRENT STATE OF THIS IMAGE. Two perl 5.42.0 interpreters ship: yp5hpzyy1b73b134jhm20avjhgmyj3py-perl-5.42.0 carries the upstream fix (Perl/perl5 03f74bbb) and is what exiftool's shebang resolves to \u2014 that consumer is FIXED, verified in the pulled image. haxjvirj4hk92rpjhx0qygqsf3a5iimz-perl-5.42.0 is UNPATCHED, executable, and on PATH for the ~70 other perl scripts in the image (libwww-perl, File-MimeInfo, XML-Twig, IO-Compress, perl core tools). A third, k7kxg101ikkm0cyf8jcqhg948vy542af-perl-5.42.0, is in the `services` closure. REQUIRED ACTION: patch or remove the unpatched interpreters, OR obtain explicit documented risk acceptance. Risk context for that decision, NOT offered as a suppression: this is a Kasm workspace in which the tenant already has terminal access and arbitrary same-uid code execution, so no privilege boundary is crossed by a tenant miscompiling their own regex; the realistic harm is a wrong answer from an OSINT tool the tenant is themselves operating. That is a materially different argument from \"not affected\" and must be recorded as acceptance, not suppression.",
+      "impact_statement": "Affected. Retains the evidence that exiftool's interpreter specifically is remediated (overlay build m4wc48yxm0cxiip44pyplspwgpxf6l2q-perl5.42.0-Image-ExifTool-13.59, shebang -> yp5hpzyy..., upstream reproducer rc=0 inside the shipped image where the unpatched interpreter exits rc=255). That does not clear the image, because the unpatched interpreters remain executable."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-8376",
+        "description": "Perl through 5.43.10 heap buffer overflow compiling a repeated fixed string \u2014 32-BIT BUILDS ONLY (Perl_study_chunk sized a buffer in characters not bytes)"
+      },
+      "timestamp": "2026-08-04T00:00:00Z",
+      "products": [
+        {
+          "@id": "https://kasm-nix-registry.emrul.dev/catalog",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/perl@5.42.0"
+            }
+          ]
+        }
+      ],
       "status": "not_affected",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "impact_statement": "Scoped to the tracelabs profile ONLY; deliberately not catalog-wide. Verified against the PUBLISHED image registry.gitlab.com/kasm-technologies/labs-sandbox/kasm-nix/tracelabs-osint:nix (config digest 1ebf3c002d76187b432dd9707278f8f4718e77e5abfb604ed4a5b59e0c2804fa, built 2026-08-03, nixpkgs rev 531670d871c0e29724a02f3cbcac170adc65b58c), pulled and inspected on a separate host rather than inferred from the build. TWO INDEPENDENT GROUNDS, both established empirically. (1) REMEDIATED where perl is compiled against. exiftool ships as /nix/store/m4wc48yxm0cxiip44pyplspwgpxf6l2q-perl5.42.0-Image-ExifTool-13.59 \u2014 the kasm-overlay build, not nixpkgs' vv9414ga550zi3b4n1my6bhrbx8qp4h6 \u2014 and its shebang resolves to /nix/store/yp5hpzyy1b73b134jhm20avjhgmyj3py-perl-5.42.0, which carries the upstream fix (Perl/perl5 03f74bbb, GH #23388). Run inside the shipped image, the exact upstream reproducer exits rc=0 on that interpreter while the image's other interpreter (haxjvirj4hk92rpjhx0qygqsf3a5iimz-perl-5.42.0) exits rc=255 with \"regexp memory corruption\" \u2014 so the remediation is demonstrated in the artifact, and the unpatched interpreter is demonstrated still defective, which is what makes ground (2) load-bearing rather than decorative. (2) NOT REACHABLE on the unpatched interpreter. Triggering the defect requires BOTH a fixed-string alternation exceeding U16_MAX regnodes AND regex debugging enabled. The pragma requirement was verified independently rather than taken from the upstream report: stock perl 5.42.0 runs the reproducer clean without it at reproducer size, at 4x that size, and with a single huge alternation. The pragma is NOT treated as a security boundary \u2014 PERL5OPT=-Mre=Debug reproduces the crash without editing any script (verified) \u2014 so this rests on the ABSENCE OF A QUALIFYING ALTERNATION. EVERY perl script in the image was audited, not a sample: all 73 executables with a perl shebang were compiled with `perl -c` under -Mre=Debug on the interpreter each actually runs on, which forces every literal regex through the trie path. Result: 73 CLEAN, 0 CORRUPTION, 0 INCONCLUSIVE. None builds an alternation dynamically (no `join \"|\"` in any of the 73). The audited set includes libwww-perl (lwp-request, lwp-download, lwp-mirror, lwp-dump), File-MimeInfo (mimeopen, mimetype), XML-Twig (xml_grep), IO-Compress (streamzip, zipdetails), Archive-Zip (crc32), IO-Compress-Brotli (bro-perl), kasmvnc's kasmvncserver plus its 16 bundled KasmVNC modules, the xdg-screensaver perl one-liner, and the ~20 perl core tools (json_pp, perldoc, prove, pod2*, cpan, piconv, ...). The audit ran with a CONTROL CANARY on the same interpreter in the same container immediately before each check, which reproduced the defect (corruption=1) every time \u2014 so a CLEAN verdict means the check could fire and did not, not that the check was inert. CORRECTION OF RECORD: an earlier revision of this statement asserted that the runtime perl consumers were kasmvnc, xdg-utils and exiftool and that \"nothing else in this image reaches perl at runtime\". That was WRONG \u2014 it enumerated packages reached by `nix why-depends`, not perl SCRIPTS present in the closure, and missed 70 of them. The conclusion survived the wider audit, but the original evidence did not support the original claim. RESIDUAL, stated rather than omitted: `perl -c` compiles literal regexes and `use`d modules, but NOT regexes assembled at runtime from data. No script in the image constructs an alternation via join, and the interpolations that do exist are single scalars (e.g. $host, $window_id, $defaultVisualId); an attacker would need to control such a value AND enable the pragma, both of which require already holding the privileges of the process being attacked (same-user; terminal access is already granted in this image). No privilege boundary is crossed. This is a boundary argument, not a proof of impossibility. NOT VALID for other profiles. inkscape reaches perl through enchant -> hspell -> bin/multispell, whose regexes have NOT been examined, and perl 5.42.0 is the same store path in both \u2014 only the profile scope separates them. Upstream GH #23388 remains OPEN: commit 03f74bbb declines to build an overflowing trie rather than repairing the 16-bit field. CVE severity and the first upstream release carrying the guard were NOT verified here and must be checked against NVD / perl5 release notes before use in any customer-facing risk statement."
+      "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
+      "impact_statement": "TWO independent grounds, either sufficient. (1) ARCHITECTURE. The authoritative CVE record scopes this to 32-bit builds: the overflow requires `mincount * l` to overflow SSize_t, which cannot occur on a 64-bit SSize_t. Every image in this catalog is built for x86_64 (bin/nix-profiles.toml declares platforms amd64; no i686/armv7 target exists in the pipeline). The vulnerable code path is unreachable on a 64-bit build regardless of input. (2) PATCHED ANYWAY. nixpkgs applies CVE-2026-8376.patch to perl 5.42.0. Verified at the exact revision this catalog builds from: `nix eval` of perl.patches at 531670d871c0e29724a02f3cbcac170adc65b58c returns [\"no-sys-dirs.patch\",\"CVE-2026-8376.patch\"]. The scanner reports it unfixed only because the version string does not move for a distro backport. Catalog-wide rather than profile-scoped because both grounds are properties of the build (architecture, and the nixpkgs revision) rather than of any one profile's consumers. Re-verify ground (2) if the catalog ever pins a nixpkgs revision that drops the patch; ground (1) fails only if a 32-bit target is ever added."
     }
   ]
 }
