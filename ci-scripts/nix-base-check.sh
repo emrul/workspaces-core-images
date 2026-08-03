@@ -75,6 +75,32 @@ for d in ${WANT}; do
     echo "[base-check] ${d}: STALE (base unstamped)" >&2; stale="${stale} ${d}"; continue
   fi
 
+  # nixpkgs-rev staleness is a LOCAL check (a label on an image we already have)
+  # and is INDEPENDENT of the distro digest, so it belongs here with existence
+  # and stamping — not behind the CHECK_UPSTREAM gate below.
+  #
+  # It was originally placed after the digest comparison, which meant `continue`
+  # in the CHECK_UPSTREAM=0 branch skipped it entirely: the rev check only ran on
+  # schedule/web/default-branch pipelines. Observed in pipeline 2727147431 — all
+  # four bases reported "present and stamped … upstream comparison skipped" and
+  # nothing rebuilt, while nixos-26.05 had moved to 6d65bfc1. That is precisely
+  # the failure this check exists to catch, so the placement defeated its purpose.
+  #
+  # Stale here `continue`s: the base is already going to be rebuilt, and the
+  # rebuild picks up a moved distro digest too, so it still appears once.
+  if [ -n "${WANT_REV}" ]; then
+    have_rev="$(podman image inspect --format '{{index .Config.Labels "dev.kasm.base.nixpkgs-rev"}}' "${nix}" 2>/dev/null || true)"
+    if [ -z "${have_rev}" ] || [ "${have_rev}" = "<no value>" ]; then
+      echo "[base-check] ${d}: STALE (no nixpkgs-rev stamp — predates the rev check)" >&2
+      stale="${stale} ${d}"; continue
+    fi
+    if [ "${have_rev}" != "${WANT_REV}" ]; then
+      echo "[base-check] ${d}: STALE (nixpkgs moved: have=${have_rev} want=${WANT_REV})" >&2
+      stale="${stale} ${d}"; continue
+    fi
+    echo "[base-check] ${d}: nixpkgs rev current (${have_rev})" >&2
+  fi
+
   if [ "${CHECK_UPSTREAM}" != "1" ]; then
     echo "[base-check] ${d}: present and stamped (${have}); upstream comparison skipped" >&2
     continue
@@ -90,22 +116,7 @@ for d in ${WANT}; do
     echo "[base-check] ${d}: distro image fresh (${have})" >&2
   fi
 
-  # Distro digest says fresh; the nixpkgs rev may still have moved. Checked
-  # after the digest so a base that is stale for BOTH reasons is only listed
-  # once. An unstamped rev means the base predates this check — rebuild it, so
-  # the stamp exists from then on.
-  case " ${stale} " in *" ${d} "*) continue ;; esac
-  [ -n "${WANT_REV}" ] || continue
-  have_rev="$(podman image inspect --format '{{index .Config.Labels "dev.kasm.base.nixpkgs-rev"}}' "${nix}" 2>/dev/null || true)"
-  if [ -z "${have_rev}" ] || [ "${have_rev}" = "<no value>" ]; then
-    echo "[base-check] ${d}: STALE (no nixpkgs-rev stamp — predates the rev check)" >&2
-    stale="${stale} ${d}"
-  elif [ "${have_rev}" != "${WANT_REV}" ]; then
-    echo "[base-check] ${d}: STALE (nixpkgs moved: have=${have_rev} want=${WANT_REV})" >&2
-    stale="${stale} ${d}"
-  else
-    echo "[base-check] ${d}: fresh (distro ${have}, nixpkgs ${have_rev})" >&2
-  fi
+  # (the nixpkgs-rev comparison happens above, with the other local checks)
 done
 
 # normalise: dedup + trim
