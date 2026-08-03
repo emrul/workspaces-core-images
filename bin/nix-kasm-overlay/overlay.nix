@@ -11,6 +11,10 @@ final: prev:
 let
   lib = prev.lib;
 
+  # Scoped security backports (currently perl CVE-2026-13221 -> exiftool).
+  # Returns { retired, perl, exiftool }; self-retires once nixpkgs catches up.
+  perlSecurity = import ./pkgs/perl/security-override.nix { inherit lib; } prev;
+
   # A package's committed pin (pkgs/<name>/pin.json) is the source of truth.
   # Any top-level string field can be overridden per-build from the environment,
   # so an engineer can test a PRIVATE build (their own commit/branch/hash)
@@ -103,6 +107,24 @@ in
   phoneinfoga = import ./pkgs/phoneinfoga/package.nix { inherit prev; };
   sublist3r   = import ./pkgs/sublist3r/package.nix   { inherit prev; };
   metagoofil  = import ./pkgs/metagoofil/package.nix  { inherit prev; };
+
+  # Kind A (security backport, SCOPED): exiftool built against a perl carrying
+  # the fix for CVE-2026-13221.
+  #
+  # Note what is NOT here: any rebinding of the top-level `perl` or `perl5`. That
+  # would change perl as a build input across the tree (measured: 440+ rebuilds
+  # including clang/LLVM/ffmpeg, which exhausted the build host's disk) to fix
+  # packages whose only tie to perl is a `#!` line. exiftool is the sole runtime
+  # consumer that COMPILES against the interpreter, so it is the sole package
+  # rebound here — 33 rebuilds, everything else keeps its cached store paths.
+  #
+  # kasmvnc and xdg-utils are the other two runtime consumers and are handled by
+  # VEX on non-reachability instead. Rationale and the assurance evidence:
+  # pkgs/perl/security-override.nix and design/known_issues.md.
+  #
+  # `perlSecurity.perl` is exposed only so the base can bake the patched
+  # interpreter if it ever needs to; it does not replace nixpkgs' perl.
+  inherit (perlSecurity) exiftool;
 
   # Kind A (override): Maltego CE with the NetBeans keyring DISABLED. A Kasm
   # container has no secret-service (gnome-keyring/KWallet), so Maltego's
