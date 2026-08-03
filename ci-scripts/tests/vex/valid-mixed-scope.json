@@ -1,0 +1,45 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://example.invalid/vex/mixed.json",
+  "author": "vex-lint fixture",
+  "timestamp": "2026-08-03T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-1111-1111"
+      },
+      "products": [
+        {
+          "@id": "https://kasm-nix-registry.emrul.dev/catalog",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/cve-1111-1111@1.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "fixture"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2222-2222"
+      },
+      "products": [
+        {
+          "@id": "https://kasm-nix-registry.emrul.dev/catalog#profile=tracelabs",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/cve-2222-2222@1.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "fixture"
+    }
+  ]
+}

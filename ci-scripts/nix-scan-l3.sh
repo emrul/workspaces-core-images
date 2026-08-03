@@ -125,31 +125,68 @@ DB_ID="$("${GRYPE}" db status -o json 2>/dev/null | jq -r '.checksum // .Checksu
 # FATAL error: silently scanning without suppressions would misreport, and
 # silently suppressing wrongly would be worse.
 VEX_FILE="${VEX_FILE:-/work/security/vex/kasm-nix.openvex.json}"
-# Grype ignore rules are CATALOG-WIDE (vulnerability id + package name) —
-# they cannot express per-image scope. So only statements whose product is
-# the whole-catalog IRI are representable; a statement scoped to anything
-# narrower is REJECTED (fail-loud), not silently over-applied to every
-# image. Suppression statuses per the OpenVEX spec: only not_affected (a
-# scanner false positive is not_affected + justification; "false_positive"
-# is not an OpenVEX status).
-GRYPE_CFG=""; VEX_RULES=0
+# A grype ignore rule body is CATALOG-WIDE (vulnerability id + package name +
+# exact version) — it cannot express per-image scope. Scope is therefore
+# enforced by WHICH RULES ARE EMITTED: a statement's product must be either the
+# whole-catalog IRI or <catalog>#profile=<name>, and the per-app scan asks the
+# lint for that profile's set (vex_cfg_for below). Anything that is neither form
+# is REJECTED (fail-loud) rather than silently over-applied to every image.
+#
+# Profile scope exists because non-reachability is a per-image property. perl
+# 5.42.0 is the SAME store path in every profile shipping it, so a statement
+# assured for one image's consumers must not suppress the finding in an image
+# whose consumer was never examined (kasmvnc/xdg-utils vs hspell reached through
+# inkscape -> enchant). See ci-scripts/nix-vex-lint.sh.
+#
+# Suppression statuses per the OpenVEX spec: only not_affected (a scanner false
+# positive is not_affected + justification; "false_positive" is not an OpenVEX
+# status).
+# Needed by the VEX lint below (profile-scope existence check) as well as by the
+# resolute/target logic further down, so it is defaulted before first use —
+# referencing it unset would abort the whole job under `set -u`.
+PROFILES_TOML="${PROFILES_TOML:-/work/bin/nix-profiles.toml}"
+
+GRYPE_CFG=""; VEX_RULES=0; VEX_OK=0
 L3_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 if [ -f "${VEX_FILE}" ]; then
   # All validation + rule emission lives in nix-vex-lint.sh (single source
   # of truth, regression-tested against committed invalid fixtures by
   # ci-scripts/tests/vex-lint-test.sh — this code controls suppression).
-  bash "${L3_DIR}/nix-vex-lint.sh" "${VEX_FILE}" > "${WORK}/grype-vex.yaml" \
+  #
+  # Validated ONCE here, unscoped, which also yields the catalog-wide rules. A
+  # malformed file must fail the run before any scan, not silently per-app.
+  PROFILES_TOML="${PROFILES_TOML}" bash "${L3_DIR}/nix-vex-lint.sh" "${VEX_FILE}" \
+    > "${WORK}/grype-vex.yaml" \
     || fail "VEX lint rejected ${VEX_FILE} (reason above)"
+  VEX_OK=1
   VEX_RULES="$(grep -c '^  - vulnerability:' "${WORK}/grype-vex.yaml" || true)"
   if [ "${VEX_RULES}" -gt 0 ]; then
     GRYPE_CFG="${WORK}/grype-vex.yaml"
-    log "VEX: ${VEX_RULES} suppression rule(s) from ${VEX_FILE}"
+    log "VEX: ${VEX_RULES} catalog-wide suppression rule(s) from ${VEX_FILE}"
   else
-    log "VEX: file present but no suppressing statements"
+    log "VEX: file present but no catalog-wide suppressing statements"
   fi
 else
   log "VEX: no statement file at ${VEX_FILE} (raw counts only)"
 fi
+
+# Per-profile rule set: catalog-wide statements PLUS those scoped to this
+# profile. Non-reachability is a per-image property, so a statement assured for
+# tracelabs must not suppress the same package in a profile where the consumer
+# differs — see the profile-scope rationale in nix-vex-lint.sh. Falls back to
+# the catalog-wide config if the scoped emit fails for any reason, which
+# under-suppresses rather than over-suppresses.
+vex_cfg_for() {  # $1=profile/app name -> echoes a grype -c path, or nothing
+  local prof="$1" out="${WORK}/grype-vex-${1}.yaml"
+  [ "${VEX_OK}" = "1" ] || return 0
+  if [ ! -f "${out}" ]; then
+    if ! PROFILES_TOML="${PROFILES_TOML}" bash "${L3_DIR}/nix-vex-lint.sh" \
+           --scope "${prof}" "${VEX_FILE}" > "${out}" 2>/dev/null; then
+      rm -f "${out}"; echo "${GRYPE_CFG}"; return 0
+    fi
+  fi
+  if grep -q '^  - vulnerability:' "${out}"; then echo "${out}"; else echo "${GRYPE_CFG}"; fi
+}
 
 # ── target list: changed apps (or capped all) + fat store ────────────────────
 in_filter() { [ -z "${FILTER}" ] && return 0; local x; for x in ${FILTER}; do [ "${x}" = "$1" ] && return 0; done; return 1; }
@@ -158,7 +195,7 @@ in_filter() { [ -z "${FILTER}" ] && return 0; local x; for x in ${FILTER}; do [ 
 # per-app path. Compute the set early so the FILTER completeness check can
 # exclude them (else a changed resolute profile like tracelabs, absent from the
 # per-app image list, is misreported as a build failure).
-PROFILES_TOML="${PROFILES_TOML:-/work/bin/nix-profiles.toml}"
+# (PROFILES_TOML is defaulted above, before the VEX lint that also needs it.)
 resolute_profiles() {
   awk '
     /^\[profiles\./ { cur=$0; sub(/^\[profiles\./,"",cur); sub(/\].*/,"",cur) }
@@ -392,8 +429,8 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
   # artifact (CycloneDX is emitted alongside for interop/attachment, but the
   # re-scan input of record is the lossless syft-json). VEX suppressions ride
   # in as ignore rules; suppressed matches stay visible in ignoredMatches.
-  local -a gargs=()
-  [ -n "${GRYPE_CFG}" ] && gargs+=(-c "${GRYPE_CFG}")
+  local -a gargs=(); local vcfg; vcfg="$(vex_cfg_for "${name}")"
+  [ -n "${vcfg}" ] && gargs+=(-c "${vcfg}")
   "${GRYPE}" -q "${gargs[@]}" "sbom:${SBOM_DIR}/${name}.syft.json" -o "json=${GRYPE_DIR}/${name}.grype.json" || return 1
   # stats row (dedup CVEs by id; severity sets are unique-by-id too).
   # artifact = the explicit identity contract (design review rounds 4+5):

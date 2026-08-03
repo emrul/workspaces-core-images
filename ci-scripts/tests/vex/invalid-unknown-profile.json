@@ -1,0 +1,27 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://example.invalid/vex/test.json",
+  "author": "vex-lint fixture",
+  "timestamp": "2026-08-03T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2026-13221"
+      },
+      "products": [
+        {
+          "@id": "https://kasm-nix-registry.emrul.dev/catalog#profile=notaprofile",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/perl@5.42.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "fixture"
+    }
+  ]
+}

@@ -12,21 +12,48 @@
 #     justification restricted to the OpenVEX five-value vocabulary;
 #     non-empty products, each with non-empty subcomponents whose purls
 #     carry an exact version
-#   - product scope: grype ignore rules are catalog-wide by mechanism, so
-#     every product @id must equal ${VEX_CATALOG_PRODUCT} — narrower scopes
-#     are rejected rather than silently over-applied
+#   - product scope: every product @id must be either ${VEX_CATALOG_PRODUCT}
+#     (catalog-wide) or ${VEX_CATALOG_PRODUCT}#profile=<name> (one profile).
+#     Anything else is rejected rather than silently over-applied.
+#   - profile-scoped ids must name a profile that EXISTS in nix-profiles.toml,
+#     because a typo would otherwise be a silent no-op — a statement that
+#     suppresses nothing while reading as though it does
 #
 # Emitted rules pin vulnerability + package name + EXACT version (purl
 # qualifiers/subpath stripped) — a name-only rule would keep suppressing
 # every future version after the statement's basis stops applying.
+#
+# ── Why profile scope exists ──────────────────────────────────────────────────
+# A grype ignore rule cannot express "only in image X": name+version is all it
+# matches on. So scope is enforced by WHICH RULES ARE EMITTED, not by the rule
+# body — the caller passes --scope <profile> per scan and gets the catalog-wide
+# statements plus that profile's. Without --scope, ONLY catalog-wide statements
+# are emitted, so a caller that forgets it under-suppresses (a visible finding)
+# rather than over-suppressing (a hidden one).
+#
+# This matters because non-reachability is a per-image property. perl 5.42.0 is
+# the SAME store path in every profile that ships it, so store-path scoping
+# cannot separate consumers: kasmvnc and xdg-utils (assured non-reachable) share
+# it with hspell's multispell reached via inkscape -> enchant (not assured). The
+# profile is the only axis on which that distinction is expressible.
 #
 # This is a GATE, not an OpenVEX validator of record — authoring tooling
 # (the remediator's draft_vex adapter) validates with a real OpenVEX
 # implementation before statements land here.
 set -euo pipefail
 
-VEX_FILE="${1:?usage: nix-vex-lint.sh <openvex.json>}"
+SCOPE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --scope) SCOPE="${2:?--scope needs a profile name}"; shift 2 ;;
+    --scope=*) SCOPE="${1#--scope=}"; shift ;;
+    *) break ;;
+  esac
+done
+
+VEX_FILE="${1:?usage: nix-vex-lint.sh [--scope <profile>] <openvex.json>}"
 VEX_CATALOG_PRODUCT="${VEX_CATALOG_PRODUCT:-https://kasm-nix-registry.emrul.dev/catalog}"
+PROFILES_TOML="${PROFILES_TOML:-}"
 
 die() { echo "[nix-vex-lint] FAIL: $*" >&2; exit 1; }
 
@@ -63,16 +90,49 @@ bad_shape="$(jq -r '.statements[]
   | .vulnerability.name' "${VEX_FILE}")"
 [ -z "${bad_shape}" ] || die "not_affected statement(s) missing justification/products/versioned subcomponent purls: ${bad_shape}"
 
-narrow="$(jq -r --arg cat "${VEX_CATALOG_PRODUCT}" '.statements[]
+bad_scope="$(jq -r --arg cat "${VEX_CATALOG_PRODUCT}" '.statements[]
   | select(.status=="not_affected")
-  | select([.products[]."@id"] | all(. == $cat) | not)
+  | select([.products[]."@id"]
+           | all(. == $cat or startswith($cat + "#profile=")) | not)
   | .vulnerability.name' "${VEX_FILE}")"
-[ -z "${narrow}" ] || die "statement(s) not catalog-scoped (grype ignore rules cannot express narrower products): ${narrow}"
+[ -z "${bad_scope}" ] || die "statement(s) with an unrecognised product scope — want ${VEX_CATALOG_PRODUCT} or ${VEX_CATALOG_PRODUCT}#profile=<name>: ${bad_scope}"
 
+# Profile names: grammar, then existence. An id naming a profile that does not
+# exist suppresses nothing while reading as though it does, which is the one
+# failure mode a reviewer cannot see by reading the statement.
+scoped_profiles="$(jq -r --arg cat "${VEX_CATALOG_PRODUCT}" '.statements[]
+  | select(.status=="not_affected") | .products[]."@id"
+  | select(startswith($cat + "#profile="))
+  | sub("^.*#profile="; "")' "${VEX_FILE}" | sort -u)"
+
+for p in ${scoped_profiles}; do
+  printf '%s' "${p}" | grep -Eq '^[a-z0-9][a-z0-9._-]*$' \
+    || die "profile scope '${p}' is not a valid profile name"
+done
+
+if [ -n "${scoped_profiles}" ] && [ -n "${PROFILES_TOML}" ] && [ -f "${PROFILES_TOML}" ]; then
+  for p in ${scoped_profiles}; do
+    grep -Eq "^\[profiles\.${p}\]" "${PROFILES_TOML}" \
+      || die "profile scope '${p}' is not a profile in ${PROFILES_TOML} (a typo here suppresses nothing but reads as though it does)"
+  done
+fi
+
+if [ -n "${SCOPE}" ]; then
+  printf '%s' "${SCOPE}" | grep -Eq '^[a-z0-9][a-z0-9._-]*$' \
+    || die "--scope '${SCOPE}' is not a valid profile name"
+fi
+
+# Emission. Catalog-wide statements always; profile-scoped only when the caller
+# names that profile. No --scope means catalog-wide only — under-suppressing on
+# a forgotten flag leaves a finding visible, which is the safe direction.
 echo "ignore:"
-jq -r '.statements[]
+jq -r --arg cat "${VEX_CATALOG_PRODUCT}" --arg scope "${SCOPE}" '.statements[]
        | select(.status=="not_affected")
        | .vulnerability.name as $v
-       | .products[].subcomponents[]."@id"
+       | [ .products[]
+           | select(."@id" == $cat
+                    or ($scope != "" and ."@id" == ($cat + "#profile=" + $scope))) ] as $ps
+       | select(($ps | length) > 0)
+       | $ps[].subcomponents[]."@id"
        | capture("^pkg:[^/]+/(?<n>[^@]+)@(?<ver>[^?#]+)")
        | "  - vulnerability: \($v)\n    package:\n      name: \(.n)\n      version: \(.ver)"' "${VEX_FILE}"
