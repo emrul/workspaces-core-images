@@ -36,15 +36,28 @@ nix_of() { case "$1" in ubuntu) echo localhost/nix-ubuntu:dev ;; fedora) echo lo
 # it cannot be resolved — offline, or no ref configured — and an empty value
 # never forces a rebuild, matching how an unresolved upstream digest is handled
 # below.
+#
+# The CALLER resolves it and passes NIXPKGS_REV_WANT. This script runs inside
+# DIND_IMG (quay.io/podman/stable), which has NO nix binary — resolving here
+# exited 127 and, because of `set -o pipefail`, took the whole prepare stage
+# down with it instead of degrading to "unresolved" as intended. The runner host
+# does have nix, so that is where the lookup belongs (.gitlab-ci.yml base-check).
+#
+# The local lookup below is a fallback for running this script by hand on a host
+# that does have nix. It is guarded on the binary existing and can never fail the
+# script: nix is kept out of any pipeline so pipefail has nothing to trip on.
 NIXPKGS_REF="${NIXPKGS_REF:-}"
-WANT_REV=""
-if [ -n "${NIXPKGS_REF}" ]; then
-  WANT_REV="$(nix --extra-experimental-features 'nix-command flakes' \
-      flake metadata --refresh --json "${NIXPKGS_REF}" 2>/dev/null \
+WANT_REV="${NIXPKGS_REV_WANT:-}"
+if [ -z "${WANT_REV}" ] && [ -n "${NIXPKGS_REF}" ] && command -v nix >/dev/null 2>&1; then
+  _meta="$(nix --extra-experimental-features 'nix-command flakes' \
+      flake metadata --refresh --json "${NIXPKGS_REF}" 2>/dev/null || true)"
+  WANT_REV="$(printf '%s' "${_meta}" \
     | sed -n 's/.*"revision":"\([0-9a-f]\{40\}\)".*/\1/p' | head -1)"
-  [ -n "${WANT_REV}" ] \
-    && echo "[base-check] nixpkgs ${NIXPKGS_REF} resolves to ${WANT_REV}" >&2 \
-    || echo "[base-check] nixpkgs ${NIXPKGS_REF} unresolved — rev comparison skipped" >&2
+fi
+if [ -n "${WANT_REV}" ]; then
+  echo "[base-check] nixpkgs ${NIXPKGS_REF:-<unset>} rev ${WANT_REV}" >&2
+else
+  echo "[base-check] nixpkgs rev unresolved — rev comparison skipped (ref='${NIXPKGS_REF:-}')" >&2
 fi
 
 stale=""

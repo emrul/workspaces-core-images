@@ -235,12 +235,28 @@ base-check:
       case "${CI_PIPELINE_SOURCE:-}" in schedule|web) digest_check=1 ;; esac
       [ "${CI_COMMIT_BRANCH:-}" = "${CI_DEFAULT_BRANCH:-}" ] && digest_check=1
       echo "[base-check] upstream digest comparison: ${digest_check} (0 = existence check only)"
+      # Resolve nixpkgs ref -> rev HERE, on the runner. The check itself runs
+      # inside DIND_IMG (podman/stable) which has no nix binary, so doing it
+      # there exits 127 and pipefail fails the whole prepare stage rather than
+      # skipping the comparison. Deliberately tolerant: nix is kept out of any
+      # pipeline and the lookup is guarded, so an unresolved rev yields "" —
+      # which never forces a rebuild — instead of killing the pipeline.
+      nixpkgs_ref="$(sed -n '/^\[nixpkgs\]/,/^\[/{s/^ref *= *"\(.*\)"/\1/p}' bin/nix-profiles.toml | head -1)"
+      want_rev=""
+      if [ -n "${nixpkgs_ref}" ] && command -v nix >/dev/null 2>&1; then
+        meta="$(nix --extra-experimental-features 'nix-command flakes' \
+            flake metadata --refresh --json "${nixpkgs_ref}" 2>/dev/null || true)"
+        want_rev="$(printf '%s' "${meta}" \
+          | sed -n 's/.*"revision":"\([0-9a-f]\{40\}\)".*/\1/p' | head -1)"
+      fi
+      echo "[base-check] nixpkgs ref '${nixpkgs_ref:-<none>}' -> rev '${want_rev:-<unresolved>}'"
       out="$(bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e BASE_DISTROS="${BASE_DISTROS:-}" \
         -e CHECK_UPSTREAM="${digest_check}" \
-        -e NIXPKGS_REF="$(sed -n '/^\[nixpkgs\]/,/^\[/{s/^ref *= *"\(.*\)"/\1/p}' bin/nix-profiles.toml | head -1)" \
+        -e NIXPKGS_REF="${nixpkgs_ref}" \
+        -e NIXPKGS_REV_WANT="${want_rev}" \
         "$DIND_IMG" bash /work/ci-scripts/nix-base-check.sh)"
       echo "$out"
       stale="$(printf '%s\n' "$out" | sed -n 's/^NIX_BASES_STALE=//p' | tail -1)"
