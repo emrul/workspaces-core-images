@@ -1,0 +1,42 @@
+CVE-2026-13221 / corrected CVE triage for the PUBLISHED tracelabs digest
+========================================================================
+Image  : registry.gitlab.com/kasm-technologies/labs-sandbox/kasm-nix/tracelabs-osint:nix
+Digest : sha256:1ebf3c002d76187b432dd9707278f8f4718e77e5abfb604ed4a5b59e0c2804fa
+Built  : pipeline 2727962908 from commit 73c7db49439f (nixpkgs 531670d871c0)
+
+WHY THIS FILE EXISTS. The scan report published WITH that digest was produced
+against VEX v2, which suppressed CVE-2026-13221 as not_affected. That
+justification has since been RETRACTED as false (see the VEX v4 action_statement:
+the CVE is silent miscompilation and does not require the re re=Debug pragma).
+The published report therefore HIDES a real finding and SHOWS two false
+positives. This is the corrected triage for the same, unchanged image content:
+grype 0.115.0 re-run against that digest's own SBOM with VEX v5 ignore rules.
+The image bytes are identical; only the metadata is corrected.
+
+SUPPRESSED (VEX v5, each with evidence in security/vex/kasm-nix.openvex.json):
+  CVE-2026-4176        perl@5.42.0
+  CVE-2026-4176        perl@5.42.0
+  CVE-2026-4176        perl@5.42.0
+  CVE-2026-7598        libssh2@1.11.1
+  CVE-2026-7598        libssh2@1.11.1
+  CVE-2026-7598        libssh2@1.11.1
+  CVE-2026-8376        perl@5.42.0
+  CVE-2026-8376        perl@5.42.0
+  CVE-2026-8376        perl@5.42.0
+
+REMAINING CRITICAL: 5
+  CVE-2026-13221         perl@5.42.0  fix=unknown
+      AFFECTED, accepted risk. Silent regex miscompilation. Tenant already has arbitrary same-uid execution, so no privilege boundary is crossed; exiftool's interpreter IS patched (yp5hpzyy...), the others are not.
+  CVE-2026-34182         openssl@3.6.2  fix=fixed -> 3.0.21,3.4.6,3.5.7,3.6.3,4.0.1
+      NOT REACHABLE. Vulnerable op is CMS AuthEnvelopedData. Only Xkasmvnc and kasm-profile-sync-2 link 3.6.2 and NEITHER references CMS_decrypt/SMIME_read_CMS/CMS_AuthEnvelopedData. 3.6.2 is present only because nix-bake-closure built the services closure from the overlay's stale lock — fixed in 9db6726, so the next build should drop it.
+  CVE-2026-40962         ffmpeg@7.1.5  fix=fixed -> 8.1
+      OVERSTATED by the scanner. Upstream CVE rates this MEDIUM and scopes it to MOV/CENC parsing. Reachable if a user opens a hostile MOV. Fix is ffmpeg 8.1.
+  GHSA-jq66-xh47-j9f3    failure@0.1.8  fix=not-fixed
+      UNRESOLVED. Rust `failure` type confusion, embedded in sn0int 0.26.1. Advisory says users deriving Fail are unaffected; exploitation needs a manual __private_get_type_id__ override plus downcasting. The binary has 1 ref to the former and 2 to downcast, so it CANNOT be cleared from symbols alone — needs source review of sn0int's error types.
+  GHSA-r98r-j25q-rmpr    failure@0.1.8  fix=not-fixed
+      UNRESOLVED. Same condition as GHSA-jq66-xh47-j9f3.
+
+NOT ADDRESSED HERE (not CVEs, and a larger exposure than any above):
+  shared-host isolation — apparmor=unconfined plus a seccomp policy permitting
+  userns/mount, for a tenant with arbitrary execution. Needs a dedicated event
+  node or VM-grade isolation; disclosure is not a mitigation.
