@@ -3,7 +3,7 @@
   "@id": "https://kasm-nix-registry.emrul.dev/vex/kasm-nix.openvex.json",
   "author": "kasm-nix image pipeline (emrul.islam@kasmweb.com)",
   "timestamp": "2026-08-04T00:00:00Z",
-  "version": 4,
+  "version": 5,
   "statements": [
     {
       "vulnerability": {
@@ -63,6 +63,26 @@
       "status": "not_affected",
       "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
       "impact_statement": "TWO independent grounds, either sufficient. (1) ARCHITECTURE. The authoritative CVE record scopes this to 32-bit builds: the overflow requires `mincount * l` to overflow SSize_t, which cannot occur on a 64-bit SSize_t. Every image in this catalog is built for x86_64 (bin/nix-profiles.toml declares platforms amd64; no i686/armv7 target exists in the pipeline). The vulnerable code path is unreachable on a 64-bit build regardless of input. (2) PATCHED ANYWAY. nixpkgs applies CVE-2026-8376.patch to perl 5.42.0. Verified at the exact revision this catalog builds from: `nix eval` of perl.patches at 531670d871c0e29724a02f3cbcac170adc65b58c returns [\"no-sys-dirs.patch\",\"CVE-2026-8376.patch\"]. The scanner reports it unfixed only because the version string does not move for a distro backport. Catalog-wide rather than profile-scoped because both grounds are properties of the build (architecture, and the nixpkgs revision) rather than of any one profile's consumers. Re-verify ground (2) if the catalog ever pins a nixpkgs revision that drops the patch; ground (1) fails only if a 32-bit target is ever added."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-7598",
+        "description": "libssh2 <= 1.11.1 integer overflow in userauth_password / userauth_list (src/userauth.c) via username_len/password_len"
+      },
+      "timestamp": "2026-08-04T00:00:00Z",
+      "products": [
+        {
+          "@id": "https://kasm-nix-registry.emrul.dev/catalog",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/libssh2@1.11.1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "nixpkgs backports the upstream fix without moving the version string, so a version-matching scanner cannot see it. The CVE lists NO fixed release \u2014 1.11.1 is the latest and is itself listed as affected \u2014 which is why the scanner reports 'no fix available' rather than a version to move to. Upstream fix: libssh2/libssh2 commit 256d04b60d80bf1190e96b0ad1e91b2174d744b1 (PR #1858), adding UINT32_MAX bounds checks before the username_len + 27 and username_len + 40 allocations and correcting the existing username_len + password_len + 44 check to avoid the overflow it was meant to prevent. nixpkgs applies it as pkgs/by-name/li/libssh2/CVE-2026-7598.patch \u2014 verified by `nix eval` of libssh2.patches at revision 531670d871c0e29724a02f3cbcac170adc65b58c, which returns CVE-2026-7598.patch alongside CVE-2025-15661, CVE-2026-55199 and CVE-2026-55200. CONFIRMED IN THE SHIPPED BINARIES, not just in the expression. The patch introduces the literal error string \"username_len out of bounds\", which exists in NO unpatched build. All three libssh2 1.11.1 store paths present in the tracelabs image contain it: d9c9w2y52gffj7zz1b76j0f8fbp5ww4d (services closure), xhmdqv811ljip7ci70cv78r1iaflp5iy and zzq7pa15jb9bip5yhl7cdjr3wx5xhra2 (tracelabs closure). That includes the copy in the services closure, which is built from the overlay's older committed lock \u2014 so this holds even where the stale-pin defect applies. NOTE for reviewers: the presence of libssh2_userauth_password symbols in libcurl, and SFTP/SCP being compiled in, show only that the code path EXISTS. They are not evidence of exposure and were briefly misread as such during this triage; the applied-patch check is what settles it."
     }
   ]
 }
