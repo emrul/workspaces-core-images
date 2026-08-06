@@ -1,0 +1,102 @@
+# zswap-enabler — privileged DaemonSet that sets up compressed swap on CIVO k3s
+# session nodes for the density experiment (design/workspace-density-zswap-k8s.md §3.1).
+#
+# What it does, idempotently, per node, then sleeps as the applied-state marker
+# (so it re-applies automatically when CIVO reprovisions a node on scale/recycle):
+#   1. If no swap yet: create /var/lib/kasm-swap/swapfile of ${SWAP_GB} GiB,
+#      mkswap + swapon.
+#   2. Enable zswap with zstd (fallback lzo), max_pool_percent=20.
+#   3. Label the node kasm.com/zswap=on and log what it did (kubectl logs = audit).
+#
+# It does NOT touch kubelet/NodeSwap — that's a separate, per-node manual step
+# (design §3.2) because it requires restarting k3s-agent. Without that step pods
+# still get memory.swap.max=0; this DaemonSet only prepares the host side.
+#
+# SAFETY: SWAP_GB default 10 (disk-safe on the 80 GB node — design §3.0/§3.0a).
+# Do NOT raise above 24 without re-checking free disk vs the nodefs<20% floor.
+# Targets ONLY the session pool via nodeSelector so control-plane-ish nodes are
+# untouched. Teardown: see zswap-teardown.daemonset.yaml.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: zswap-enabler
+  namespace: kube-system
+  labels: {app: zswap-enabler, kasm.com/experiment: zswap-density}
+spec:
+  selector:
+    matchLabels: {app: zswap-enabler}
+  template:
+    metadata:
+      labels: {app: zswap-enabler}
+    spec:
+      # Session pool only. Confirm the pool id: it is the g4m.kube.medium pool.
+      nodeSelector:
+        kubernetes.civo.com/civo-node-size: g4m.kube.medium
+      tolerations:
+        - {operator: Exists}          # run regardless of node taints
+      hostPID: true
+      restartPolicy: Always
+      containers:
+        - name: enabler
+          image: busybox:1.36
+          securityContext: {privileged: true}
+          env:
+            - {name: SWAP_GB, value: "10"}   # design §3.1 — bump for a 2nd sweep, ceiling 24
+            - {name: SWAPFILE, value: "/host/var/lib/kasm-swap/swapfile"}
+            - {name: NODE_NAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              log(){ echo "[zswap-enabler $(cat /host/proc/sys/kernel/hostname 2>/dev/null || echo ?)] $*"; }
+
+              # ---- 1. swap file (idempotent) ----------------------------------
+              if grep -q '/kasm-swap/swapfile' /host/proc/swaps 2>/dev/null; then
+                log "swap already active:"; cat /host/proc/swaps
+              else
+                mkdir -p "$(dirname "$SWAPFILE")"
+                if [ ! -f "$SWAPFILE" ]; then
+                  log "creating ${SWAP_GB}G swapfile at $SWAPFILE"
+                  # fallocate first; some fs (or old busybox) need dd fallback.
+                  if ! fallocate -l "${SWAP_GB}G" "$SWAPFILE" 2>/dev/null; then
+                    log "fallocate unsupported; falling back to dd"
+                    dd if=/dev/zero of="$SWAPFILE" bs=1M count=$((SWAP_GB*1024)) status=none
+                  fi
+                  chmod 600 "$SWAPFILE"
+                fi
+                # mkswap/swapon operate on the host via nsenter (busybox swapon
+                # acts in this mount ns; the file is on the host mount already).
+                nsenter -t 1 -m -u -i -n -p -- sh -c "mkswap ${SWAPFILE#/host} >/dev/null 2>&1 || mkswap ${SWAPFILE#/host} || true"
+                nsenter -t 1 -m -u -i -n -p -- swapon "${SWAPFILE#/host}"
+                log "swapon done:"; cat /host/proc/swaps
+              fi
+
+              # ---- 2. zswap (idempotent) --------------------------------------
+              ZP=/host/sys/module/zswap/parameters
+              if [ -d "$ZP" ]; then
+                # compressor: prefer zstd, fall back to lzo if the write is rejected
+                if ! sh -c "echo zstd > $ZP/compressor" 2>/dev/null; then
+                  log "zstd rejected; leaving compressor=$(cat $ZP/compressor)"
+                fi
+                echo 20   > "$ZP/max_pool_percent" 2>/dev/null || true
+                echo 1    > "$ZP/enabled"
+                log "zswap: enabled=$(cat $ZP/enabled) compressor=$(cat $ZP/compressor) max_pool_percent=$(cat $ZP/max_pool_percent)"
+              else
+                log "ERROR: /sys/module/zswap not present — kernel lacks zswap?"; exit 1
+              fi
+
+              # ---- 3. marker ---------------------------------------------------
+              log "setup complete on ${NODE_NAME:-?}; holding as applied-state marker"
+              # Re-assert every 5 min so a node that lost swap (unexpected) is re-fixed.
+              while true; do
+                grep -q '/kasm-swap/swapfile' /host/proc/swaps 2>/dev/null || {
+                  log "swap disappeared — re-running swapon"
+                  nsenter -t 1 -m -u -i -n -p -- swapon "${SWAPFILE#/host}" 2>/dev/null || true
+                }
+                sleep 300
+              done
+          volumeMounts:
+            - {name: host, mountPath: /host}
+      volumes:
+        - name: host
+          hostPath: {path: /}

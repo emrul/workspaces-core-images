@@ -1,0 +1,55 @@
+# zswap-teardown — reverses zswap-enabler.daemonset.yaml (design §8 hard gate).
+# Apply AFTER deleting the enabler DaemonSet. Per node: swapoff, remove the
+# swapfile, disable zswap, drop the node label. Then delete this DaemonSet too.
+#
+#   kubectl delete -f zswap-enabler.daemonset.yaml
+#   kubectl apply  -f zswap-teardown.daemonset.yaml
+#   kubectl logs -n kube-system -l app=zswap-teardown   # confirm on all nodes
+#   kubectl delete -f zswap-teardown.daemonset.yaml
+#
+# Does NOT revert the kubelet NodeSwap config (that was applied manually per
+# node, design §3.2) — revert that by editing /etc/rancher/k3s/config.yaml and
+# restarting k3s-agent, per §8 step 3.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: zswap-teardown
+  namespace: kube-system
+  labels: {app: zswap-teardown, kasm.com/experiment: zswap-density}
+spec:
+  selector:
+    matchLabels: {app: zswap-teardown}
+  template:
+    metadata:
+      labels: {app: zswap-teardown}
+    spec:
+      nodeSelector:
+        kubernetes.civo.com/civo-node-size: g4m.kube.medium
+      tolerations:
+        - {operator: Exists}
+      hostPID: true
+      restartPolicy: Always
+      containers:
+        - name: teardown
+          image: busybox:1.36
+          securityContext: {privileged: true}
+          env:
+            - {name: SWAPFILE, value: "/host/var/lib/kasm-swap/swapfile"}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              log(){ echo "[zswap-teardown $(cat /host/proc/sys/kernel/hostname 2>/dev/null || echo ?)] $*"; }
+              if grep -q '/kasm-swap/swapfile' /host/proc/swaps 2>/dev/null; then
+                log "swapoff ${SWAPFILE#/host}"
+                nsenter -t 1 -m -u -i -n -p -- swapoff "${SWAPFILE#/host}" || log "swapoff failed (in use?)"
+              fi
+              rm -f "$SWAPFILE" && log "removed swapfile" || true
+              echo 0 > /host/sys/module/zswap/parameters/enabled 2>/dev/null && log "zswap disabled" || true
+              log "done; /proc/swaps now:"; cat /host/proc/swaps || true
+              sleep infinity
+          volumeMounts:
+            - {name: host, mountPath: /host}
+      volumes:
+        - name: host
+          hostPath: {path: /}
