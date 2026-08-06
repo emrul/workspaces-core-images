@@ -24,7 +24,7 @@ adds an in-session Chrome workload.
 | Node feasibility probed | ✅ (§2) | 2026-08-06 |
 | Plan reviewed | ☐ | |
 | Disk footprint measured (gate for swap size, §3.0a) | ✅ 10 GB safe, big margin (§3.0a) | 2026-08-06 |
-| Baseline (RAM-only) measured | ☐ | |
+| Baseline (RAM-only) measured | ✅ idle ~341 MiB marginal; **CPU-request-bound, not memory** (§6.0) | 2026-08-06 |
 | Swap + zswap DaemonSet built | ☐ | |
 | kubelet NodeSwap enabled + verified | ☐ | |
 | Workspace memory requests/limits set | ☐ | |
@@ -44,6 +44,7 @@ mutations reverted and verified clean before then (§8).
 | 2026-08-06 | Experiment on this cluster, then revert | Customer environment; not a permanent posture decision. If it pays off, productionising it is a separate piece of work (§9). |
 | 2026-08-06 | Proportional LimitedSwap, NOT fixed 4 GB/pod | k8s has no fixed per-pod swap knob; fixed 4 GB would need ~51 GB swap → breaks the nodefs eviction floor on the 80 GB disk (§3.0). |
 | 2026-08-06 | **Start host swap at 10 GB/node**, grow only if measured disk headroom allows (ceiling ~24 GB) | Disk (shared with multi-GB workspace images + ephemeral, under the 20% nodefs eviction floor) is the binding constraint, not swap sizing. 10 GB is the safe floor; per-pod grant is small (~0.8 GB at 2.5 Gi req) so this pass measures *whether/ratio*, not max gain. SWAP_GB is a DaemonSet env var for a second sweep. |
+| 2026-08-06 | Baseline shows density is **CPU-request-bound**, not memory-bound (§6.0) | Idle marginal RAM ~341 MiB (nix file sharing); nodes 94–98% CPU-requested at 2 CPU/session default. zswap can't raise density until session CPU requests drop. Reprioritise: pursue the CPU-request lever first; zswap value now hinges on W2 (Chrome anon growth). Awaiting user decision on leftover sessions + CPU sizing before the sweep. |
 
 ---
 
@@ -282,6 +283,37 @@ JSONL line per sample, like the `.140` probe.
 ---
 
 ## 6. Results (fill in)
+
+### 6.0 RAM-only baseline + the bottleneck finding (measured 2026-08-06)
+
+Direct KasmWorkspace CRs (not Kasm-orchestrated), tracelabs image,
+`KASM_SKIP_STARTUP_SCRIPT=1`, memory req 2.5 Gi / limit 4 Gi, co-located on one
+node. Desktop booted clean (0 ICE rejections — confirms the operator env-gate +
+image `EnvironmentFile` fix). `memory.swap.max=0` throughout (NodeSwap not yet
+enabled — correct RAM-only baseline).
+
+| metric | value |
+|---|---|
+| 1 idle session `memory.current` | **781 MiB** (anon **185**, file **560**, slab 24) |
+| 2nd co-located session, per-cgroup | 788 MiB (anon 187, file 565) |
+| **2nd session marginal node RAM** (`MemAvailable` 28154→27813) | **~341 MiB** |
+
+**The finding that reframes this experiment.** The 2nd session costs only
+~341 MiB at the margin despite a 788 MiB cgroup, because its ~565 MiB of file
+pages are shared `/nix/store` already cached from session 1. So **idle-session
+RAM is already cheap (~340 MiB marginal) — memory is not the density bottleneck
+on this cluster.** zswap compresses anon (~185 MiB); compressing a 185 MiB
+anon set that's already this small is low-value at idle. zswap's case rests
+entirely on W2 (Chrome), where anon balloons — §6.2.
+
+**The actual bottleneck is CPU *requests*.** All three 4-core nodes sit at
+94–98% CPU requested with memory at 4–23%. Cause: Kasm's default session
+requests **2000m CPU** (seen on the leftover `kws-trace-la-*` sessions), plus
+control plane (guac 1000m, db 750m, api/manager/proxy/gateways 500m each). At
+2 CPU/session a 4-core node holds ~1 session beside the control plane —
+**density here is CPU-request-bound long before memory-bound, so zswap cannot
+raise it until session CPU requests drop.** This is the higher-value lever and
+should be resolved (or at least measured) before the zswap sweep. See §9.
 
 ### 6.1 W1 idle — cap sweep
 
