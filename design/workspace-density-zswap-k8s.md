@@ -41,6 +41,7 @@ mutations reverted and verified clean before then (§8).
 | 2026-08-06 | zswap, not zram | Parent doc §"Why zswap": graceful degradation, preserves page-cache (the nix file-sharing win), per-cgroup accounting. Unchanged here. |
 | 2026-08-06 | Apply via privileged DaemonSet, not one-off node edits | CIVO reprovisions nodes from an image on scale/recycle; a DaemonSet re-applies on every node join. One-off `ssh`+edit does not survive. |
 | 2026-08-06 | Experiment on this cluster, then revert | Customer environment; not a permanent posture decision. If it pays off, productionising it is a separate piece of work (§9). |
+| 2026-08-06 | 24 GB host swap/node + proportional LimitedSwap, NOT fixed 4 GB/pod | k8s has no fixed per-pod swap knob; fixed 4 GB would need ~51 GB swap → breaks the nodefs eviction floor on the 80 GB disk (§3.0). 24 GB is disk-safe; per-pod grant ~1.9 GB at 2.5 Gi request, and zswap compression closes the gap to the intended headroom. Fixed 4 GB/pod = bigger-disk/self-managed decision, deferred. |
 
 ---
 
@@ -88,6 +89,43 @@ This is the single most important framing in the doc.
 
 ## 3. Setup
 
+### 3.0 How much swap each pod actually gets — the LimitedSwap math
+
+**k8s has no fixed per-pod swap knob.** `UnlimitedSwap` was removed; only
+`NoSwap` and `LimitedSwap` are valid. Under `LimitedSwap` on cgroup v2 the
+kubelet *derives* each **Burstable** pod's swap (Guaranteed and BestEffort get
+**zero**):
+
+```
+pod_swap_max = (container_memory_request / node_total_memory) × total_node_swap
+```
+
+Consequence for the original "~4 GB swap/pod, 10 GB host swap" idea — it can't
+hold both ways on a 32 GB / 80 GB-disk `g4m.kube.medium`:
+
+- 10 GB host swap + 2.5 Gi request → `2.5/32 × 10 ≈ 0.8 GB`/pod. Far below 4 GB.
+- Forcing 4 GB/pod at 2.5 Gi request → `4 × 32 / 2.5 ≈ 51 GB` host swap, which
+  **breaks the `nodefs.available<20%` eviction floor** (must keep ~16 GB free
+  on the 80 GB disk; 51 GB swap + the multi-GB nix image crosses it → disk-
+  pressure evictions mid-experiment).
+
+Disk-safe swapfile ceiling here is ~24–32 GB/node. **Chosen design:** size host
+swap to the disk, let the proportion set per-pod swap, and rely on zswap
+compression for effective headroom. Expected per-pod grants (verify live
+against `container_swap_limit_bytes`; formula uses node *total* physical mem
+≈ 32 GB, not allocatable):
+
+| request | host swap 24 GB → pod_swap | host swap 32 GB → pod_swap |
+|---|---|---|
+| 2.5 Gi | ~1.9 GB | ~2.5 GB |
+| 1.8 Gi | ~1.35 GB | ~1.8 GB |
+| 1.2 Gi | ~0.9 GB | ~1.2 GB |
+
+With zswap zstd (~2–2.5× on cold anon), a ~1.9 GB swap grant costs <1 GB real
+RAM while holding ~1.9 GB of cold pages — the effective per-session headroom
+approaches the "~4 GB feel" without the disk risk. A literal fixed 4 GB/pod is
+a bigger-disk / self-managed-node decision (§9), out of scope pre-customer.
+
 ### 3.1 Node mutation — privileged DaemonSet `zswap-enabler`
 
 One DaemonSet (namespace `kube-system`, tolerates all taints, nodeSelector on
@@ -97,11 +135,13 @@ nodes at join). All writes are to the host via `hostPath: /` + `privileged`.
 
 Per node, idempotently:
 
-1. **Swap file.** If `/proc/swaps` has no entry: `fallocate -l 16G
+1. **Swap file.** If `/proc/swaps` has no entry: `fallocate -l 24G
    /host/var/lib/kasm-swap/swapfile` (or `dd` if the fs rejects fallocate),
-   `chmod 600`, `mkswap`, `swapon`. Size rationale: ~half of the 32 GB node,
-   headroom for a ~2× compressed pool without starving page cache. Record
-   actual.
+   `chmod 600`, `mkswap`, `swapon`. Size = **24 GB** — disk-safe on the 80 GB
+   node (24 swap + ~12 image/OS leaves ~44 GB free, clear of the
+   `nodefs.available<20%` ≈16 GB floor). Drives the per-pod grants in §3.0.
+   Do **not** exceed ~32 GB or the eviction floor is at risk. Record actual +
+   remaining free disk.
 2. **zswap.** `echo zstd > /sys/module/zswap/parameters/compressor` (fall back
    to `lzo` if zstd rejected), `echo 20 > .../max_pool_percent`, `echo 1 >
    .../enabled`. Verify `enabled=Y`.
@@ -138,14 +178,16 @@ experiment — if swap.max stays 0, nothing downstream measures anything.
 ### 3.3 Workload — the KasmWorkspace CR
 
 Sessions need memory **request < limit** (Burstable) for LimitedSwap to grant
-swap. Test matrix caps (limit), request pinned at ~60% of limit:
+swap. Test matrix caps (limit), request pinned at ~60% of limit; expected
+per-pod swap at the chosen **24 GB** host swap (§3.0), to verify against
+`container_swap_limit_bytes` at runtime:
 
-| cap (limit) | request | intent |
-|---|---|---|
-| 4Gi | 2.5Gi | generous / near natural working set |
-| 3Gi | 1.8Gi | moderate squeeze |
-| 2Gi | 1.2Gi | aggressive — where zswap should earn its keep |
-| 1.5Gi | 1Gi | stress / find the usability cliff |
+| cap (limit) | request | expected pod swap (24 GB host) | intent |
+|---|---|---|---|
+| 4Gi | 2.5Gi | ~1.9 GB | generous / near natural working set |
+| 3Gi | 1.8Gi | ~1.35 GB | moderate squeeze |
+| 2Gi | 1.2Gi | ~0.9 GB | aggressive — where zswap should earn its keep |
+| 1.5Gi | 1Gi | ~0.75 GB | stress / find the usability cliff |
 
 Set via `spec.resources.{requests,limits}` on the workspace (the operator
 passes these straight through — confirmed in `deployment.py`).
@@ -281,7 +323,12 @@ Log completion in §0.
 ## 10. Open questions
 
 1. Exact NodeSwap gate state on this k3s v1.36 build — GA (no gate needed) or
-   still `feature-gates=NodeSwap=true`? Confirm before §3.2.
+   still `feature-gates=NodeSwap=true`? Confirm before §3.2. (Related, resolved
+   2026-08-06: no fixed per-pod swap on k8s — it's proportional; §3.0.)
+6. Does the LimitedSwap formula divide by node *total* physical memory or
+   *allocatable*? Assumed total (~32 GB); confirm against
+   `container_swap_limit_bytes` on the first Burstable test pod — it changes the
+   per-pod grants in §3.0/§3.3 by ~15%.
 2. Does the node's crypto stack have zstd, or do we fall back to lzo?
 3. Is fallocate honoured on the node root fs, or do we need `dd`?
 4. One-node-per-cell (clean isolation, 3 cells at a time) vs serialise on one
