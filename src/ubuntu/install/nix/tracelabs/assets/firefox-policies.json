@@ -104,7 +104,7 @@
     "Homepage": {
       "Locked": false,
       "StartPage": "homepage",
-      "URL": "https://google.com/"
+      "URL": "https://duckduckgo.com/"
     },
     "InstallAddonsPermission": {
       "Allow": [],
@@ -1333,6 +1333,10 @@
         "Placement": "toolbar",
         "Folder": "OSINT Bookmarks/User Name Check"
       }
-    ]
+    ],
+    "SearchEngines": {
+      "Default": "DuckDuckGo",
+      "PreventInstalls": false
+    }
   }
 }

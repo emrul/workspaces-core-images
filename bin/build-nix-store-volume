@@ -517,8 +517,27 @@ gate_input_key() {
 # Reset first: the pinned ref string changes when the base branch advances, so
 # a warm bootstrap/_base from a prior run must be rebuilt fresh (see pinning).
 reset_profile bootstrap
-nix_install "${KASM_PROFILE_DIR}/bootstrap" \
-            "$(rewrite_attr "nixpkgs#nix" "${DEFAULT_REF}")"
+# The override is NOT optional here, and its absence was a real defect. Once
+# rewrite_attr routes `nixpkgs#nix` to `path:/config/kasm-overlay#nix`, the ref
+# argument is DISCARDED — rewrite_attr only uses it in the fallback branch, when
+# the overlay is absent. So without --override-input the bundled nix CLI resolves
+# against the overlay's COMMITTED flake.lock, not the rev this build targets.
+#
+# Observed 2026-08-06: the tracelabs image carried openssl-3.6.2 with 16 referrers,
+# every one of them inside nix's own closure (nix-util-2.34.7, the aws-c-* family,
+# curl-8.20.0, libgit2, krb5, s2n-tls). The build had resolved nixos-26.05 to
+# 04607e11, where openssl is 3.6.3. Same class of bug as the nix-bake-closure pin
+# (fixed in 9db6726): the resolved rev exists but is not threaded through.
+#
+# Word-split is deliberate (same as _base below): overlay_input_flags prints
+# nothing when the overlay is absent, leaving the command line unchanged.
+# shellcheck disable=SC2046
+echo "  installing bootstrap (attrs: $(rewrite_attr "nixpkgs#nix" "${DEFAULT_REF}"), rev ${DEFAULT_REF})" >&2
+nix --extra-experimental-features 'nix-command flakes' \
+    profile install --impure $(overlay_input_flags "${DEFAULT_REF}") \
+    --profile "${KASM_PROFILE_DIR}/bootstrap" \
+    "$(rewrite_attr "nixpkgs#nix" "${DEFAULT_REF}")"
+ln -sfn "${KASM_PROFILE_DIR}/bootstrap" "${KASM_GCROOT_DIR}/bootstrap"
 
 # ── 4. _base profile ───────────────────────────────────────────────────
 reset_profile _base

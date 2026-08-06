@@ -36,6 +36,19 @@ mkdir -p "${D}/etc/chromium/policies/managed" "${D}/etc/brave/policies/managed"
 cp -a "${A}/bookmarks/managed-bookmarks.json" "${D}/etc/chromium/policies/managed/tracelabs-bookmarks.json"
 cp -a "${A}/bookmarks/managed-bookmarks.json" "${D}/etc/brave/policies/managed/tracelabs-bookmarks.json"
 
+# 3b-ii. Default search + start page = DuckDuckGo, for the same Chromium/Brave
+#     managed-policy path. Google is deliberately NOT the default here: the
+#     CIVO phx1 egress (131.153.227.12) geolocates to Phoenix per ipinfo, but
+#     GOOGLE's own geo database places the range in China, so google.com 302s to
+#     google.com.hk with hl=zh-CN&pref=hkredirect. Verified from inside the
+#     cluster on 2026-08-06; /ncr avoids it but only until the NID cookie is
+#     cleared, and gl=us&hl=en is ignored because the redirect fires first.
+#     DuckDuckGo returned HTTP 200 with no redirect from the same egress, and
+#     for OSINT work it also avoids tying the session to a Google identity.
+#     Firefox gets the equivalent via assets/firefox-policies.json.
+cp -a "${A}/search-ddg.json" "${D}/etc/chromium/policies/managed/tracelabs-search.json"
+cp -a "${A}/search-ddg.json" "${D}/etc/brave/policies/managed/tracelabs-search.json"
+
 # 3c. User defaults (default-profile seed): Obsidian auto-opens the TL Vault, and
 #     PDFs open in Chromium (Firefox's builtin PDF viewer is disabled by policy),
 #     web links in Firefox. mimeapps points at the nix-*.desktop shims nix-activate
@@ -69,4 +82,4 @@ chmod -R a+rX \
     "${D}/etc/brave" \
     "${D}/usr/share/icons/hicolor/scalable/categories" 2>/dev/null || true
 
-echo "tracelabs post-build: staged vault + wallpaper + firefox policy under ${D}" >&2
+echo "tracelabs post-build: staged vault + wallpaper + firefox/chromium/brave policy under ${D}" >&2
