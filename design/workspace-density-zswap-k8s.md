@@ -23,7 +23,7 @@ adds an in-session Chrome workload.
 |---|---|---|
 | Node feasibility probed | ✅ (§2) | 2026-08-06 |
 | Plan reviewed | ☐ | |
-| Disk footprint measured (gate for swap size, §3.0a) | ☐ | |
+| Disk footprint measured (gate for swap size, §3.0a) | ✅ 10 GB safe, big margin (§3.0a) | 2026-08-06 |
 | Baseline (RAM-only) measured | ☐ | |
 | Swap + zswap DaemonSet built | ☐ | |
 | kubelet NodeSwap enabled + verified | ☐ | |
@@ -147,6 +147,18 @@ node's snapshotter dir), and headroom vs the ~16 GB eviction floor. 10 GB swap
 is safe if free disk after swapfile stays comfortably above 16 GB with the
 image(s) present. Re-check after loading N sessions (ephemeral +`/dev/shm`
 growth) before any decision to grow swap. Record actuals in §6.
+
+**Measured 2026-08-06** (node `…38df-6n69d`, representative — the image-puller
+pulls to all 3 nodes so they match): single fs `/dev/vda` **73.8 GB** (the
+"80 GB" is nominal), **22.0 GB used / 48.8 GB free**. Image store
+(`…/k3s/agent/containerd`) already **21 GB** — tracelabs nix image + k3s system
+images (one large nix image dominates). Kubelet ephemeral 75 MB. `/dev/shm` is
+tmpfs (RAM, not disk) so it doesn't count here. Eviction floor
+`nodefs.available<20%` = keep **14.8 GB** free → **34 GB spendable**. Margins
+over the floor: **10 GB swap → 24 GB margin** (very safe), 16 GB → 18 GB, 24 GB
+→ 10 GB. Verdict: **10 GB confirmed safe, wide margin**; 16 GB second sweep is
+fine; 24 GB only if no additional large workspace image is enabled (each new
+nix image is multi-GB and eats the margin).
 
 ### 3.1 Node mutation — privileged DaemonSet `zswap-enabler`
 
