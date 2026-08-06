@@ -1,0 +1,12 @@
+{
+  "DefaultSearchProviderEnabled": true,
+  "DefaultSearchProviderName": "DuckDuckGo",
+  "DefaultSearchProviderSearchURL": "https://duckduckgo.com/?q={searchTerms}",
+  "DefaultSearchProviderSuggestURL": "https://duckduckgo.com/ac/?q={searchTerms}&type=list",
+  "DefaultSearchProviderIconURL": "https://duckduckgo.com/favicon.ico",
+  "RestoreOnStartup": 4,
+  "RestoreOnStartupURLs": ["https://duckduckgo.com/"],
+  "HomepageLocation": "https://duckduckgo.com/",
+  "HomepageIsNewTabPage": false,
+  "NewTabPageLocation": "https://duckduckgo.com/"
+}
