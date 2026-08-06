@@ -23,6 +23,7 @@ adds an in-session Chrome workload.
 |---|---|---|
 | Node feasibility probed | ✅ (§2) | 2026-08-06 |
 | Plan reviewed | ☐ | |
+| Disk footprint measured (gate for swap size, §3.0a) | ☐ | |
 | Baseline (RAM-only) measured | ☐ | |
 | Swap + zswap DaemonSet built | ☐ | |
 | kubelet NodeSwap enabled + verified | ☐ | |
@@ -41,7 +42,8 @@ mutations reverted and verified clean before then (§8).
 | 2026-08-06 | zswap, not zram | Parent doc §"Why zswap": graceful degradation, preserves page-cache (the nix file-sharing win), per-cgroup accounting. Unchanged here. |
 | 2026-08-06 | Apply via privileged DaemonSet, not one-off node edits | CIVO reprovisions nodes from an image on scale/recycle; a DaemonSet re-applies on every node join. One-off `ssh`+edit does not survive. |
 | 2026-08-06 | Experiment on this cluster, then revert | Customer environment; not a permanent posture decision. If it pays off, productionising it is a separate piece of work (§9). |
-| 2026-08-06 | 24 GB host swap/node + proportional LimitedSwap, NOT fixed 4 GB/pod | k8s has no fixed per-pod swap knob; fixed 4 GB would need ~51 GB swap → breaks the nodefs eviction floor on the 80 GB disk (§3.0). 24 GB is disk-safe; per-pod grant ~1.9 GB at 2.5 Gi request, and zswap compression closes the gap to the intended headroom. Fixed 4 GB/pod = bigger-disk/self-managed decision, deferred. |
+| 2026-08-06 | Proportional LimitedSwap, NOT fixed 4 GB/pod | k8s has no fixed per-pod swap knob; fixed 4 GB would need ~51 GB swap → breaks the nodefs eviction floor on the 80 GB disk (§3.0). |
+| 2026-08-06 | **Start host swap at 10 GB/node**, grow only if measured disk headroom allows (ceiling ~24 GB) | Disk (shared with multi-GB workspace images + ephemeral, under the 20% nodefs eviction floor) is the binding constraint, not swap sizing. 10 GB is the safe floor; per-pod grant is small (~0.8 GB at 2.5 Gi req) so this pass measures *whether/ratio*, not max gain. SWAP_GB is a DaemonSet env var for a second sweep. |
 
 ---
 
@@ -109,22 +111,42 @@ hold both ways on a 32 GB / 80 GB-disk `g4m.kube.medium`:
   on the 80 GB disk; 51 GB swap + the multi-GB nix image crosses it → disk-
   pressure evictions mid-experiment).
 
-Disk-safe swapfile ceiling here is ~24–32 GB/node. **Chosen design:** size host
-swap to the disk, let the proportion set per-pod swap, and rely on zswap
-compression for effective headroom. Expected per-pod grants (verify live
-against `container_swap_limit_bytes`; formula uses node *total* physical mem
-≈ 32 GB, not allocatable):
+**Disk is the binding constraint, not swap sizing.** The 80 GB node disk is
+shared by: the containerd image store (the tracelabs nix image is multi-GB;
+a nix fat-store image is much larger; more enabled images stack), pod ephemeral
+storage + `/dev/shm`, OS/logs, AND the swapfile — all under the
+`nodefs.available<20%` (~16 GB must stay free) eviction floor. Note the image
+is stored **once per node** (co-located sessions share it), so it's a per-node
+fixed cost, not per-session.
 
-| request | host swap 24 GB → pod_swap | host swap 32 GB → pod_swap |
-|---|---|---|
-| 2.5 Gi | ~1.9 GB | ~2.5 GB |
-| 1.8 Gi | ~1.35 GB | ~1.8 GB |
-| 1.2 Gi | ~0.9 GB | ~1.2 GB |
+**Chosen design: start host swap at 10 GB/node — deliberately conservative —
+then grow only if measured free disk allows (§3.0a).** Let the proportion set
+per-pod swap; lean on zswap compression. Expected per-pod grants at 10 GB
+(verify live against `container_swap_limit_bytes`; formula uses node *total*
+physical mem ≈ 32 GB, not allocatable):
 
-With zswap zstd (~2–2.5× on cold anon), a ~1.9 GB swap grant costs <1 GB real
-RAM while holding ~1.9 GB of cold pages — the effective per-session headroom
-approaches the "~4 GB feel" without the disk risk. A literal fixed 4 GB/pod is
-a bigger-disk / self-managed-node decision (§9), out of scope pre-customer.
+| request | host swap 10 GB → pod_swap | (if grown) 16 GB | (ceiling) 24 GB |
+|---|---|---|---|
+| 2.5 Gi | ~0.8 GB | ~1.25 GB | ~1.9 GB |
+| 1.8 Gi | ~0.55 GB | ~0.9 GB | ~1.35 GB |
+| 1.2 Gi | ~0.4 GB | ~0.6 GB | ~0.9 GB |
+
+At 10 GB the per-pod grant is small (~0.4–0.8 GB), so the compressed-density
+effect is correspondingly bounded — this first pass measures *whether* it helps
+and what the compression ratio is, not the maximum gain. If §3.0a shows disk
+headroom, a second sweep at 16 GB (never above the ~24 GB disk-safe ceiling)
+widens the grant. A literal fixed 4 GB/pod is a bigger-disk / self-managed-node
+decision (§9), out of scope pre-customer.
+
+### 3.0a Measure disk footprint before sizing swap
+
+Before creating the swapfile, on one node (via the probe pod's host mount)
+record: total/free disk on the fs backing containerd (`df -h /host/var/lib`),
+the image-store size (`du -sh /host/var/lib/rancher/k3s/agent/containerd` or the
+node's snapshotter dir), and headroom vs the ~16 GB eviction floor. 10 GB swap
+is safe if free disk after swapfile stays comfortably above 16 GB with the
+image(s) present. Re-check after loading N sessions (ephemeral +`/dev/shm`
+growth) before any decision to grow swap. Record actuals in §6.
 
 ### 3.1 Node mutation — privileged DaemonSet `zswap-enabler`
 
@@ -135,13 +157,13 @@ nodes at join). All writes are to the host via `hostPath: /` + `privileged`.
 
 Per node, idempotently:
 
-1. **Swap file.** If `/proc/swaps` has no entry: `fallocate -l 24G
-   /host/var/lib/kasm-swap/swapfile` (or `dd` if the fs rejects fallocate),
-   `chmod 600`, `mkswap`, `swapon`. Size = **24 GB** — disk-safe on the 80 GB
-   node (24 swap + ~12 image/OS leaves ~44 GB free, clear of the
-   `nodefs.available<20%` ≈16 GB floor). Drives the per-pod grants in §3.0.
-   Do **not** exceed ~32 GB or the eviction floor is at risk. Record actual +
-   remaining free disk.
+1. **Swap file.** Only after §3.0a confirms disk headroom. If `/proc/swaps`
+   has no entry: `fallocate -l 10G /host/var/lib/kasm-swap/swapfile` (or `dd`
+   if the fs rejects fallocate), `chmod 600`, `mkswap`, `swapon`. Size =
+   **10 GB** to start (conservative — see §3.0). Make the size a DaemonSet env
+   var (`SWAP_GB`, default 10) so a second sweep can raise it without editing
+   the script; **never above ~24 GB** or the `nodefs.available<20%` floor is at
+   risk. Record actual + remaining free disk in §6.
 2. **zswap.** `echo zstd > /sys/module/zswap/parameters/compressor` (fall back
    to `lzo` if zstd rejected), `echo 20 > .../max_pool_percent`, `echo 1 >
    .../enabled`. Verify `enabled=Y`.
@@ -179,15 +201,15 @@ experiment — if swap.max stays 0, nothing downstream measures anything.
 
 Sessions need memory **request < limit** (Burstable) for LimitedSwap to grant
 swap. Test matrix caps (limit), request pinned at ~60% of limit; expected
-per-pod swap at the chosen **24 GB** host swap (§3.0), to verify against
+per-pod swap at the starting **10 GB** host swap (§3.0), to verify against
 `container_swap_limit_bytes` at runtime:
 
-| cap (limit) | request | expected pod swap (24 GB host) | intent |
+| cap (limit) | request | expected pod swap (10 GB host) | intent |
 |---|---|---|---|
-| 4Gi | 2.5Gi | ~1.9 GB | generous / near natural working set |
-| 3Gi | 1.8Gi | ~1.35 GB | moderate squeeze |
-| 2Gi | 1.2Gi | ~0.9 GB | aggressive — where zswap should earn its keep |
-| 1.5Gi | 1Gi | ~0.75 GB | stress / find the usability cliff |
+| 4Gi | 2.5Gi | ~0.8 GB | generous / near natural working set |
+| 3Gi | 1.8Gi | ~0.55 GB | moderate squeeze |
+| 2Gi | 1.2Gi | ~0.4 GB | aggressive — where zswap should earn its keep |
+| 1.5Gi | 1Gi | ~0.3 GB | stress / find the usability cliff |
 
 Set via `spec.resources.{requests,limits}` on the workspace (the operator
 passes these straight through — confirmed in `deployment.py`).
