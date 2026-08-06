@@ -11,6 +11,11 @@ User=${KASM_OS_USER:-kasm-user}
 Group=${KASM_OS_GROUP:-kasm-user}
 WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
 Environment=DISPLAY=:1
+# Real session-bus address + XDG_RUNTIME_DIR from kasm-setup. Wins over
+# orchestrator-injected placeholders (the k8s operator sets
+# DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null and an XDG_RUNTIME_DIR
+# that nothing creates, expecting stock vnc_startup.sh to repair them).
+EnvironmentFile=/tmp/kasm-dbus.env
 ExecStart=/usr/local/bin/kasm-window-manager
 Restart=on-failure
 RestartSec=500ms

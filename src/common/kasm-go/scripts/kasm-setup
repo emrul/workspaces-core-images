@@ -110,8 +110,23 @@ if command -v dbus-launch >/dev/null 2>&1; then
         dbus-launch --sh-syntax \
         | sed -n "s/^\(DBUS_SESSION_BUS_ADDRESS\|DBUS_SESSION_BUS_PID\)=\\(.*\\);$/\\1=\\2/p"
     ' > /tmp/kasm-dbus.env
-    chmod 0644 /tmp/kasm-dbus.env
+else
+    : > /tmp/kasm-dbus.env
 fi
+
+# 3b) XDG_RUNTIME_DIR. Desktop units source /tmp/kasm-dbus.env via
+# EnvironmentFile=, which wins over the container's injected env.
+# That matters under the k8s workspaces operator: it hands every pod
+# XDG_RUNTIME_DIR=/tmp/runtime-kasm-user and
+# DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null — placeholders that
+# stock vnc_startup.sh is expected to repair, and container-init
+# images never run that script. An XDG_RUNTIME_DIR nothing creates
+# breaks iceauth (no ICEauthority cookie), and every XFCE component
+# then burns an ~8s ICE reject-timeout serially — a 30-40s black
+# screen. Point the desktop at a runtime dir we actually create.
+install -d -m 0700 -o "$KASM_OS_USER" -g "$KASM_OS_GROUP" "/run/user/$KASM_OS_UID"
+echo "XDG_RUNTIME_DIR=/run/user/$KASM_OS_UID" >> /tmp/kasm-dbus.env
+chmod 0644 /tmp/kasm-dbus.env
 
 # 4) TLS cert: bake-time copy with operator override.
 cert_src=${KASM_TLS_CERT_PATH:-/etc/kasm/self-default.pem}

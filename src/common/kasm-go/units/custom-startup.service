@@ -9,5 +9,8 @@ User=${KASM_OS_USER:-kasm-user}
 Group=${KASM_OS_GROUP:-kasm-user}
 WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
 Environment=DISPLAY=:1
+# Same env handoff as window-manager.service: real bus address +
+# XDG_RUNTIME_DIR, overriding orchestrator-injected placeholders.
+EnvironmentFile=/tmp/kasm-dbus.env
 ExecStart=/dockerstartup/custom_startup.sh
 Restart=no
