@@ -315,6 +315,52 @@ control plane (guac 1000m, db 750m, api/manager/proxy/gateways 500m each). At
 raise it until session CPU requests drop.** This is the higher-value lever and
 should be resolved (or at least measured) before the zswap sweep. See §9.
 
+### 6.0a CPU sizing → user perception (config changed to 1 core, 2026-08-06)
+
+Session config now `cores=1`, `cpu_allocation_method=Inherit`, memory
+`2.7 GiB`. How the agent maps `cores` decides perception
+(`provisioner.py:207–214`):
+
+| cpu_allocation_method | k8s result | QoS | perception |
+|---|---|---|---|
+| **Shares** (Kasm default; `Inherit` resolves here unless changed) | `requests.cpu=1`, **no limit** | Burstable | a lone session **bursts to idle node cores** → feels like the whole box; degrades only as the node packs and active sessions contend |
+| **Quotas** | `requests.cpu=1` **and** `limits.cpu=1` | (still Burstable, mem req==lim) | **hard CFS throttle at 1 core always** — page-load/render bursts (want 2–4 cores for ~1 s) get stretched → visible jank even on an empty node |
+
+`default_cpu_allocation_method` is stored **encrypted** in `settings`, so the
+resolved value isn't DB-readable. Confirm on the next launch:
+`kubectl get pod <kws-pod> -o jsonpath='{.spec.containers[0].resources}'` —
+**`limits.cpu` absent = Shares (good); `=1` = Quotas (throttled)**.
+
+**The core trade.** With Shares, "1 CPU" is a *request*, not a ceiling, so
+perception is **load-dependent**: excellent at low occupancy, worst-case only
+when several co-located sessions are simultaneously *active*. Density and
+worst-case interactivity therefore trade directly — the 1-core request is what
+lets you pack, and packing is exactly what erodes p99 feel. The predictor is
+per-session **`cpu.pressure` `some` avg10** under concurrent active load, not
+idle. Two amplifiers specific to this fleet:
+
+- **Software rendering (llvmpipe, no GPU)** — all browser paint/compositing is
+  CPU, so a browsing desktop is CPU-hungry precisely where users feel it
+  (scroll, video, canvas). This is likely the #1 felt limit under contention;
+  no swap/zswap change touches it. A GPU or fewer/bigger sessions is the only
+  real fix.
+- **phx1 RTT** — a constant latency floor that stacks on any render jank.
+
+**Where zswap actually helps perception (not density):** the memory **limit is
+a hard 2.7 GiB**. A Chrome-heavy session that exceeds it OOM-kills tabs/session
+*without* swap; *with* zswap+swap it spills cold anon to a compressed pool and
+**degrades gracefully (slight slowness) instead of crashing**. So on this
+1-core / 2.7 GiB config zswap's value reframes from "more sessions" to
+"fewer tab/session crashes under memory pressure" — a perception win at the
+ceiling. That is the W2 hypothesis to test (§6.2).
+
+**Perception measurement to add to the run:** at N=1,2,3,4 co-located *active*
+sessions (real browser workload, not idle), record per-session
+`cpu.pressure some avg10` and a wall-clock proxy (page-load time or scripted
+scroll FPS). The N where `some avg10` crosses ~20–30% sustained is the real
+**active** sessions/node — expect it well below the idle packing number. Report
+both; the honest density figure for interactive use is the active one.
+
 ### 6.1 W1 idle — cap sweep
 
 | cap | zswap | real RAM/sess | resident anon | zswap pool | swap used | ratio | cgPSI full10 | sess/node | → sess/100 GB |
@@ -330,10 +376,21 @@ should be resolved (or at least measured) before the zswap sweep. See §9.
 |----:|:-----:|--------------:|--------------:|-----------:|----------:|------:|-------------:|----------:|--------------:|
 | … | | | | | | | | | |
 
+### 6.2a Perception — active co-located sessions (fill in)
+
+| N active sessions/node | per-sess cpu.pressure some avg10 | page-load / scroll-FPS proxy | verdict |
+|---:|---:|---:|---|
+| 1 | | | |
+| 2 | | | |
+| 3 | | | |
+| 4 | | | |
+
 ### 6.3 Narrative
 _(compression ratio achieved, where the usability cliff sits, how it compares
-to `.140`'s 2–3× at 400–600m, and whether cgroup-v2 LimitedSwap changed the
-shape.)_
+to `.140`'s 2–3× at 400–600m, whether cgroup-v2 LimitedSwap changed the shape,
+and — the headline for the 1-core config — at what active-session count
+cpu.pressure makes it feel slow, i.e. the gap between idle packing density and
+usable active density.)_
 
 ---
 
