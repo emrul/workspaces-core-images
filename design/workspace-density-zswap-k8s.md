@@ -44,7 +44,9 @@ mutations reverted and verified clean before then (§8).
 | 2026-08-06 | Experiment on this cluster, then revert | Customer environment; not a permanent posture decision. If it pays off, productionising it is a separate piece of work (§9). |
 | 2026-08-06 | Proportional LimitedSwap, NOT fixed 4 GB/pod | k8s has no fixed per-pod swap knob; fixed 4 GB would need ~51 GB swap → breaks the nodefs eviction floor on the 80 GB disk (§3.0). |
 | 2026-08-06 | **Start host swap at 10 GB/node**, grow only if measured disk headroom allows (ceiling ~24 GB) | Disk (shared with multi-GB workspace images + ephemeral, under the 20% nodefs eviction floor) is the binding constraint, not swap sizing. 10 GB is the safe floor; per-pod grant is small (~0.8 GB at 2.5 Gi req) so this pass measures *whether/ratio*, not max gain. SWAP_GB is a DaemonSet env var for a second sweep. |
-| 2026-08-06 | Baseline shows density is **CPU-request-bound**, not memory-bound (§6.0) | Idle marginal RAM ~341 MiB (nix file sharing); nodes 94–98% CPU-requested at 2 CPU/session default. zswap can't raise density until session CPU requests drop. Reprioritise: pursue the CPU-request lever first; zswap value now hinges on W2 (Chrome anon growth). Awaiting user decision on leftover sessions + CPU sizing before the sweep. |
+| 2026-08-06 | Baseline shows density is **CPU-request-bound**, not memory-bound (§6.0) | Idle marginal RAM ~341 MiB (nix file sharing); nodes 94–98% CPU-requested at 2 CPU/session default. zswap can't raise density until session CPU requests drop. Reprioritise: pursue the CPU-request lever first; zswap value now hinges on W2 (Chrome anon growth). |
+| 2026-08-06 | Session CPU set to **1 core**; **use Shares (request-only), not Quotas** | Measured (§6.2a): Quotas hard-cap is 7× slower on a multi-thread burst, and 5× slower than 2 contended Shares sessions. Shares degrades gracefully under co-location; Quotas clamps every render spike. CPU allocation method dominates perception over density. |
+| 2026-08-06 | **PSI unavailable on CIVO k3s** → drop PSI-based usability metric | `/proc/pressure/*` absent (no `psi=1`, unsettable on managed nodes). Whole doc's PSI plan void. Substitute wall-clock timing + memory.stat refault/pswpin + cpu.stat throttled_usec (§5). Affects every remaining measurement in §6. |
 
 ---
 
@@ -267,9 +269,15 @@ Collect per session:
 - **Compression ratio** — global `stored_pages*4096 / pool_total_size` from
   `/sys/kernel/debug/zswap/*`, cross-checked per-cgroup via
   `swap.current / zswap.current`.
-- **Usability** — the session's OWN `memory.pressure` full avg10. Node-wide PSI
-  (`/proc/pressure/memory`) stays ~0 while the node has spare RAM; the
-  per-cgroup pressure is the real signal.
+- **Usability** — ~~the session's OWN `memory.pressure` full avg10~~
+  **CORRECTION (2026-08-06): PSI is unavailable on these CIVO k3s nodes**
+  (`/proc/pressure/*` and per-cgroup `*.pressure` absent; kernel not booted with
+  `psi=1`, unsettable on managed nodes). The whole PSI-based usability plan does
+  not work here. Substitutes: (a) **wall-clock timing** of a fixed CPU/mem work
+  burst (the §6.2a method — direct perception proxy); (b) **`memory.stat`
+  refault counters** (`workingset_refault_anon/file`, `pgscan`, `pswpin`) as the
+  thrash signal in place of `memory.pressure`; (c) **`cpu.stat throttled_usec`**
+  for Quotas throttling. Node-level `vmstat` si/so for swap activity.
 - **Node headroom** — `MemAvailable`, `/proc/swaps` Used, node PSI.
 
 Derived: **sessions/node** (fill until cgPSI full10 > a threshold — propose 5%
@@ -376,14 +384,39 @@ both; the honest density figure for interactive use is the active one.
 |----:|:-----:|--------------:|--------------:|-----------:|----------:|------:|-------------:|----------:|--------------:|
 | … | | | | | | | | | |
 
-### 6.2a Perception — active co-located sessions (fill in)
+### 6.2a Perception — Shares vs Quotas, measured 2026-08-06
 
-| N active sessions/node | per-sess cpu.pressure some avg10 | page-load / scroll-FPS proxy | verdict |
-|---:|---:|---:|---|
-| 1 | | | |
-| 2 | | | |
-| 3 | | | |
-| 4 | | | |
+**PSI is unavailable on these nodes** (`/proc/pressure/*` and per-cgroup
+`*.pressure` absent — CIVO's k3s kernel doesn't set `psi=1`, unsettable on
+managed nodes). The doc's planned usability metric (cgroup PSI) does not exist
+here — see §5 correction. Substituted a **wall-clock proxy**: a 3-thread fixed
+CPU burst (`hashlib.sha256` ×3, approximating Chrome's multi-threaded
+render/JS), timed under each condition. Confirmed cgroup wiring: Shares
+`cpu.max = "max 100000"` (no cap), Quotas `cpu.max = "100000 100000"` (hard 1
+core).
+
+| condition | 3-thread burst wall time | throttling |
+|---|---:|---|
+| **Shares, solo** (bursts to free node cores) | **0.76 s** | 0 |
+| **Shares, 2 co-located both bursting** (6 threads / ~2.85 free cores) | **1.05 / 1.15 s** | 0 |
+| **Quotas, solo** (hard-capped at 1 core) | **5.30 s** | 57 s `throttled_usec` under load; **10.9 s accrued just at idle boot** |
+
+**Verdict — CPU allocation method dominates perception, not density.**
+Quotas is **7× slower** than Shares on a multi-threaded burst, and even a
+*single* Quotas session (5.30 s) is **5× slower than two contended Shares
+sessions** (1.05 s). Shares degrades gracefully under co-location (0.76→1.1 s,
+~1.4×) because both sessions burst and the scheduler shares free cores fairly;
+Quotas clamps every render spike regardless of idle capacity — the 10.9 s of
+throttling accrued just booting is what a user feels as UI lag. **Ship
+`cpu_allocation_method=Shares`** (request-only, no CFS limit). With Shares, the
+1-core config is a request that protects density without hurting interactive
+feel until the node is genuinely saturated; the remaining felt limit is then
+llvmpipe (software render), not CPU scheduling.
+
+Caveat: synthetic hash burst ≈ CPU-bound render, but not identical to real
+Chrome (GPU-less paint, GC, network). Re-run with the nix-testbench + Kasm API
+driving real browser workloads to confirm the wall-times translate, and to find
+the active-session count where even Shares contention becomes noticeable.
 
 ### 6.3 Narrative
 _(compression ratio achieved, where the usability cliff sits, how it compares
