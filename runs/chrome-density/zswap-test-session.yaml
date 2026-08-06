@@ -1,0 +1,41 @@
+# zswap-test-session — a memory-capped tracelabs session for manually testing
+# the zswap/swap plumbing (design/workspace-density-zswap-k8s.md).
+#
+# WHY DIRECT CR, not a Kasm-launched session: the k8s agent currently maps only
+# `cores` into pod resources, NOT the image's memory_bytes (it reads
+# container_config["memory"] but the value is under "memory_bytes" — a rename
+# mismatch in provisioner.py:_build_resources). So Kasm-launched sessions get
+# NO memory request/limit → BestEffort-on-memory → LimitedSwap grants ZERO swap
+# and there is no cap to force reclaim. A direct CR with an explicit memory
+# request+limit is Burstable and DOES get swap (verified: 2.5Gi req → 856 MiB
+# swap.max at 10 GB host swap).
+#
+# Usage:
+#   kubectl apply -f zswap-test-session.yaml
+#   POD=$(kubectl get pods -n kasm-system -l app.kubernetes.io/instance=zswap-test -o name | head -1)
+#   kubectl exec -n kasm-system ${POD#pod/} -- sh -c \
+#     'echo swap.max=$(cat /sys/fs/cgroup/memory.swap.max) \
+#           swap.current=$(cat /sys/fs/cgroup/memory.swap.current) \
+#           zswap.current=$(cat /sys/fs/cgroup/memory.zswap.current)'
+#   # then drive Chrome inside the session (memory > cap) to force reclaim into zswap
+#
+# Sweep the memory limit (design §3.3): 4Gi/2.5Gi, 3Gi/1.8Gi, 2Gi/1.2Gi, 1.5Gi/1Gi.
+# request<limit keeps it Burstable; swap grant = (request/32GB)*10GB.
+# CPU is request-only (Shares) — no limit — matching the perception decision (§6.2a).
+apiVersion: kasm.com/v1
+kind: KasmWorkspace
+metadata:
+  name: zswap-test
+  namespace: kasm-system
+  labels: {kasm.com/experiment: zswap-density}
+spec:
+  image: registry.gitlab.com/kasm-technologies/labs-sandbox/kasm-nix/tracelabs-osint:nix
+  imagePullPolicy: IfNotPresent
+  env:
+    - {name: VNC_PW, value: password}
+    - {name: KASM_SKIP_STARTUP_SCRIPT, value: "1"}   # clean desktop under this operator
+  resources:
+    requests: {cpu: "1", memory: "2500Mi"}           # cpu request-only = Shares/burstable
+    limits:   {memory: "4Gi"}                          # cap to force reclaim; NO cpu limit
+  # To reach it over VNC, expose a service (or use the Kasm session-proxy path):
+  service: {type: ClusterIP, ports: [{name: vnc, port: 6901, targetPort: 6901}]}

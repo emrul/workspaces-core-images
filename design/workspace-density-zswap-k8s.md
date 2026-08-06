@@ -25,9 +25,9 @@ adds an in-session Chrome workload.
 | Plan reviewed | ☐ | |
 | Disk footprint measured (gate for swap size, §3.0a) | ✅ 10 GB safe, big margin (§3.0a) | 2026-08-06 |
 | Baseline (RAM-only) measured | ✅ idle ~341 MiB marginal; **CPU-request-bound, not memory** (§6.0) | 2026-08-06 |
-| Swap + zswap DaemonSet built | ☐ | |
-| kubelet NodeSwap enabled + verified | ☐ | |
-| Workspace memory requests/limits set | ☐ | |
+| Swap + zswap DaemonSet built | ✅ applied — 10 GB swap + zswap zstd (pool 20%) on all 3 nodes | 2026-08-06 |
+| kubelet NodeSwap enabled + verified | ✅ all 3 nodes; Burstable pod gets proportional swap.max (§3.2a) | 2026-08-06 |
+| Workspace memory requests/limits set | ⚠️ **agent doesn't map memory_bytes** — use direct CR (`runs/chrome-density/zswap-test-session.yaml`); Kasm-launched sessions get no mem req → zero swap (§3.3a) | 2026-08-06 |
 | zswap density measured (idle) | ☐ | |
 | zswap density measured (Chrome) | ☐ | |
 | Torn down, nodes clean | ☐ **hard gate before customer returns** | |
@@ -47,6 +47,8 @@ mutations reverted and verified clean before then (§8).
 | 2026-08-06 | Baseline shows density is **CPU-request-bound**, not memory-bound (§6.0) | Idle marginal RAM ~341 MiB (nix file sharing); nodes 94–98% CPU-requested at 2 CPU/session default. zswap can't raise density until session CPU requests drop. Reprioritise: pursue the CPU-request lever first; zswap value now hinges on W2 (Chrome anon growth). |
 | 2026-08-06 | Session CPU set to **1 core**; **use Shares (request-only), not Quotas** | Measured (§6.2a): Quotas hard-cap is 7× slower on a multi-thread burst, and 5× slower than 2 contended Shares sessions. Shares degrades gracefully under co-location; Quotas clamps every render spike. CPU allocation method dominates perception over density. |
 | 2026-08-06 | **PSI unavailable on CIVO k3s** → drop PSI-based usability metric | `/proc/pressure/*` absent (no `psi=1`, unsettable on managed nodes). Whole doc's PSI plan void. Substitute wall-clock timing + memory.stat refault/pswpin + cpu.stat throttled_usec (§5). Affects every remaining measurement in §6. |
+| 2026-08-06 | **Plumbing switched ON** — swap+zswap+NodeSwap live on all 3 nodes | §3.2a. swapBehavior=LimitedSwap needs a config-dir drop-in (flags alone default NoSwap). Verified swap grants match the formula. Ready for manual testing; metrics captured next week. |
+| 2026-08-06 | Test via **direct CR**, not Kasm-launched sessions | Agent doesn't map memory_bytes → Kasm sessions get no mem req → zero swap (§3.3a). `runs/chrome-density/zswap-test-session.yaml` is the harness. |
 
 ---
 
@@ -211,6 +213,53 @@ node** (3 nodes) is safer than automating it. Decide and log which.
 Verify NodeSwap live: a Burstable test pod with a memory request should show
 `memory.swap.max` > 0 in its cgroup (not 0). That check gates the whole
 experiment — if swap.max stays 0, nothing downstream measures anything.
+
+### 3.2a DONE — what actually worked (2026-08-06)
+
+Applied to all 3 nodes; verified. The exact recipe (k3s v1.36, Alpine/openrc):
+
+1. **Swap + zswap** via `runs/chrome-density/zswap-enabler.daemonset.yaml`:
+   10 GB swapfile at `/var/lib/kasm-swap/swapfile`, `zswap enabled=Y
+   compressor=zstd max_pool_percent=20`. DaemonSet stays as the marker so new
+   nodes get swap+zswap automatically.
+2. **kubelet NodeSwap** — per node, edit `/etc/rancher/k3s/config.yaml`
+   (backup kept as `config.yaml.bak-zswap`), appending under `kubelet-arg:`:
+   `- fail-swap-on=false`, `- feature-gates=NodeSwap=true`,
+   `- config-dir=/etc/rancher/k3s/kubelet.conf.d`; then a drop-in
+   `/etc/rancher/k3s/kubelet.conf.d/10-swap.conf`:
+   ```
+   apiVersion: kubelet.config.k8s.io/v1beta1
+   kind: KubeletConfiguration
+   memorySwap:
+     swapBehavior: LimitedSwap
+   ```
+   then `rc-service k3s restart`.
+   **Finding: flags alone are NOT enough.** With just
+   `fail-swap-on=false`+`NodeSwap=true`, a Burstable pod still gets
+   `memory.swap.max=0` — this k3s defaults to `NoSwap` (the concept doc is
+   right; the KEP's "default LimitedSwap when gate on" does not hold here).
+   `swapBehavior=LimitedSwap` via the config-dir drop-in is required.
+3. **Verified:** Burstable pod, 256 Mi request → `swap.max` 85.7 MiB; session-
+   shaped 2.5 Gi request → **856 MiB** — matches `(request/32 GB)×10 GB`.
+
+**Persistence caveats:** the config.yaml edits are on-disk (survive node
+reboot) but are **per-node manual** — a CIVO node recycle/scale gives a new
+node swap+zswap (DaemonSet) but **NOT** the kubelet NodeSwap config. Fine for
+the fixed 3-node experiment before ~08-13; a durable rollout needs the kubelet
+config templated at node bootstrap. Rollback: restore `config.yaml.bak-zswap`
++ `rc-service k3s restart`, then §8.
+
+### 3.3a Blocker for Kasm-launched sessions — agent memory mapping
+
+The k8s agent maps `cores` into pod resources but **not memory**:
+`provisioner.py:_build_resources` reads `container_config.get("memory")` while
+the value is carried as `memory_bytes` (DB column; image config 2.7 GiB). Result
+observed on live `kws-trace-la-*` pods: `resources={"requests":{"cpu":"1"}}`,
+`memory.max=max`, **`swap.max=0`**. No memory request → BestEffort-on-memory →
+LimitedSwap grants zero swap, and no cap to force reclaim. **So the plumbing is
+inert for Kasm-launched sessions.** For measurement use the direct CR
+`runs/chrome-density/zswap-test-session.yaml` (explicit mem req+limit → Burstable
+→ gets swap). Colleague item: fix the `memory`/`memory_bytes` field mismatch.
 
 ### 3.3 Workload — the KasmWorkspace CR
 
