@@ -40,6 +40,7 @@ nobody re-reads.
 | 2026-08-04 | Tetragon over Falco | A customer already runs Tetragon — shared policy language with them; kernel-side filtering (lower overhead); enforcement path if we ever want it |
 | 2026-08-04 | Loki + Grafana on one OCI VM, not a hosted service | Spike economics; Grafana alerting is sufficient; VictoriaLogs noted as lighter fallback if the VM strains |
 | 2026-08-04 | Observe-only; no enforcement | Detection value is immediate; a false-positive `Sigkill` kills a customer session. Revisit only after weeks of clean data |
+| 2026-08-06 | Sessions run **in-cluster** via the dev `kasm-kubernetes-operator` (`KasmWorkspace` CRD) — not external Docker agents | Corrects §5's assumption (public docs describe only the GA external-agent model). Tetragon's DaemonSet sees session pods natively, with real pod attribution — no standalone deployment needed for these sessions |
 
 ---
 
@@ -220,15 +221,35 @@ spike; the install is an afternoon.** Method:
    O(10⁴–10⁵) events/session/hour raw is plausible; we want the shipped
    volume well under that. Fill in actuals: _raw = ?, filtered = ?_.
 
-## 5. Deployment shapes beyond CIVO
+## 5. Deployment shapes
 
-Tetragon on CIVO only sees pods on CIVO nodes. Kasm sessions running as plain
-Docker containers on non-k8s agent hosts (forge, GPU test host, customer
-agents) are invisible to it. Tetragon supports standalone operation (docker
-container or systemd package) with the same policies, minus k8s pod metadata —
-session attribution then comes from container labels instead. **Open item:**
-enumerate where sessions actually run before claiming coverage; the CIVO spike
-generalizes, but each non-k8s host is a second deployment to wire.
+**Resolved 2026-08-06:** sessions run **in-cluster** as pods, launched by the
+dev `kasm-kubernetes-operator` (repo: `gitlab/kasm-kubernetes-operator` —
+`KasmWorkspace` CRD + `kasm-services` operators for image-pull/autoscale/
+networks). The Tetragon DaemonSet therefore sees session pods natively with
+full pod attribution; the plan's original assumption holds. Standalone
+Tetragon (docker/systemd mode, same policies, container-label attribution)
+remains the shape for any non-k8s Docker hosts we later put sessions on
+(forge, GPU test host) — currently none planned.
+
+Operator facts that matter to *this* doc (from source, 2026-08-06):
+
+- Session pods pin to a node pool via `nodeSelector` in the CR; the CRD has
+  **no tolerations passthrough yet**, so a tainted dedicated pool can't work
+  until that's added (trivial operator change).
+- Session pods run non-privileged with **all capabilities dropped** by default
+  (`capabilities.add` in the CR to grant more). Note: this fork's
+  container-init images need CHOWN/SETUID/SETGID/DAC_OVERRIDE etc. (see
+  `security-model.md` §4c) — stock uid-1000 images run capless.
+- The operator sets **no seccomp or AppArmor fields** on session pods. On a
+  kubelet without `seccompDefault: true` that means session containers run
+  seccomp-**Unconfined** — *weaker than the Docker default*, and the
+  per-workspace `chrome.json`/`bwrap.json` + AppArmor posture from
+  `security-model.md` has no k8s expression yet (needs
+  `securityContext.seccompProfile` localhostProfile + profiles shipped to
+  nodes). Until that lands, Tetragon's §3.3 kernel-surface policies are
+  watching a surface that is genuinely open, not blocked — treat hits
+  accordingly, and treat this as a prevention gap to raise.
 
 ## 6. Data handling, privacy, access
 
@@ -277,8 +298,8 @@ until that lands. (Status table tracks this as a hard gate.)
 
 ## 8. Open questions
 
-1. Where do sessions actually run today — is CIVO the only session substrate,
-   or do Docker agent hosts need §5 standalone coverage from the start?
+1. ~~Where do sessions actually run today?~~ **Answered 2026-08-06:**
+   in-cluster on CIVO via the dev kasm-kubernetes-operator (§5).
 2. A1.Flex capacity in-region — or straight to E4.Flex burstable?
 3. Alert destination — Slack channel name / routing conventions?
 4. Does the customer running Tetragon want to compare policy sets? (Their
