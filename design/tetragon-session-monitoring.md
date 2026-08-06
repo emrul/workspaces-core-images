@@ -232,24 +232,40 @@ Tetragon (docker/systemd mode, same policies, container-label attribution)
 remains the shape for any non-k8s Docker hosts we later put sessions on
 (forge, GPU test host) — currently none planned.
 
-Operator facts that matter to *this* doc (from source, 2026-08-06):
+Operator facts that matter to *this* doc (from source, corrected 2026-08-06 —
+an earlier revision wrongly claimed no seccomp/AppArmor support; that was read
+off the older standalone `KasmWorkspace` path on `main`). The repo carries two
+generations:
 
-- Session pods pin to a node pool via `nodeSelector` in the CR; the CRD has
-  **no tolerations passthrough yet**, so a tainted dedicated pool can't work
-  until that's added (trivial operator change).
-- Session pods run non-privileged with **all capabilities dropped** by default
-  (`capabilities.add` in the CR to grant more). Note: this fork's
-  container-init images need CHOWN/SETUID/SETGID/DAC_OVERRIDE etc. (see
-  `security-model.md` §4c) — stock uid-1000 images run capless.
-- The operator sets **no seccomp or AppArmor fields** on session pods. On a
-  kubelet without `seccompDefault: true` that means session containers run
-  seccomp-**Unconfined** — *weaker than the Docker default*, and the
-  per-workspace `chrome.json`/`bwrap.json` + AppArmor posture from
-  `security-model.md` has no k8s expression yet (needs
-  `securityContext.seccompProfile` localhostProfile + profiles shipped to
-  nodes). Until that lands, Tetragon's §3.3 kernel-surface policies are
-  watching a surface that is genuinely open, not blocked — treat hits
-  accordingly, and treat this as a prevention gap to raise.
+- **Standalone `KasmWorkspace` operator** (`main`): `nodeSelector` yes /
+  tolerations no; caps drop ALL by default (`capabilities.add` to grant);
+  no seccomp on the workspace container.
+- **`kasm-agent`** (dev branches `refactor/shared-manifest-builders`,
+  `feature/DEV-228-k8s-agent-egress`) — the Kasm-managed-session path, and
+  the one that matters going forward. It translates the registry `run_config`
+  into the pod securityContext:
+  - `security_opt seccomp=` → inline profile content-hashed (sha256) into a
+    shared `kasm-seccomp-profiles` ConfigMap; a **seccomp-installer
+    DaemonSet** mirrors keys onto every node as `<SECCOMP_DIR>/kasm/<hash>.json`;
+    the pod gets `seccompProfile: {type: Localhost, localhostProfile: kasm/<hash>.json}`.
+    Profiles are **pre-staged at heartbeat time** so first launch doesn't race
+    the installer. So the per-workspace `chrome.json`/`bwrap.json` posture
+    from `security-model.md` **does** carry to k8s sessions.
+  - AppArmor: `build_apparmor_profile(run_config)` → `appArmorProfile` on the
+    container context.
+  - caps from run_config `cap_add`/`cap_drop`; `runAsUser: 0` (container-init
+    compatible by design); `nodeSelector` built from the agent
+    `include_labels` mechanism → node-pool targeting works via existing Kasm
+    agent-label conventions.
+- **Residual nuance to verify:** `build_seccomp_profile` returns nothing when
+  the run_config has no `seccomp=` entry, so images *without* a custom profile
+  fall through to the cluster default — **Unconfined** unless the kubelet sets
+  `seccompDefault: true` (or the builder grows a RuntimeDefault fallback).
+  Check the CIVO kubelet config; this decides whether Tetragon's §3.3
+  kernel-surface hits mean "blocked attempt" or "open surface" for
+  profile-less images. For images *with* tight profiles, §3.3 hits are
+  attempts against a closed door — high-signal either way, but severity
+  triage differs per workspace.
 
 ## 6. Data handling, privacy, access
 
