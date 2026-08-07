@@ -433,10 +433,35 @@ arrival (one session / 20 s), drive-on-arrival, sustained peak sampling.
 | `max_kasms_per_user` | group_settings ("All Users") | 5 | raised to 20 |
 | **concurrent-session LICENSE limit** | Kasm license entitlement | **5** | **hard ceiling — not bypassed** |
 
-So **peak concurrency on this deployment is 5** ("Per concurrent session license
-limit exceeded" at the 6th). Testing the 18-session peak needs a license with
-≥18 concurrent seats; everything else (CPU oversubscription, slots, per-user cap)
-is already provisioned for it.
+So peak concurrency was initially capped at **5** ("Per concurrent session
+license limit exceeded" at the 6th). **Resolved 2026-08-07** — dev team issued a
+license (tied to installation `570a0983-aa94-4d0b-a86b-620141d493fd`) with more
+seats; the 18-session run then went through with everything else already
+provisioned.
+
+**18-session peak (firefox, 8 tabs, staggered ramp, all driven) — 2026-08-07:**
+
+| metric | value |
+|---|---|
+| fleet | **18 sessions, 0 failures, 0 pending** |
+| distribution | **exactly 6/node** (k8s balanced across all 3) |
+| total `memory.current` | 40.4 GB cluster-wide (~13.8 GB/node ≈ 51% of ~27 GB allocatable) |
+| per-session | ~2.3 GB (anon ~1.6 GB), tightly clustered |
+| cpu | 300m request/session (6×=1.8 cores/node requested), bursting via Shares |
+| **swap / zswap** | **0 / 0 on every session** |
+
+**Conclusions from the peak:**
+- The CPU-oversubscription design **works at the target peak** — 18 sessions
+  placed 6/node purely because the request is 300m (not the 2-core label);
+  Shares keeps them burstable. Without it (2-core requests) only ~1/node fit.
+- **Memory is comfortably not the constraint** even at full peak: ~51% RAM/node,
+  and **zswap never engaged** — each session stays under its 2.77 GB cap and
+  nodes have ~13 GB free. Compressed memory buys nothing at this (light-desktop)
+  density; it is a graceful-degradation cushion for heavy *per-session* memory
+  (§6.2 cap-sweep), not a lever for raw concurrency.
+- Net: on this fleet, the achievable peak is bounded by **CPU + license**, not
+  memory. The 3×`g4m.kube.medium` pool holds the 18-session peak with RAM to
+  spare.
 
 **5-session peak (firefox, 8 tabs each, staggered ramp):**
 
