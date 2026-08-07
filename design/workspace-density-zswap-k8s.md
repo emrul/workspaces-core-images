@@ -482,6 +482,52 @@ i.e. the §6.2 W2 cap-sweep, not the raw session count. A realistic peak of 18
 light sessions would still sit comfortably in RAM (~40 GB / 81 GB) and not
 compress.
 
+### 6.0c Page-cache sharing — definitive proof (2026-08-07)
+
+The recurring "co-located sessions share `/nix/store` file pages" claim is now
+**proven at the physical-page level**, and the mechanism clarified.
+
+**Two different mechanisms — only one is ours:**
+- **File-backed page cache (what we rely on):** when N processes `mmap` the same
+  file (same underlying inode), the kernel maps the *same physical pages* into
+  each address space. Automatic, read-only, **needs no `madvise`**. This is how
+  co-located sessions share the read-only image — system libs *and* the nix
+  store — via overlayfs's shared lower layers.
+- **KSM / `madvise(MADV_MERGEABLE)`:** deduplicates identical *anonymous* pages
+  (heaps). Opt-in per process. This is a *different* thing and is **not** what
+  gives the nix benefit; it would only help the per-session anon working set
+  (the ~1.6 GB browser heap), and only if enabled.
+
+**Proof ladder run on 2 co-located tracelabs sessions (firefox driven), node
+6n69d, via a privileged hostPID probe:**
+1. **KSM is off** (`/sys/kernel/mm/ksm/run=0`, `pages_sharing=0`) → any sharing
+   observed is file-cache, not anonymous merge.
+2. **Same inode:** both firefox procs map `libxul.so` from the same nix-store
+   path, inode **2073131** — identical, though the overlay *device* differs per
+   container (`00:117` vs `00:144`); the page cache keys on the lower inode.
+3. **Identical physical page frames (the irrefutable test):** reading
+   `/proc/<pid>/pagemap` for the two procs' `libxul.so` mappings →
+   **8/8 sampled PFNs identical** (`0x4f8277`, `0x4f8ef6`, …). Same physical
+   RAM, two containers.
+4. **Magnitude:** each firefox proc shows **~162 MB `Shared_Clean`** and
+   **Pss ≈355 MB < Rss ≈482 MB** — the RSS/PSS gap is the shared file pages,
+   and it grows with every co-located session. Consistent with the §6.0 idle
+   finding (2nd session cost ~341 MB node RAM vs a 781 MB cgroup).
+
+**How to reproduce / definitively demonstrate (general method):**
+- `ksm/run` must be 0 to attribute sharing to the page cache.
+- `/proc/<pid>/maps`: same **inode** for the mapped lib across pods (device may
+  differ under overlayfs — compare inode, not device).
+- `/proc/<pid>/pagemap` → PFN per virtual page (needs `CAP_SYS_ADMIN`, so read
+  from a privileged hostPID pod, not the session container which zeroes PFNs);
+  **identical PFN = same physical page** — the gold standard.
+- `smaps_rollup` **Pss vs Rss** and `Shared_Clean` quantify the shared bytes;
+  aggregate `Σ Pss ≪ Σ Rss` across the fleet is the density statement.
+- A/B: compare marginal node RAM per session for the shared-store image vs a
+  per-pod-copy (non-overlay-shared) store — the delta is the benefit.
+Harness/probe scripts: `runs/chrome-density/` (`kasm-loadtest.sh`, ad-hoc
+pagemap probe).
+
 ### 6.1 W1 idle — cap sweep
 
 | cap | zswap | real RAM/sess | resident anon | zswap pool | swap used | ratio | cgPSI full10 | sess/node | → sess/100 GB |
