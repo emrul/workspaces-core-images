@@ -102,18 +102,19 @@ METRIC_SCRIPT='
   printf "{\"mem_current\":%s,\"swap_current\":%s,\"swap_max\":%s,\"zswap_current\":%s,\"anon\":%s,\"file\":%s,\"zswpout\":%s,\"cpu_usage_usec\":%s}" \
     "${mc:-0}" "${sc:-0}" "${smax:-0}" "${zc:-0}" "${anon:-0}" "${file:-0}" "${zout:-0}" "${cpu:-0}"
 '
-T0=$(date +%s)
-snap_one(){ # snap_one <kasm_id> <pod> <fleet_size> — one time-series row
-  local kid="$1" p="$2" fleet="$3" node raw t; t=$(( $(date +%s) - T0 ))
+T0=$(date +%s); ROUND=0
+snap_one(){ # snap_one <kasm_id> <pod> <fleet_size> <round> — one time-series row
+  local kid="$1" p="$2" fleet="$3" round="$4" node raw t; t=$(( $(date +%s) - T0 ))
   node="$(kubectl get pod -n "$NAMESPACE" "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null || true)"
   raw="$(kubectl exec -n "$NAMESPACE" "$p" -- sh -c "$METRIC_SCRIPT" 2>/dev/null || true)"
   [ -n "$raw" ] || return 0
-  echo "$raw" | jq -c --arg kid "$kid" --arg pod "$p" --arg node "$node" --argjson t "$t" --argjson fleet "$fleet" \
-       '. + {kasm_id:$kid, pod:$pod, node:$node, t_s:$t, fleet:$fleet}' >> "$OUT" 2>/dev/null || true
+  echo "$raw" | jq -c --arg kid "$kid" --arg pod "$p" --arg node "$node" \
+       --argjson t "$t" --argjson fleet "$fleet" --argjson round "$round" \
+       '. + {kasm_id:$kid, pod:$pod, node:$node, t_s:$t, fleet:$fleet, round:$round}' >> "$OUT" 2>/dev/null || true
 }
-sample_fleet(){ # snapshot every launched+Running session, tagged with current fleet size
-  local n="${#LAUNCHED[@]}" kid
-  for kid in "${LAUNCHED[@]}"; do [ -n "${POD[$kid]:-}" ] && snap_one "$kid" "${POD[$kid]}" "$n"; done
+sample_fleet(){ # snapshot every launched+Running session; one monotonic round per call
+  local n="${#LAUNCHED[@]}" kid; ROUND=$((ROUND+1))
+  for kid in "${LAUNCHED[@]}"; do [ -n "${POD[$kid]:-}" ] && snap_one "$kid" "${POD[$kid]}" "$n" "$ROUND"; done
 }
 
 # ── 1. RAMP: staggered arrival, drive-on-arrival, sample after each ───────────
@@ -140,12 +141,12 @@ for s in $(seq 1 "$PEAK_SAMPLES"); do sleep "$PEAK_INTERVAL"; sample_fleet; log 
 # ── 3. summary — the final (peak) sample ──────────────────────────────────────
 echo "================= load-test summary (peak) =================" >&2
 jq -s -r '
-  (max_by(.t_s).t_s) as $tmax | map(select(.t_s==$tmax)) as $peak |
+  (max_by(.round).round) as $rmax | map(select(.round==$rmax)) as $peak |
   ($peak|map(.mem_current)|add // 0) as $mem |
   ($peak|map(.swap_current)|add // 0) as $swp |
   ($peak|map(.zswap_current)|add // 0) as $zsw |
   "browser         : '"$BROWSER"'",
-  "peak fleet      : \($peak|length) sessions (t=\($tmax)s)",
+  "peak fleet      : \($peak|length) sessions (round \($rmax))",
   "total mem_current : \(($mem/1048576)|floor) MiB",
   "total swap used   : \(($swp/1048576)|floor) MiB  (compressed spill)",
   "total zswap pool  : \(($zsw/1048576)|floor) MiB",
