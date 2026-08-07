@@ -11,10 +11,8 @@
 #   4. settle, then snapshot per-session cgroup metrics (memory / swap / zswap /
 #      cpu, memory.stat reclaim counters) -> JSONL  (PSI is unavailable on CIVO,
 #      so we use wall-clock + memory.stat, per the design doc §5 correction)
-#   5. (optional) teardown: delete the KasmWorkspace CRs for the launched ids
-#
-# This fork's /api/public has no destroy_kasm, so teardown is CR deletion
-# (kubectl); Kasm reconciles the session records on the next agent heartbeat.
+#   5. (optional) teardown: destroy each session via /api/public/destroy_kasm
+#      (the Kasm-consistent path; never CR deletion, which orphans the record).
 #
 # Required env:
 #   KASM_API_URL     e.g. https://tracelabs.kasm.com
@@ -110,31 +108,32 @@ sleep "$SETTLE"
 # ── 4. snapshot per-session cgroup metrics ────────────────────────────────────
 log "sampling per-session metrics -> ${OUT}"
 : > "$OUT"
-snap_one(){ # snap_one <kasm_id> <pod>
-  local kid="$1" p="$2"
-  kubectl exec -n "$NAMESPACE" "$p" -- sh -c '
-    mc=$(cat /sys/fs/cgroup/memory.current 2>/dev/null||echo 0)
-    mmax=$(cat /sys/fs/cgroup/memory.max 2>/dev/null||echo 0)
-    sc=$(cat /sys/fs/cgroup/memory.swap.current 2>/dev/null||echo 0)
-    smax=$(cat /sys/fs/cgroup/memory.swap.max 2>/dev/null||echo 0)
-    zc=$(cat /sys/fs/cgroup/memory.zswap.current 2>/dev/null||echo 0)
-    anon=$(awk "/^anon /{print \$2}" /sys/fs/cgroup/memory.stat 2>/dev/null||echo 0)
-    file=$(awk "/^file /{print \$2}" /sys/fs/cgroup/memory.stat 2>/dev/null||echo 0)
-    pswpin=$(awk "/^pswpin /{print \$2}" /sys/fs/cgroup/memory.stat 2>/dev/null||echo 0)
-    pswpout=$(awk "/^pswpout /{print \$2}" /sys/fs/cgroup/memory.stat 2>/dev/null||echo 0)
-    zin=$(awk "/^zswpin /{print \$2}" /sys/fs/cgroup/memory.stat 2>/dev/null||echo 0)
-    zout=$(awk "/^zswpout /{print \$2}" /sys/fs/cgroup/memory.stat 2>/dev/null||echo 0)
-    cpu=$(awk "/^usage_usec/{print \$2}" /sys/fs/cgroup/cpu.stat 2>/dev/null||echo 0)
-    printf "{\"mem_current\":%s,\"mem_max\":\"%s\",\"swap_current\":%s,\"swap_max\":%s,\"zswap_current\":%s,\"anon\":%s,\"file\":%s,\"pswpin\":%s,\"pswpout\":%s,\"zswpin\":%s,\"zswpout\":%s,\"cpu_usage_usec\":%s}" \
-      "$mc" "$mmax" "$sc" "$smax" "$zc" "$anon" "$file" "$pswpin" "$pswpout" "$zin" "$zout" "$cpu"
-  ' 2>/dev/null | jq -c --arg kid "$kid" --arg pod "$p" \
-       --arg node "$(kubectl get pod -n "$NAMESPACE" "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null)" \
-       '. + {kasm_id:$kid, pod:$pod, node:$node}' >> "$OUT" 2>/dev/null || true
+METRIC_SCRIPT='
+  mc=$(cat /sys/fs/cgroup/memory.current 2>/dev/null||echo 0)
+  sc=$(cat /sys/fs/cgroup/memory.swap.current 2>/dev/null||echo 0)
+  smax=$(cat /sys/fs/cgroup/memory.swap.max 2>/dev/null||echo 0)
+  zc=$(cat /sys/fs/cgroup/memory.zswap.current 2>/dev/null||echo 0)
+  # awk with END-default so a non-matching line yields 0 (not empty → invalid JSON).
+  # pswpin/pswpout are NOT cgroup v2 memory.stat fields (they are /proc/vmstat);
+  # zswpin/zswpout + swap.current are the per-cgroup swap/zswap signals we use.
+  anon=$(awk "/^anon /{print \$2; f=1} END{if(!f)print 0}" /sys/fs/cgroup/memory.stat 2>/dev/null)
+  file=$(awk "/^file /{print \$2; f=1} END{if(!f)print 0}" /sys/fs/cgroup/memory.stat 2>/dev/null)
+  zin=$(awk "/^zswpin /{print \$2; f=1} END{if(!f)print 0}" /sys/fs/cgroup/memory.stat 2>/dev/null)
+  zout=$(awk "/^zswpout /{print \$2; f=1} END{if(!f)print 0}" /sys/fs/cgroup/memory.stat 2>/dev/null)
+  cpu=$(awk "/^usage_usec/{print \$2; f=1} END{if(!f)print 0}" /sys/fs/cgroup/cpu.stat 2>/dev/null)
+  printf "{\"mem_current\":%s,\"swap_current\":%s,\"swap_max\":%s,\"zswap_current\":%s,\"anon\":%s,\"file\":%s,\"zswpin\":%s,\"zswpout\":%s,\"cpu_usage_usec\":%s}" \
+    "${mc:-0}" "${sc:-0}" "${smax:-0}" "${zc:-0}" "${anon:-0}" "${file:-0}" "${zin:-0}" "${zout:-0}" "${cpu:-0}"
+'
+snap_one(){ # snap_one <kasm_id> <pod> — node/raw captured to vars first (robust under set -e)
+  local kid="$1" p="$2" node raw
+  node="$(kubectl get pod -n "$NAMESPACE" "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null || true)"
+  raw="$(kubectl exec -n "$NAMESPACE" "$p" -- sh -c "$METRIC_SCRIPT" 2>/dev/null || true)"
+  if [ -z "$raw" ]; then log "  WARN: no metrics from $p"; return 0; fi
+  echo "$raw" | jq -c --arg kid "$kid" --arg pod "$p" --arg node "$node" \
+       '. + {kasm_id:$kid, pod:$pod, node:$node}' >> "$OUT" 2>/dev/null \
+    || log "  WARN: jq parse failed for $p ($raw)"
 }
 for kid in "${LAUNCHED[@]}"; do [ -n "${POD[$kid]:-}" ] && snap_one "$kid" "${POD[$kid]}"; done
-
-# node-level swap/zswap totals (one privileged read per node the sessions landed on)
-NODES="$(kubectl get pods -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.labels.kasm\.kasmid}{" "}{.spec.nodeName}{"\n"}{end}' 2>/dev/null | awk 'NR>0 && $1!=""{print $2}' | sort -u)"
 
 # ── 5. summary ────────────────────────────────────────────────────────────────
 echo "================= load-test summary =================" >&2
@@ -153,14 +152,15 @@ jq -s -r '
 echo "raw JSONL: $OUT" >&2
 echo "=====================================================" >&2
 
-# ── 6. teardown (opt-in) ──────────────────────────────────────────────────────
+# ── 6. teardown (opt-in) — via the Kasm destroy_kasm API, not CR deletion ─────
 if [ "$TEARDOWN" = "1" ]; then
-  log "TEARDOWN=1 : deleting KasmWorkspace CRs for launched sessions"
+  log "TEARDOWN=1 : destroying sessions via /api/public/destroy_kasm"
   for kid in "${LAUNCHED[@]}"; do
-    cr="$(kubectl get kasmworkspaces -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.labels.kasm\.kasmid}{"\n"}{end}' 2>/dev/null | awk -v k="$kid" '$2==k{print $1}')"
-    [ -n "$cr" ] && kubectl delete kasmworkspace -n "$NAMESPACE" "$cr" --wait=false >/dev/null 2>&1 && log "  deleted CR $cr ($kid)"
+    resp="$(api destroy_kasm "$(jq -cn --arg u "$KASM_USER_ID" --arg kid "$kid" '{user_id:$u, kasm_id:$kid}')")"
+    err="$(echo "$resp" | jq -rc '.error_message // empty' 2>/dev/null || true)"
+    if [ -n "$err" ]; then log "  WARN destroy $kid: $err"; else log "  destroyed $kid"; fi
   done
 else
-  log "sessions left running (set TEARDOWN=1 to auto-delete). To clean up:"
-  log "  kubectl get kasmworkspaces -n $NAMESPACE   # then kubectl delete kasmworkspace <name>"
+  log "sessions left running (set TEARDOWN=1 to destroy via API). To clean up manually:"
+  log "  curl -sk -X POST $KASM_API_URL/api/public/destroy_kasm -d '{api_key,api_key_secret,user_id,kasm_id}'"
 fi
