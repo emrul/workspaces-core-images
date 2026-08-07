@@ -418,6 +418,45 @@ scroll FPS). The N where `some avg10` crosses ~20–30% sustained is the real
 **active** sessions/node — expect it well below the idle packing number. Report
 both; the honest density figure for interactive use is the active one.
 
+### 6.0b Load-harness run + the concurrency-limit stack (2026-08-07)
+
+Harness `runs/chrome-density/kasm-loadtest.sh` (Kasm Developer API launch →
+pod correlation via `kasm.kasmid` label → `nix-launch firefox` drive →
+per-session cgroup time-series → `destroy_kasm` teardown). Ramp mode: staggered
+arrival (one session / 20 s), drive-on-arrival, sustained peak sampling.
+
+**Attempting 18 concurrent revealed three stacked caps, hit in order:**
+
+| limit | where | was | action |
+|---|---|---|---|
+| server `max_simultaneous_sessions` | `servers` row (auto-registered k8s agent default) | 1 | raised to 30 |
+| `max_kasms_per_user` | group_settings ("All Users") | 5 | raised to 20 |
+| **concurrent-session LICENSE limit** | Kasm license entitlement | **5** | **hard ceiling — not bypassed** |
+
+So **peak concurrency on this deployment is 5** ("Per concurrent session license
+limit exceeded" at the 6th). Testing the 18-session peak needs a license with
+≥18 concurrent seats; everything else (CPU oversubscription, slots, per-user cap)
+is already provisioned for it.
+
+**5-session peak (firefox, 8 tabs each, staggered ramp):**
+
+| metric | value |
+|---|---|
+| per-session `memory.current` | ~2.3 GB (anon ~1.6 GB) |
+| total across fleet | 11.3 GB over 3 nodes (~3.8 GB/node) |
+| node spread | 1 / 2 / 2 (k8s balanced) |
+| cpu request / actual | 300m request (oversubscribed), bursting via Shares |
+| **swap used / zswap pool** | **0 / 0** |
+
+**zswap armed but did not engage** — each session (~2.3 GB) stays under its
+2.77 GB cap, and nodes sit at ~11 GB of ~27 GB RAM, so there is no memory
+pressure to reclaim. This re-confirms §6.0: at achievable density **memory is
+not the constraint** (CPU is, which is why we oversubscribed). zswap only earns
+its keep under much heavier *per-session* memory (more tabs, or a lower cap) —
+i.e. the §6.2 W2 cap-sweep, not the raw session count. A realistic peak of 18
+light sessions would still sit comfortably in RAM (~40 GB / 81 GB) and not
+compress.
+
 ### 6.1 W1 idle — cap sweep
 
 | cap | zswap | real RAM/sess | resident anon | zswap pool | swap used | ratio | cgPSI full10 | sess/node | → sess/100 GB |
