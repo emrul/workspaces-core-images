@@ -1,0 +1,97 @@
+# Tetragon values — CIVO kasm-tracelabs (phx1)
+# Per design/tetragon-session-monitoring.md §2.2, tuned to preflight findings:
+#   nodes: Alpine 3.22, kernel 6.12.85-0-lts, BTF present (4.86MB)
+#   LSMs:  lockdown,capability,landlock,yama  -- NO AppArmor
+#   CRI:   /run/k3s/containerd/containerd.sock only
+#   disk:  /var/lib on /dev/vda ext4 (root fs), 73-79% USED, 15-19GB free
+#
+# STAGE 1 INSTALL: the export allowlist matches ONLY a synthetic test label.
+# Real user sessions are live on this cluster and must not be captured until the
+# §6.1 privacy gate passes. Widen the allowlist deliberately, not by default.
+
+# Disk-backed. /run is tmpfs (6.0G) on these nodes -- do NOT export there.
+exportDirectory: /var/lib/tetragon/export
+
+# Chart default is "stdout", which duplicates every event into pod logs.
+export:
+  mode: ""
+
+tetragon:
+  image:
+    tag: v1.7.0
+
+  extraArgs:
+    # KEEP QUOTED. Unquoted YAML false makes the chart emit the bare flag,
+    # which pflag reads as true -- the exact inverse.
+    enable-process-environment-variables: "false"
+
+  # File-export filters are per-request and do not constrain gRPC clients.
+  grpc:
+    enabled: false
+
+  # Unauthenticated node-loopback diagnostic surfaces (hostNetwork).
+  # gops is also a control channel (forced GC, GC percent) into the agent.
+  gops:
+    enabled: false
+  pprof:
+    enabled: false
+
+  # Kill switch (§2.6) depends on sensors unloading on exit.
+  # false renders NO configmap key -- assert absence, not "false".
+  enableKeepSensorsOnExit: false
+
+  resources:
+    requests: {cpu: 250m, memory: 256Mi}
+    limits:   {cpu: "1",  memory: 1Gi}
+
+  exportFilename: tetragon.log
+  exportFilePerm: "600"
+  # REDUCED from the design's 100x20 (=2.1GB/node). These nodes are at 73-79%
+  # disk on the root filesystem that also holds container images. 50x10 = ~550MB
+  # peak per node. Revisit against §4 measurements before widening.
+  exportFileMaxSizeMB: 50
+  exportFileMaxBackups: 10
+  exportFileCompress: false
+  exportRateLimit: -1
+
+  # STAGE 2 (2026-08-08, authorised): widened to live session pods.
+  #
+  # `kasm.kasmid` is an Exists selector -- a bare label KEY, so no session
+  # identifier enters this configuration. It exists on every session pod today
+  # (verified: kasm.kasmid=<canonical uuid>), so this needs no operator change.
+  # The `kasm.com/session=true` label remains the cleaner long-term selector
+  # because it is a boolean and survives session-ID format changes.
+  exportAllowList: |-
+    {"labels":["kasm.kasmid"],"event_set":["PROCESS_EXEC","PROCESS_EXIT","PROCESS_KPROBE","PROCESS_TRACEPOINT","PROCESS_UPROBE","PROCESS_LSM"]}
+    {"labels":["kasm.com/tetragon-privacy-test=true"],"event_set":["PROCESS_EXEC","PROCESS_EXIT","PROCESS_KPROBE","PROCESS_TRACEPOINT","PROCESS_UPROBE","PROCESS_LSM"]}
+
+  exportDenyList: |-
+    {"health_check":true}
+
+  # Unknown FieldMask paths fail silently -- §7.2 asserts on exported JSON
+  # structure, not on planted values alone.
+  fieldFilters: |-
+    {"fields":"process.arguments,process.environment_variables,parent.arguments,parent.environment_variables,ancestors.arguments,ancestors.environment_variables","action":"EXCLUDE"}
+    {"fields":"process.cwd,parent.cwd,ancestors.cwd","action":"EXCLUDE"}
+    {"fields":"process.pod.pod_labels,parent.pod.pod_labels,ancestors.pod.pod_labels","action":"EXCLUDE"}
+    {"fields":"process.pod.pod_annotations,parent.pod.pod_annotations,ancestors.pod.pod_annotations","action":"EXCLUDE"}
+    {"fields":"node_labels","action":"EXCLUDE"}
+
+  # Source-level: the only redaction covering the process cache. Capture groups
+  # only -- these do not make argv safe.
+  redactionFilters: |-
+    {"redact":["(?:--(?:auth-)?token(?:\\s+|=))([^\\s]+)","(?:kasm_(?:user|viewer):)([^\\s]+)","(?:[?&]token=)([^\\s&]+)","(?:VNC_(?:VIEW_ONLY_)?PW=)([^\\s]+)","(?:KASM_API_[A-Z0-9_]+=)([^\\s]+)","(?:[Pp]assword(?:\\s+|=))([^\\s]+)","(?:[Aa]uthorization:\\s*(?:(?:Bearer|Basic)\\s+)?)([^\\s]+)"]}
+
+  clusterName: civo-phx1
+  enableK8sAPI: true
+  enablePolicyFilter: true
+  processAncestors:
+    enabled: "base,kprobe"
+
+  prometheus:
+    enabled: true
+    port: 2112
+    # NOT "namespace,workload": workload is the Deployment name, which carries
+    # the session fragment -- that would copy identifiers into the metrics plane
+    # and create one series per session, bypassing the JSON field filters.
+    metricsLabelFilter: "namespace"

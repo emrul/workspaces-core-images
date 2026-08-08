@@ -1,331 +1,410 @@
-# Tetragon session monitoring — runtime detection for Kasm workspaces
+# Tetragon session monitoring
 
-Audience: engineers building/operating the observability spike, and reviewers of
-the security posture. This is a **living document** — update the Status table
-and Decision log as the work moves; do not let it fossilize into a proposal
-nobody re-reads.
+Runtime detection for Kasm workspace sessions. This documents **what is built,
+what it does, and why it is configured the way it is** — so that changes are
+deliberate rather than rediscovered.
 
-> TL;DR — Tetragon (eBPF, from the Cilium project) runs as a DaemonSet on the
-> CIVO cluster and observes every process/syscall event inside Kasm session
-> containers. Events ship to a small OCI VM running Loki + Grafana, where alert
-> rules fire on suspicious activity (escape attempts, docker.sock access,
-> reverse shells, miners). This is the **detection layer** for the Model B
-> threat in `design/security-model.md` — that doc is all prevention; this one
-> watches whether prevention holds, and turns its §8 one-off audit probes into
-> standing checks.
+If you are changing this system, read §5 first. Most of the configuration here
+looks arbitrary and is not; several settings fail *silently* when changed.
 
 ---
 
-## 0. Status
+## 1. Purpose
 
-| Item | State | Updated |
+Kasm here is shared hosting: each user gets a containerised desktop on
+infrastructure shared with other users. Two duties follow:
+
+1. **Protect the host and co-tenants** — a container escape, runtime-socket
+   connect, or kernel-surface probe from one session threatens every other
+   session on that node.
+2. **Detect abusive use of the service** — mining, outbound scanning, spam
+   relay. This is contained *within* a session, so containment controls never
+   fire; it has to be observed.
+
+Both require attributing an action to a session. `design/security-model.md`
+covers the preventive side; this is the detection side.
+
+**What Tetragon is not.** It is not a syscall log. It sees the event types its
+base sensors emit plus the hooks in loaded policies. A syscall rejected by
+seccomp never reaches a downstream kprobe, so *absence of an event is not
+evidence of prevention*.
+
+---
+
+## 2. What is deployed
+
+Tetragon **v1.7.0** as a DaemonSet on the CIVO cluster `kasm-tracelabs`
+(region `phx1`), namespace `kube-system`, helm release `tetragon`.
+
+```
+CIVO phx1 (3 nodes)                     [NOT BUILT YET]
+┌──────────────────────────────┐        ┌──────────────────────┐
+│ Tetragon DaemonSet           │        │ OCI VM "obs-1"       │
+│  → /var/lib/tetragon/export/ │  ────► │  Loki + Grafana      │
+│    tetragon.log (0600)       │ Alloy  │  Prometheus (health) │
+└──────────────────────────────┘        └──────────────────────┘
+```
+
+Today the pipeline stops at the node-local file. Nothing leaves the cluster.
+
+### Verified node facts (2026-08-08)
+
+| | |
+|---|---|
+| Nodes | 3 × `g4m.kube.medium`, Alpine Linux 3.22 |
+| Kernel | `6.12.85-0-lts` — clears ≥5.11 (`sockaddr_un`) and ≥6.1 (`security_create_user_ns`) |
+| BTF | `/sys/kernel/btf/vmlinux` present, 4.86 MB — Tetragon's hard gate |
+| LSMs | `lockdown,capability,landlock,yama` — **no AppArmor, no SELinux, no BPF LSM** |
+| CRI socket | `/run/k3s/containerd/containerd.sock` — the *only* one present |
+| `/run` | tmpfs, 6.0 GB — **never export here** |
+| `/var/lib` | `/dev/vda` ext4, root filesystem, **74–79% used**, 15–19 GB free |
+| Listeners | `:2112` metrics, `:6789` gRPC health. No event socket, gops, or pprof |
+
+### Session selection
+
+Session pods carry `kasm.kasmid=<canonical uuid>` at creation. The export
+allowlist and every policy select on that key's **existence**:
+
+```
+kubectl get pods -A -l kasm.kasmid
+```
+
+A bare label *key* is an Exists selector, so no session identifier enters the
+configuration. Pods do **not** carry `kasm.com/kasm-id` — that label is on the
+`KasmWorkspace` CR only.
+
+Pod names look like `kws-trace-la-080004eacdd0-deploy-<rs>-<suffix>`:
+`kws-{img8}-{id12}`, where `id12` is `kasm_id.replace("-","")[:12]`. On this
+deployment there is **no username fragment** — the `kws-{user8}-{img8}-{id12}`
+form requires `KASM_USER` populated. Attribution therefore reaches the *session*,
+and resolving a session to an account is currently manual.
+
+### Measured volume (base sensors only, no policies loaded)
+
+| Node | Events | Window | Rate | Bytes/event | Per hour |
+|---|---:|---:|---:|---:|---:|
+| ...6n69d | 1552 | 15m37s | 1.66/s | 8.8 KB | ~52 MB |
+| ...r818z | 509 | 6m36s | 1.29/s | 6.6 KB | ~30 MB |
+| ...d6463 | 288 | 36m38s | 0.13/s | 5.5 KB | ~2.6 MB |
+
+~85 MB/hour cluster-wide ≈ 2 GB/day ≈ 29 GB raw per 14 days. The 550 MB/node
+buffer gives ~10 hours at peak, well beyond the 30-minute outage target, and
+rotation caps on-disk use so a shipper outage cannot fill the node disk.
+
+Events are large (5.5–8.8 KB). Drivers: base64 `exec_id`s, pod metadata repeated
+across `process`/`parent`/`ancestors`, and a 558-byte `node_labels` blob (§5.4).
+
+---
+
+## 3. Configuration
+
+Live values: `values-tetragon.yaml` (see §7 — needs a permanent home).
+Deployed via a helm post-renderer plugin, **not** `--post-renderer <path>`.
+
+```bash
+helm upgrade --install tetragon cilium/tetragon --version 1.7.0 \
+  -n kube-system -f values-tetragon.yaml \
+  --post-renderer tetragon-postrender --wait
+```
+
+The settings that matter, and why:
+
+| Setting | Value | Why |
 |---|---|---|
-| Design agreed | ✅ this doc | 2026-08-04 |
-| Tetragon installed on CIVO | ☐ not started | |
-| BTF/kernel compat verified (`tetra status`) | ☐ | |
-| Baseline noise measured (events/session/hour) | ☐ | |
-| Redaction filters enabled | ☐ **gate for shipping any real data** | |
-| OCI VM stood up (Loki+Grafana) | ☐ | |
-| Shipper (Alloy) wired CIVO → OCI | ☐ | |
-| Starter policies deployed | ☐ | |
-| Alert rules live (docker.sock, userns) | ☐ | |
-| Red-team validation passed (§7 step 4) | ☐ | |
-| Legal/compliance sign-off for real users | ☐ **gate — see §6.3** | |
-| Enforcement (Sigkill) considered | ☐ deliberately last | |
+| `exportDirectory` | `/var/lib/tetragon/export` | Top-level key, **not** under `tetragon:`. `/run` is tmpfs — exporting there spends node RAM and loses data on reboot |
+| `export.mode` | `""` | Disables the stdout sidecar, which would duplicate every event into pod logs |
+| `tetragon.grpc.enabled` | `false` | File filters are **per-request**; a gRPC client supplying empty filters reads everything, including argv |
+| `tetragon.gops.enabled` | `false` | Unauthenticated node-loopback surface under hostNetwork; also a *control* channel (forced GC) into the agent |
+| `tetragon.pprof.enabled` | `false` | Same class of surface |
+| `enableKeepSensorsOnExit` | `false` | Kill switch depends on sensors unloading on exit |
+| `exportFilePerm` | `"600"` | Reader runs as UID 0 with all capabilities dropped |
+| `exportFileMaxSizeMB/Backups` | `50` / `10` | ~550 MB/node. Reduced from 100×20 because `/var/lib` is the root fs at 74–79% |
+| `metricsLabelFilter` | `"namespace"` | `workload` is the Deployment name and carries the session fragment — see §5.5 |
+| `processAncestors.enabled` | `"base,kprobe"` | Renders as `enable-ancestors`. `base` is required by every other type |
+| `clusterName` | `civo-phx1` | Appears on every event |
 
-### Decision log
+### Export filtering
+
+Selection runs **before** field filtering, so pod labels select the event and
+are then stripped from its body.
+
+```
+exportAllowList:  {"labels":["kasm.kasmid"], "event_set":[...]}
+exportDenyList:   {"health_check":true}
+fieldFilters:     EXCLUDE process/parent/ancestors × arguments,
+                          environment_variables, cwd,
+                          pod_labels, pod_annotations
+redactionFilters: token / password / VNC_PW / kasm_user: patterns
+```
+
+**Arguments and environment variables are excluded entirely**, because Kasm puts
+credentials in argv:
+
+- `src/common/kasm-go/scripts/kasm-setup` — VNC password inside an `sh -c` string
+- `src/common/kasm-go/units/audio-in.service` — `--auth-token kasm_user:$VNC_PW`
+- `src/common/kasm-go/units/audio-out-ws.service` — same, as a bare positional
+
+Redaction replaces regex **capture groups** only, and cannot identify the
+unmarked positional password in the `sh -c` case. It is defence in depth, not
+the control. Re-enabling argv requires removing those call sites first.
+
+### Verified clean
+
+Against both synthetic and **live session** data: no `arguments`,
+`environment_variables`, `cwd`, `pod_labels`, or `pod_annotations` keys; no
+`VNC_PW`, `kasm_user:`, `KASM_API_JWT`, `auth-token`, or `Bearer` strings; no
+planted test literals in export files or pod logs.
+
+---
+
+## 4. Detection policies
+
+**Status: none loaded yet.** `tetragon_tracingpolicy_loaded` is zero across all
+states. This is the next step.
+
+All policies are observe-only, carry the session `podSelector`, and are
+validated with server-side dry-run *and* confirmed loaded via metrics.
+
+```yaml
+podSelector:
+  matchExpressions:
+    - key: kasm.kasmid
+      operator: Exists
+```
+
+### Planned set
+
+**User namespaces** — kprobe `create_user_ns`, `syscall: false`, `return: true`,
+`returnArg: {index: 0, type: int}`.
+
+> On these nodes there is no AppArmor, so a negative return does **not** mean
+> "AppArmor blocked it" — nothing mediates `userns_create` here. Report as
+> *userns creation observed / refused*. A seccomp rejection produces **no event
+> at all**, which is a different result. The policy still earns its place: a
+> successful userns creation from a tenant shell is the signal that matters.
+
+**Runtime sockets** — kprobe `security_socket_connect`, arg 0 `socket`, arg 1
+`sockaddr_un`, one selector matching `Family: AF_UNIX` plus `Equal` over all
+socket paths. See §5.1 — this must be **one** selector, not one per path.
+`/run/k3s/containerd/containerd.sock` is the only path that exists here; the
+others are cheap defence in depth.
+
+**BPF / perf / modules** — from the pinned v1.7.0 policy library, adding the
+`podSelector`. Take `bpf_check`, `security_perf_event_alloc`,
+`security_bpf_map_alloc`, `security_bpf_map_create` from `bpf.yaml`, and
+`security_kernel_read_file` from `modules.yaml`.
+Keep upstream's `ignore: {callNotFound: true}` on **both** map hooks — the
+symbol changed at Linux 6.9 and dropping either guard can block policy load.
+Do **not** copy `bpf.yaml` wholesale: `security_file_permission` and
+`security_mmap_file` attach to hot LSM paths for no query we have.
+`security_kernel_module_request` has no argument selector upstream (unlike its
+`READING_MODULE`-scoped sibling) — baseline it before alerting.
+
+### Later, and deliberately re-prioritised
+
+The ordering above is containment-first. For shared hosting the *likely* event
+is in-session abuse — mining, outbound scanning, spam relay, credential
+stuffing — none of which trips a containment control, and all of which get your
+address ranges blocklisted. Promote egress and miner rules once the co-tenant
+policies are proven. Neither rule is written yet.
+
+Not alert conditions, deliberately: raw exec volume (collected, but noisy).
+Not collected at all: browsing history, `$HOME` file reads.
+
+---
+
+## 5. Traps
+
+Every item here was found the hard way. Each fails **silently** or misleads.
+
+### 5.1 A kprobe accepts at most 5 selectors
+
+`MaxSelectors = 5`, enforced at *sensor construction* — a server-side dry-run
+passes and the policy then fails to load. Use one selector with many `Equal`
+values (values within one `matchArgs` entry are OR'd), not one selector per
+value.
+
+### 5.2 Unknown field-filter paths are silently ignored
+
+FieldMask paths are format-validated, never checked against the schema. A typo
+strips nothing and reports nothing. Note `ancestors` is a **top-level sibling**
+of `process`/`parent` — `process.ancestors.arguments` would be a no-op.
+**Always assert on exported JSON keys**, not on planted values.
+
+### 5.3 Settings that render nothing when correct
+
+- `enableKeepSensorsOnExit: false` → the ConfigMap key is **absent**. There is
+  no `"false"` form to grep for.
+- `gops` / `pprof` disabled → `gops-address` / `pprof-address` absent. Both are
+  **ConfigMap keys**, not container args — checking the arg list proves nothing.
+- `extraArgs: enable-process-environment-variables: "false"` → **keep the
+  quotes**. Unquoted YAML `false` is falsy in Go templates and emits the *bare
+  flag*, which pflag reads as **true**.
+
+### 5.4 `node_labels` cannot be field-filtered
+
+It is field 1004 on the `GetEventsResponse` **wrapper**, not the event message,
+so no FieldMask reaches it. Excluding it is accepted and does nothing. It is 558
+bytes on every event (~7–10%) and carries the node's **external IP** and Civo
+pool UUID. Drop it in Alloy at ingest.
+
+### 5.5 The metrics plane bypasses the field filters
+
+`metricsLabelFilter` accepts `namespace,workload,pod,binary`. `workload` is the
+Deployment name — which carries the session fragment — so enabling it copies
+identifiers into Prometheus as labels, under a *different* retention, with one
+series per session. Use `namespace` only.
+
+Note the filter **blanks label values, it does not remove label keys**. A check
+that greps for `workload=` will false-positive; assert no *non-empty* values.
+
+### 5.6 The chart hard-codes a 1-second grace period
+
+`terminationGracePeriodSeconds: 1` is literal in the DaemonSet template with no
+values key. One second is not enough to unload BPF sensors, so draining the
+DaemonSet leaves programs attached — pods gone, instrumentation still running.
+
+**Do not fix this with `kubectl patch`.** Doing so makes kubectl the field
+manager for that path and the next `helm upgrade` fails with a server-side-apply
+conflict (observed). Use the post-renderer. Helm 4 changed `--post-renderer` to
+take a **plugin name**, not a path, so it is installed as a `postrenderer/v1`
+plugin.
+
+### 5.7 Export selection fails closed on the enrichment race
+
+The label filter returns false when an event has no Pod. The event cache retries
+pod association 15 × 2s, then emits the event **unenriched anyway** — where the
+allowlist drops it. Startup execs can be lost silently. Alert on
+`tetragon_event_cache_fetch_failures_total{entry_type="pod_info"}`.
+
+Fail-closed is the deliberate choice: the alternative exports unrelated host
+activity.
+
+### 5.8 gRPC bypasses the export filters entirely
+
+Allow/deny/field filters are **per-request**. A client with empty filters gets
+full argv, cwd, and pod labels. Only redaction is global — it is applied at
+process-cache construction, so it covers gRPC too. This is why the event server
+is off.
+
+### 5.9 Verify policy state via metrics, not `tetra`
+
+With gRPC disabled, `tetra status` and `tetra tracingpolicy list` cannot run.
+Use `tetragon_tracingpolicy_loaded{state=...}`. It is an aggregate count by
+state with **no `policy` label**, so it tells you *that* something failed, not
+*which* — read node logs for that.
+
+### 5.10 Version-pinned behaviour
+
+`sockaddr_un` is **v1.7.0+**. Downgrading rejects the policy at CRD validation.
+Abstract socket names use a 107-byte NUL-padded form with the leading `@`
+stripped before matching, so `Equal` on a visually similar value never matches —
+filesystem paths only.
+
+---
+
+## 6. Data handling
+
+### What is collected
+
+Per event, where the event type supplies it: executable path, PID, UID, start
+time, pod/container/namespace/workload, node, cluster, policy name, decoded
+kprobe arguments, return values, and the ancestor chain of executable paths.
+
+**Not collected:** command arguments, environment variables, working
+directories, pod labels/annotations, file contents, URLs or browsing history,
+keystrokes, screen contents, clipboard, audio, video, network payloads.
+
+### Identifiability
+
+Events carry `id12` — a session fragment — in the pod and workload name. On this
+deployment there is no username fragment (§2). Kasm's own session records are
+**not** ingested (§7), so within this system a record resolves to a pod, node,
+and session — not to an account. Resolving to an account is manual.
+
+Attribution is **intended**, not incidental: an unattributed detection cannot be
+investigated or acted on. What is minimised is *how* it is held, not whether —
+never as a Loki stream label, same 14-day retention as the events, same audited
+access.
+
+`user8`, where it exists, is an 8-character prefix and users can collide. Never
+act on an account on the strength of it; resolve via `id12` first.
+
+### Retention
+
+14 days, enforced by the Loki Compactor (`retention_enabled: true`,
+`retention_period: 336h`, `delete_request_store: filesystem`, persistent working
+directory). Disk size is not retention — filesystem Loki keeps data forever by
+default.
+
+### For counsel
+
+The characterisation and the determination are counsel's, not engineering's.
+Engineering keeps these facts current; it does not self-assess them.
+
+- Shared-hosting service; stated purposes are protecting co-tenants and
+  detecting abusive use; the system is designed to identify the responsible
+  account rather than avoid doing so.
+- The dataset shows which executables ran in a session, in what order, and when
+  — therefore which applications a person used and when. It does not show what
+  they did inside an application.
+- Regions: CIVO `phx1`; OCI region for `obs-1` **not yet chosen**.
+- Populations, in order: synthetic tests → staff sessions → hosted users.
+- Alert notifications leave the system (Slack is in the architecture, still an
+  open choice). An annotation carrying session fragments exports identifiers to
+  a third party with its own retention and access model. Default to a
+  non-identifying Grafana link until that is decided.
+- Credentials appear in process arguments, which is why argv is excluded. Any
+  real credential observed is a security incident requiring rotation.
+
+Open questions: whether this is personal data; what basis, notice, or
+safeguards attach to the attribution purpose; what is required *before* acting
+against an account rather than investigating; whether staff monitoring engages
+distinct obligations; whether the region pair raises a transfer question;
+whether AUP or terms language must cover this before hosted users are observed.
+
+---
+
+## 7. Not built yet
+
+| | |
+|---|---|
+| **Detection policies** | None loaded. Next step. |
+| **Alloy shipping** | Not deployed. Must tail rotations, keep positions on a persistent hostPath, drop `node_labels` (§5.4), and mount the export dir read-only. |
+| **OCI `obs-1`** | Not provisioned. E4.Flex 2 OCPU / 16 GB decided (x86 avoids ARM image questions and A1 capacity contention). Region open. |
+| **Health plane** | Prometheus (health-only, 7 days), per-node canary DaemonSet, alerts on loss counters, canary gaps, disk >80%, clock offset. Rules key on `(cluster, node)` — node names are not unique across clusters. |
+| **Kill switch** | Two modes: stop shipping (pause Alloy, preserve positions), stop collection (drain via unsatisfiable node selector). Must verify post-drain that no BPF pins survive under `/sys/fs/bpf/tetragon`. |
+| **Kasm session correlation** | **Blocked.** `provision.create` fires *before* provisioning succeeds and carries no `kasm_id`, `server_id`, or account; the documented JSON log files are absent from the k8s `api`/`manager` pods. Needs a post-success lifecycle event (`session.started`/`session.ended`) with `container_id`, `kasm_id`, account, image, server — a `kasm_backend` change owned by another team. |
+| **Config home** | `values-tetragon.yaml` and the post-renderer live in a scratchpad. This repo builds container images; infra config does not belong here. |
+
+Rules that survive whenever correlation is built: ingest a session *dimension*
+(a few lines per session), never URL-level data, never a session ID as a Loki
+stream label, correlate at query time (LogQL has no join), and reject
+ingest-time API enrichment — it would put a Kasm credential on every node.
+
+---
+
+## 8. Decision log
 
 | Date | Decision | Why |
 |---|---|---|
-| 2026-08-04 | Tetragon over Falco | A customer already runs Tetragon — shared policy language with them; kernel-side filtering (lower overhead); enforcement path if we ever want it |
-| 2026-08-04 | Loki + Grafana on one OCI VM, not a hosted service | Spike economics; Grafana alerting is sufficient; VictoriaLogs noted as lighter fallback if the VM strains |
-| 2026-08-04 | Observe-only; no enforcement | Detection value is immediate; a false-positive `Sigkill` kills a customer session. Revisit only after weeks of clean data |
-| 2026-08-06 | Sessions run **in-cluster** via the dev `kasm-kubernetes-operator` (`KasmWorkspace` CRD) — not external Docker agents | Corrects §5's assumption (public docs describe only the GA external-agent model). Tetragon's DaemonSet sees session pods natively, with real pod attribution — no standalone deployment needed for these sessions |
+| 2026-08-04 | Tetragon over Falco | A customer already runs it; shared policy language, kernel-side filtering, an enforcement path if ever justified |
+| 2026-08-04 | Self-hosted Loki + Grafana on one OCI VM | Spike economics; VictoriaLogs is the lighter fallback |
+| 2026-08-04 | Observe-only, no enforcement | A false-positive `Sigkill` kills a customer session |
+| 2026-08-07 | Exclude argv/env for the whole spike | Kasm puts credentials in argv; regex cannot safely redact an unmarked positional password |
+| 2026-08-07 | Treat events as "hook reached", not proof of a syscall attempt | Seccomp rejects before downstream hooks; no event ≠ no attempt |
+| 2026-08-07 | Disable gRPC, gops, pprof | Export filters are per-request; all three are unauthenticated node-local surfaces under hostNetwork |
+| 2026-08-07 | Fail-closed export selection | An unenriched event is lost rather than exporting unrelated host activity |
+| 2026-08-07 | 14-day retention, Compactor-enforced | A concrete enforced window beats an unevaluated range |
+| 2026-08-08 | **AppArmor out of scope** | Nodes are Alpine with no AppArmor and it will not be enabled. `security-model.md` §5.2 per-binary userns scoping is not implementable here; userns events lose their AppArmor interpretation but keep detection value |
+| 2026-08-08 | Select on `kasm.kasmid` (Exists) | Already on every session pod; a bare key is an existence test so no identifier enters config. Needs no operator change. A boolean `kasm.com/session=true` stays preferable long-term |
+| 2026-08-08 | Buffer 50 MB × 10 | `/var/lib` is the root fs at 74–79%; measured peak still gives ~10h against a 30-min target |
+| 2026-08-08 | `metricsLabelFilter: "namespace"` | `workload` carries the session fragment into a plane the field filters never touch |
+| 2026-08-08 | Grace period via helm **plugin** post-renderer | Chart hard-codes 1s with no values key; `kubectl patch` breaks the next upgrade |
+| 2026-08-08 | Correlation blocked, not designed | The source event does not exist in the product today |
+| 2026-08-08 | Attribution retained deliberately | Shared hosting: an unattributed detection cannot be investigated or acted on |
 
 ---
 
-## 1. Why, and how it relates to the security model
-
-`design/security-model.md` defines two threat models; its controls for
-**Model B ("the user is hostile")** are preventive: seccomp deltas, AppArmor
-userns scoping (§5.2), placement, host sysctls. None of them tell us whether a
-tenant is *trying*. Tetragon closes that gap:
-
-- **Visibility** — every `process_exec` in a session, with full ancestry and
-  pod identity, answers "what are users doing in their sessions".
-- **Detection** — TracingPolicies alert on the specific actions the security
-  model worries about (userns creation, mount API, bpf, module load,
-  docker.sock).
-- **Verification** — the same events prove the preventive controls work.
-  When §5.2's per-binary AppArmor scoping lands, the userns policy (§5.1 below)
-  should show tenant shells failing `unshare` while the browser succeeds —
-  continuously, not just during the §8 audit.
-
-A secondary payoff: policies we write are directly usable by (and reviewable
-against) the customer already running Tetragon.
-
-## 2. Architecture
-
-```
-CIVO k8s cluster                                OCI VM ("obs-1", small shape)
-┌────────────────────────────────┐              ┌────────────────────────────┐
-│ node A: tetragon (DaemonSet)   │              │  Caddy/nginx  :443         │
-│         └ /var/log/tetragon/   │   HTTPS      │   TLS + auth               │
-│           tetragon.log         │  ─────────►  │      │                     │
-│         alloy (DaemonSet)      │  loki push   │   Loki (monolithic,        │
-│           tails + pushes       │              │    filesystem storage)     │
-│ node B: (same)                 │              │      │                     │
-│ ...                            │              │   Grafana ── alerts ──► Slack
-└────────────────────────────────┘              └────────────────────────────┘
-```
-
-### 2.1 CIVO side
-
-- **Tetragon v1.7.0** via Helm (`helm repo add cilium https://helm.cilium.io`,
-  chart `cilium/tetragon`, namespace `kube-system`). CNI-agnostic — does not
-  require Cilium.
-- Kernel requirement: BTF-enabled (CIVO k3s nodes on Ubuntu ≥5.15 qualify).
-  **Verify on day one** with `tetra status` and the DaemonSet logs; do not
-  assume.
-- Default output: `process_exec`/`process_exit` for everything. Additional
-  hooks come from `TracingPolicy` CRDs (kprobes/tracepoints with in-kernel
-  `matchBinaries`/`matchArgs` filtering, namespace/pod-label scoping).
-- Export: JSON to `/var/log/tetragon/tetragon.log` per node (rotated). There
-  is **no native remote push** — a shipper is required.
-
-### 2.2 Shipper
-
-Grafana Alloy DaemonSet (Vector is the alternative if we want heavier
-transform logic in transit). Tails the tetragon log, pushes Loki-protocol over
-HTTPS to the OCI VM. Tetragon events already embed pod/namespace/binary
-metadata, so the shipper only adds `cluster` and `node` labels. Keep Loki
-label cardinality low: label on `cluster`, `node`, `namespace`, event type;
-everything else stays in the JSON body and is queried with LogQL json filters.
-
-Volume control happens in **Tetragon**, not the shipper:
-
-- **Export allowlist/denylist** (`tetragon.exportAllowList` / `DenyList` Helm
-  values) — restrict to session namespaces/pods; drop kube-system chatter.
-- **Field filters** — strip bulky fields we don't query (e.g. full env — we
-  redact anyway, see §6.1).
-
-### 2.3 OCI VM
-
-- Shape: **A1.Flex 2 OCPU / 12 GB** preferred (Always Free envelope if the
-  region has capacity — historically contested; fall back to **E4.Flex 1–2
-  OCPU burstable**, already priced in the OCI runner sizing notes). 100–200 GB
-  block volume.
-- Stack: **Loki** (monolithic mode, filesystem storage, 14–30 d retention) +
-  **Grafana** (dashboards + alert rules → Slack). No Alertmanager, no object
-  storage, no Prometheus for the spike — Grafana alerting on LogQL is enough.
-  Add Tetragon's Prometheus metrics later only if agent health becomes a
-  question.
-- Lighter fallback: **VictoriaLogs** speaks the Loki push protocol and uses a
-  fraction of the memory; swap it in if Loki strains the shape.
-
-### 2.4 Pipeline security (non-negotiable, spike or not)
-
-- TLS on ingest (Caddy or nginx terminating :443, real cert via ACME).
-- Auth on push: basic-auth token minimum; mTLS if cheap to wire in Alloy.
-- OCI NSG: :443 open **only** to the CIVO cluster's egress IP(s); :22 only to
-  admin IPs; nothing else listening publicly. Grafana behind the same proxy
-  with its own auth (no anonymous access — see §6.3).
-- Encrypted boot/block volumes (OCI default — keep it), no credentials baked
-  into images or repo; the push token lives in a k8s Secret on CIVO and the
-  proxy config on the VM only.
-- The VM's own auth/audit logs retained — the monitoring system is itself an
-  attractive target.
-
-## 3. Detection policies — starter set
-
-Priority-ordered. Each becomes one `TracingPolicy` + one Grafana alert rule.
-The YAML below is the intended shape, **not yet validated against v1.7** —
-check each against the upstream policy library
-(<https://tetragon.io/docs/policy-library/observability/>) before deploying,
-and record deviations here.
-
-### 3.1 Userns / namespace-escape attempts — the §5.2 verifier
-
-```yaml
-apiVersion: cilium.io/v1alpha1
-kind: TracingPolicy
-metadata:
-  name: kasm-detect-userns
-spec:
-  kprobes:
-    - call: "create_user_ns"
-      syscall: false
-      selectors:
-        - matchActions:
-            - action: Post
-```
-
-Alert: any hit from a binary that is **not** the browser launcher path.
-Once security-model §5.2 lands, this is the standing proof it works: tenant
-`unshare -Ur` should appear here as an attempt *and* fail; browser hits are
-expected baseline. Consider companions on `setns` and the `unshare` syscall.
-
-### 3.2 Container-runtime reach-around
-
-File-access kprobes (`security_file_permission` per the upstream
-file-monitoring policy) on:
-
-- `/var/run/docker.sock` — nothing in a session may touch this. Zero
-  false-positive expectation; alert at highest severity.
-- writes under `/dockerstartup/`, `/etc/container-init/` — immutable after
-  boot in our images; a post-boot write is tampering.
-- `nsenter` exec (cheap `matchBinaries` on the default exec events — may need
-  no policy at all, just a LogQL rule).
-
-### 3.3 Kernel-surface probing
-
-Kprobes on `bpf`, `perf_event_open`, module-load paths. Our seccomp profiles
-**block** these (security-model §2), so a hit means someone is *probing* —
-attempt-level signal with near-zero legitimate baseline. High severity.
-
-### 3.4 Reverse shells / suspicious egress
-
-`tcp_connect` kprobe. Noise-prone — scope hard: alert on connects from
-binaries outside an expected set (browsers, profile-sync, upload server,
-squid), and/or shell binaries with socket ancestry. Expect several tuning
-rounds; start as a dashboard panel, promote to alert once quiet.
-
-### 3.5 Miners
-
-Exec of known miner names (xmrig etc.) + `tcp_connect` to stratum-typical
-ports (3333/4444/5555/14444). Cheap, decent signal on long-running sessions.
-
-### 3.6 Privilege escalation
-
-`sudo`/setuid execs after the boot phase. In container-init images, root is
-PID 1 + setup units (security-model §3) — post-boot escalation by the session
-user is anomalous. Needs a boot-window carve-out to avoid alerting on
-`kasm-setup.service`.
-
-### What we deliberately do NOT alert on (yet)
-
-Raw exec volume, browsing behavior, file reads in `$HOME` — high noise, high
-privacy cost, low security signal. Keep the alert set small and defensible.
-
-## 4. Noise budget
-
-An XFCE desktop is an exec-event firehose: shell completions, xdg helpers,
-panel plugins, dbus spawns. **The filter tuning is the real work of this
-spike; the install is an afternoon.** Method:
-
-1. Measure raw: one idle session + one active session, events/hour, before
-   any filtering. Record numbers here.
-2. Apply export allowlists (session namespaces only) + field filters;
-   re-measure.
-3. Target: a number Loki on the small VM absorbs comfortably —
-   O(10⁴–10⁵) events/session/hour raw is plausible; we want the shipped
-   volume well under that. Fill in actuals: _raw = ?, filtered = ?_.
-
-## 5. Deployment shapes
-
-**Resolved 2026-08-06:** sessions run **in-cluster** as pods, launched by the
-dev `kasm-kubernetes-operator` (repo: `gitlab/kasm-kubernetes-operator` —
-`KasmWorkspace` CRD + `kasm-services` operators for image-pull/autoscale/
-networks). The Tetragon DaemonSet therefore sees session pods natively with
-full pod attribution; the plan's original assumption holds. Standalone
-Tetragon (docker/systemd mode, same policies, container-label attribution)
-remains the shape for any non-k8s Docker hosts we later put sessions on
-(forge, GPU test host) — currently none planned.
-
-Operator facts that matter to *this* doc (from source, corrected 2026-08-06 —
-an earlier revision wrongly claimed no seccomp/AppArmor support; that was read
-off the older standalone `KasmWorkspace` path on `main`). The repo carries two
-generations:
-
-- **Standalone `KasmWorkspace` operator** (`main`): `nodeSelector` yes /
-  tolerations no; caps drop ALL by default (`capabilities.add` to grant);
-  no seccomp on the workspace container.
-- **`kasm-agent`** (dev branches `refactor/shared-manifest-builders`,
-  `feature/DEV-228-k8s-agent-egress`) — the Kasm-managed-session path, and
-  the one that matters going forward. It translates the registry `run_config`
-  into the pod securityContext:
-  - `security_opt seccomp=` → inline profile content-hashed (sha256) into a
-    shared `kasm-seccomp-profiles` ConfigMap; a **seccomp-installer
-    DaemonSet** mirrors keys onto every node as `<SECCOMP_DIR>/kasm/<hash>.json`;
-    the pod gets `seccompProfile: {type: Localhost, localhostProfile: kasm/<hash>.json}`.
-    Profiles are **pre-staged at heartbeat time** so first launch doesn't race
-    the installer. So the per-workspace `chrome.json`/`bwrap.json` posture
-    from `security-model.md` **does** carry to k8s sessions.
-  - AppArmor: `build_apparmor_profile(run_config)` → `appArmorProfile` on the
-    container context.
-  - caps from run_config `cap_add`/`cap_drop`; `runAsUser: 0` (container-init
-    compatible by design); `nodeSelector` built from the agent
-    `include_labels` mechanism → node-pool targeting works via existing Kasm
-    agent-label conventions.
-- **Residual nuance to verify:** `build_seccomp_profile` returns nothing when
-  the run_config has no `seccomp=` entry, so images *without* a custom profile
-  fall through to the cluster default — **Unconfined** unless the kubelet sets
-  `seccompDefault: true` (or the builder grows a RuntimeDefault fallback).
-  Check the CIVO kubelet config; this decides whether Tetragon's §3.3
-  kernel-surface hits mean "blocked attempt" or "open surface" for
-  profile-less images. For images *with* tight profiles, §3.3 hits are
-  attempts against a closed door — high-signal either way, but severity
-  triage differs per workspace.
-
-## 6. Data handling, privacy, access
-
-### 6.1 Redaction — enabled before any real data ships
-
-Session process args/env can carry `VNC_PW`, `KASM_API_JWT`, and whatever
-users paste into terminals. Tetragon supports RE2 **redaction filters**
-applied before export — enable from day one with patterns for at least:
-`VNC_PW`, `KASM_API_*`, `password=`, `token=`, `Authorization:`, key-material
-shapes. Prefer field-filtering env out entirely and redacting args. A
-credential that reaches Loki is a rotation event, not a shrug.
-
-### 6.2 Retention & minimization
-
-14–30 d in Loki for the spike; alerts (the distilled signal) can persist
-longer than raw events. Don't ship fields we have no query for.
-
-### 6.3 Legal/compliance gate
-
-This is user-activity monitoring. Before it observes anyone beyond ourselves
-driving test sessions, Kasm legal/compliance signs off on: what is collected,
-retention, who can query Grafana (named individuals, audited), and what is
-disclosed to session users. Engineering keeps the spike on our own sessions
-until that lands. (Status table tracks this as a hard gate.)
-
-## 7. Spike sequence
-
-1. **Install & look.** Helm-install with defaults; `tetra getevents -o compact
-   --pods <session-pod>` while driving a session. Verify BTF/kernel compat.
-   Outcome: gut feel for signal-to-noise, §4 raw numbers.
-2. **Filter & redact.** Export allowlists, field filters, redaction filters.
-   Re-measure. Outcome: §4 filtered numbers; redaction verified by grepping
-   export for a known-planted fake secret.
-3. **Stand up OCI VM.** Caddy + Loki + Grafana (compose or plain systemd
-   units); NSG per §2.4; Alloy DaemonSet on CIVO pushing. Outcome: session
-   events queryable in Grafana.
-4. **Policies & alerts.** Deploy §3.1–§3.3 + alert rules (docker.sock and
-   userns first — near-zero false positives). Then **red-team from inside a
-   session**: `unshare -Ur true`, an `nc` reverse shell, `curl | bash`,
-   `ls -la /var/run/docker.sock`. Every probe must alert; record the matrix
-   here. This doubles as security-model §8 audit evidence.
-5. **Soak.** Run against team sessions for 2–4 weeks; tune §3.4; log false
-   positives in the Decision log.
-6. **Then, maybe:** enforcement (`Sigkill` on docker.sock open?), standalone
-   Tetragon on Docker agent hosts, Tetragon metrics → health dashboard.
-
-## 8. Open questions
-
-1. ~~Where do sessions actually run today?~~ **Answered 2026-08-06:**
-   in-cluster on CIVO via the dev kasm-kubernetes-operator (§5).
-2. A1.Flex capacity in-region — or straight to E4.Flex burstable?
-3. Alert destination — Slack channel name / routing conventions?
-4. Does the customer running Tetragon want to compare policy sets? (Their
-   policies may already encode lessons about desktop-workspace noise.)
-5. k3s specifics: containerd socket path and kernel version on current CIVO
-   node image — confirm Tetragon's process-metadata enrichment works there
-   (it should; verify, don't assume).
-
----
-
-*Update discipline: every deployed change lands in the Status table; every
-"we chose X over Y" lands in the Decision log with the why. Numbers beat
-adjectives — fill in §4.*
+*Keep this current. Deployed changes go in §2 or §3; choices go in §8 with the
+reason. Anything discovered that fails silently goes in §5.*
