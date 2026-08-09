@@ -47,6 +47,14 @@ A browser will warn unless you trust that CA locally.
 4. **OCI Ubuntu images reject everything except SSH.** A netfilter rule allows
    only :22; :443 must be inserted before the REJECT and persisted with
    `netfilter-persistent`. The OCI security list being correct is not enough.
-5. **Network resources must go in the developer sandbox compartment**
+5. **Compose secrets keep the host file's ownership.** `.gf_admin` was created
+   by `ubuntu` (uid 1001, mode 0600) while Grafana runs as uid 472, so Grafana
+   got `Permission denied`, silently ignored `GF_SECURITY_ADMIN_PASSWORD__FILE`,
+   and initialised the database with the built-in default password. No error,
+   healthy container. The file must be `chown 472:472`.
+   Note also that Grafana only applies the admin password when it *creates* the
+   database — fixing permissions afterwards changes nothing, and the live
+   account needs `grafana cli admin reset-admin-password`.
+6. **Network resources must go in the developer sandbox compartment**
    (`emrul-islam-dev`), not `development` directly — the IAM grant is scoped by
    a `Dev_tags.Owner_ID` tag match.
