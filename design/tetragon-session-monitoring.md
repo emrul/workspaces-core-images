@@ -310,11 +310,29 @@ produced an event. Re-running all three by `kubectl exec` into the same,
 now-established pod produced all three. **Two of three events were lost in the
 opening seconds of pod life.**
 
-This affects the *policy filter* as well as the export allowlist — a session's
-earliest execs may not be covered by any policy. It is the single largest known
-gap in coverage, and it sits exactly where escape attempts would be cheapest to
-hide. Anything claiming complete startup coverage needs Tetragon's runtime hooks
-first.
+**How much this matters: less than it first appears.** The missed window holds
+the *image's own boot* — `container-init`, its units, KasmVNC starting. A tenant
+cannot reach it: they must wait for KasmVNC to listen, the proxy to route, the
+browser to connect and authenticate, and then type something. That is many
+seconds and gated on a human. Staged/assigned sessions widen the distance
+further, since the pod is created well before a user is attached.
+
+It matters only where code you do not control runs at t=0:
+
+- a hostile or compromised **workspace image** — a different threat model from
+  "the user is hostile", and on this deployment images come from our catalog;
+- a **tenant-supplied image, `command`, or `args`**, if any workspace definition
+  allows one. *This is the question that decides the priority of this gap.*
+
+The real residual cost is baseline quality, not defence: session boot is exactly
+what the dataset cannot see, so this design cannot detect a tampered image
+running something unexpected at startup.
+
+Note the mechanism, because it changes the fix: the events were almost certainly
+never *generated* (the pod was not yet in the **policy filter** map) rather than
+generated-and-dropped. The export path caches unenriched events and retries for
+~30s, and these never appeared long after that. So raising `eventCacheRetries`
+would not help; only the runtime hooks would. **Inferred, not measured.**
 
 ### 5.8 gRPC bypasses the export filters entirely
 
