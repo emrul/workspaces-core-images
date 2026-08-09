@@ -273,6 +273,18 @@ events we already collect, which is the payoff for keeping raw exec.
 | Unusual egress | verified: 3333 and 25 alert, 443 does not | external + not web/DNS/NTP |
 | Privilege escalation | `su` runs **21×** per session, **all** from our boot chain | parent binary, *not* uid |
 | Miner names | zero | name match — trivially evaded, bonus only |
+| Host root in a session | 4 execs/pod-start, all `/proc/self/fd/*` | host uid 0 that is not runc's own setup |
+
+**`hostUsers: false` also changes the userns risk assessment above.** With
+container root mapped to an unprivileged host uid, a tenant creating nested user
+namespaces holds no host privilege at any point, so the "nothing mediates
+userns creation" finding is materially less severe than when first recorded.
+Detection still matters — the mapping is the control, and this alert is what
+proves the control is actually on.
+
+It doubles as a **rollout-compliance check**: sessions created before the
+`hostUsers` change ran unremapped, showing 423 execs at plain uid 0 and uid 1000
+with no mapped range, and would fire immediately.
 
 Two traps found while measuring these:
 
@@ -280,9 +292,14 @@ Two traps found while measuring these:
   `kasm-setup`, `nix-activate`, `timeout` or `runc`, dropping privilege rather
   than raising it. `sudo` is not installed at all. A naive "alert on su" rule is
   pure noise.
-- **Process `uid` is not trustworthy.** Values like `176553984`, `2368929792`
-  and `3597729792` appear on session processes, alongside sane `0` and `1000`.
-  Do not build rules on uid; use the parent binary.
+- **Those odd uid values are user-namespace remapping, not corruption.** I first
+  recorded them as untrustworthy; that was wrong. Session pods run with
+  `pod.spec.hostUsers: false`, so the kubelet maps container uids onto an
+  unprivileged host range and Tetragon reports the **host-side** uid. Measured on
+  one pod: container uid 0 → `3597729792`, container uid 1000 → `3597730792`
+  (base + container uid, a distinct base per pod). Comparing uid to `0` or `1000`
+  inside a session does not mean what it looks like — but the uid itself is
+  precise and useful.
 
 Mining detection deliberately does not lean on names. A downloaded miner trips
 the user-supplied-binary rule whatever it is called, and its pool connection

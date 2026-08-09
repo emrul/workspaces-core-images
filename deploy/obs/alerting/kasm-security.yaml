@@ -272,10 +272,12 @@ groups:
             at all. So the parent binary is the discriminator, and anything
             outside that set is a tenant escalating deliberately.
 
-            DO NOT rewrite this rule against process uid. Tetragon reports
-            nonsense uid values for some session processes (176553984,
-            2368929792 and similar were observed), so uid is not trustworthy
-            here. Parent binary is.
+            Parent binary is the right discriminator here. Note the uid field
+            is meaningful but is the HOST-side uid: session pods run with
+            hostUsers=false, so container uid 0 appears as a high mapped value
+            (base + container uid, a different base per pod). Comparing uid to 0
+            or 1000 will not do what you expect inside a session - see the
+            host-root alert for how to use it correctly.
           runbook: design/tetragon-session-monitoring.md section 4
         labels:
           severity: high
@@ -337,6 +339,64 @@ groups:
                 sum(count_over_time({cluster="civo-phx1"}
                   | json binary="process_exec.process.binary"
                   | binary =~ "(?i).*/(xmrig|minerd|cpuminer|ethminer|t-rex|nbminer|phoenixminer|lolminer|xmr-stak|cgminer|bfgminer|ccminer|nheqminer|srbminer|teamredminer|kryptex)([-_.].*)?"
+                  [5m]))
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              refId: THRESHOLD
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+
+      - uid: kasm-host-root-in-session
+        title: Session process running as real host root (userns remapping not in effect)
+        condition: THRESHOLD
+        noDataState: OK
+        execErrState: Alerting
+        for: 0m
+        annotations:
+          summary: >-
+            A process in a Kasm session executed as host uid 0, which
+            hostUsers=false should make impossible.
+          description: >-
+            Session pods run with pod.spec.hostUsers=false, so the kubelet maps
+            container uids onto an unprivileged host range. Observed mapping on
+            a live pod: container uid 0 -> host 3597729792, container uid 1000 ->
+            host 3597730792 (base + container uid). Each pod gets its own base.
+
+            So inside a correctly remapped session NOTHING should execute at host
+            uid 0. If this fires, one of two things is true, and both matter:
+
+            1. CONFIGURATION DRIFT - the pod is running without remapping. Pods
+               created before the hostUsers rollout did exactly this: 423 execs
+               at uid 0 and a plain uid 1000, no mapped range at all. This alert
+               is therefore also a rollout-compliance check.
+
+            2. ESCAPE - something left the user namespace and is executing with
+               real root on the node.
+
+            EXCLUDED: /proc/self/fd/* is runc re-execing itself during container
+            setup. That runs as genuine host root by design, before the sandbox
+            exists, and appears about 4 times per pod start.
+          runbook: design/tetragon-session-monitoring.md section 4
+        labels:
+          severity: critical
+          area: kasm-session
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: loki
+            model:
+              refId: A
+              datasource: {type: loki, uid: loki}
+              queryType: instant
+              expr: >-
+                sum(count_over_time({cluster="civo-phx1"}
+                  | json uid="process_exec.process.uid", binary="process_exec.process.binary", pod="process_exec.process.pod.name"
+                  | pod =~ "kws-.*"
+                  | uid = "0"
+                  | binary !~ "/proc/self/fd/.*"
                   [5m]))
           - refId: THRESHOLD
             datasourceUid: __expr__
