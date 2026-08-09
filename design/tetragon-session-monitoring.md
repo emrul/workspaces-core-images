@@ -37,15 +37,19 @@ Tetragon **v1.7.0** as a DaemonSet on the CIVO cluster `kasm-tracelabs`
 (region `phx1`), namespace `kube-system`, helm release `tetragon`.
 
 ```
-CIVO phx1 (3 nodes)                     [NOT BUILT YET]
-┌──────────────────────────────┐        ┌──────────────────────┐
-│ Tetragon DaemonSet           │        │ OCI VM "obs-1"       │
-│  → /var/lib/tetragon/export/ │  ────► │  Loki + Grafana      │
-│    tetragon.log (0600)       │ Alloy  │  Prometheus (health) │
-└──────────────────────────────┘        └──────────────────────┘
+CIVO phx1 (3 nodes)                        OCI us-phoenix-1
+┌──────────────────────────────┐          ┌──────────────────────────┐
+│ Tetragon DaemonSet           │  TLS     │ obs-1 (A1.Flex 2/12)     │
+│  → /var/lib/tetragon/export/ │  ──────► │  Caddy :443 (LetsEncrypt)│
+│    tetragon.log (0600)       │  basic   │  Loki  (14d retention)   │
+│ Alloy DaemonSet              │  auth    │  Prometheus (health, 7d) │
+│  ro mount, positions on host │          │  Grafana                 │
+└──────────────────────────────┘          └──────────────────────────┘
 ```
 
-Today the pipeline stops at the node-local file. Nothing leaves the cluster.
+**Live end to end since 2026-08-09.** Session events reach Loki and Tetragon's
+metrics reach Prometheus. `grafana.emrul.oci.dev.remotebrowser.net`; config in
+`deploy/obs/` and `deploy/tetragon/alloy*`.
 
 ### Verified node facts (2026-08-08)
 
@@ -437,8 +441,8 @@ whether AUP or terms language must cover this before hosted users are observed.
 | | |
 |---|---|
 | **Seccomp reality check** | Whether a real Kasm session's seccomp profile blocks `unshare` — see §4. Launch a workspace we own; do not probe a tenant's live session. |
-| **Alloy shipping** | Not deployed. Must tail rotations, keep positions on a persistent hostPath, drop `node_labels` (§5.4), and mount the export dir read-only. |
-| **OCI `obs-1`** | Not provisioned. E4.Flex 2 OCPU / 16 GB decided (x86 avoids ARM image questions and A1 capacity contention). Region open. |
+| **Health-plane alerts** | Prometheus is receiving remote-write, but no alert rules are defined yet: loss counters, canary gap, disk >80%, clock offset, `tracingpolicy_loaded` errors. |
+| **Canary DaemonSet** | Not deployed. Needed to prove the pipeline end to end per node when no session is running. |
 | **Health plane** | Prometheus (health-only, 7 days), per-node canary DaemonSet, alerts on loss counters, canary gaps, disk >80%, clock offset. Rules key on `(cluster, node)` — node names are not unique across clusters. |
 | **Kill switch** | Two modes: stop shipping (pause Alloy, preserve positions), stop collection (drain via unsatisfiable node selector). Must verify post-drain that no BPF pins survive under `/sys/fs/bpf/tetragon`. |
 | **Kasm session correlation** | **Blocked.** `provision.create` fires *before* provisioning succeeds and carries no `kasm_id`, `server_id`, or account; the documented JSON log files are absent from the k8s `api`/`manager` pods. Needs a post-success lifecycle event (`session.started`/`session.ended`) with `container_id`, `kasm_id`, account, image, server — a `kasm_backend` change owned by another team. |

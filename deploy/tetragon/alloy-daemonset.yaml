@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kasm-monitoring
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alloy-tetragon
+  namespace: kasm-monitoring
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: alloy-tetragon
+  namespace: kasm-monitoring
+  labels: {app: alloy-tetragon}
+spec:
+  selector:
+    matchLabels: {app: alloy-tetragon}
+  template:
+    metadata:
+      labels: {app: alloy-tetragon}
+      annotations:
+        # force a rollout when the config changes
+        checksum/config: "REPLACED_AT_APPLY"
+    spec:
+      serviceAccountName: alloy-tetragon
+      # 127.0.0.1:2112 is the node's Tetragon metrics endpoint (Tetragon runs
+      # with hostNetwork), so this pod must share the host network to scrape it.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: alloy
+          image: grafana/alloy:v1.12.1
+          args:
+            - run
+            - /etc/alloy/config.alloy
+            - --storage.path=/var/lib/alloy
+            - --server.http.listen-addr=127.0.0.1:12345
+          env:
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+          securityContext:
+            # The Tetragon export file is 0600 root-owned, so the reader must be
+            # root. Everything else is dropped.
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits:   {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - {name: config,    mountPath: /etc/alloy}
+            - {name: secrets,   mountPath: /etc/alloy/secrets, readOnly: true}
+            # read-only: Alloy must never be able to alter or delete evidence
+            - {name: tetragon,  mountPath: /var/log/tetragon, readOnly: true}
+            # positions survive pod restarts, so a restart neither replays the
+            # whole backlog nor skips the gap
+            - {name: state,     mountPath: /var/lib/alloy}
+            - {name: tmp,       mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: alloy-tetragon-config}
+        - name: secrets
+          secret: {secretName: alloy-tetragon-creds, defaultMode: 0400}
+        - name: tetragon
+          hostPath: {path: /var/lib/tetragon/export, type: Directory}
+        - name: state
+          hostPath: {path: /var/lib/alloy-tetragon, type: DirectoryOrCreate}
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,112 @@
+// Alloy shipper: Tetragon export files on each CIVO node -> Loki on obs-1.
+//
+// Runs as UID 0 because the export file is mode 0600 owned by root
+// (tetragon.exportFilePerm), with all capabilities dropped and the Tetragon
+// directory mounted read-only.
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// Tail the active file AND rotated backups. Compression is deliberately off in
+// the Tetragon values so these stay readable; a config that only watched
+// tetragon.log would silently lose everything written during a rotation.
+local.file_match "tetragon" {
+  path_targets = [{
+    __path__ = "/var/log/tetragon/tetragon*.log",
+    cluster  = "civo-phx1",
+    node     = sys.env("NODE_NAME"),
+  }]
+  sync_period = "10s"
+}
+
+loki.source.file "tetragon" {
+  targets               = local.file_match.tetragon.targets
+  forward_to            = [loki.process.tetragon.receiver]
+  legacy_positions_file = "/var/lib/alloy/positions.yaml"
+
+  // MUST be true. With `false`, a first start (or any start with no position)
+  // replays every retained rotation: 550 MB/node x 3 nodes = ~1.6 GB shipped at
+  // line rate, which saturates Loki's ingestion_rate_mb and gets the whole burst
+  // rejected with "ingestion rate limit exceeded" -- so nothing lands at all.
+  // Observed, 2026-08-09.
+  //
+  // This only governs where to start when there is NO stored position. Once
+  // positions exist they win, so an outage still resumes exactly where it
+  // stopped and the rotated files are still read. History before first start is
+  // deliberately not backfilled; it predates the pipeline.
+  tail_from_end = true
+}
+
+loki.process "tetragon" {
+  // node_labels CANNOT be removed by Tetragon's fieldFilters: it is field 1004
+  // on the GetEventsResponse wrapper, not on the event message, so no FieldMask
+  // reaches it (design doc 5.4). It is ~558 bytes on EVERY event -- roughly a
+  // tenth of the payload -- and carries the node's public IP and Civo pool UUID.
+  // Strip it here, at the first point in the pipeline that can.
+  //
+  // The value is a flat string->string map with no nested objects, so matching
+  // to the first closing brace is safe.
+  //
+  // NOTE THE `\\s*`. Tetragon emits protojson with ", " separators, so the text
+  // is `, "node_labels":{...}` -- a regex anchored on `,"node_labels"` matches
+  // nothing and strips nothing, silently. Verified by querying Loki for the
+  // literal afterwards; do that again if this expression is ever touched.
+  stage.replace {
+    expression = "(,\\s*\"node_labels\":\\{[^}]*\\})"
+    replace    = ""
+  }
+
+  // Bounded labels only. Never promote pod name, workload, or any session id:
+  // they are unbounded and pod/workload names carry the session fragment.
+  // `cluster` and `node` already arrive as target labels from path_targets.
+  stage.label_keep {
+    values = ["cluster", "node"]
+  }
+
+  forward_to = [loki.write.obs.receiver]
+}
+
+loki.write "obs" {
+  endpoint {
+    url = "https://grafana.emrul.oci.dev.remotebrowser.net/loki/api/v1/push"
+
+    basic_auth {
+      username      = "civo_phx1"
+      password_file = "/etc/alloy/secrets/loki_password"
+    }
+
+    // Bounded buffering so a collector outage backs off rather than spinning.
+    max_backoff_period = "5m"
+    batch_wait         = "5s"
+    batch_size         = "1MiB"
+  }
+
+  // Real Let's Encrypt certificate on the far end -- verify normally.
+  external_labels = {}
+}
+
+// Health plane: scrape each node's Tetragon agent and remote-write to the
+// Prometheus on obs-1. Rules there key on (cluster, node) because node names
+// are not unique across deployments.
+prometheus.scrape "tetragon" {
+  targets = [{
+    __address__ = "127.0.0.1:2112",
+    cluster     = "civo-phx1",
+    node        = sys.env("NODE_NAME"),
+  }]
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.obs.receiver]
+}
+
+prometheus.remote_write "obs" {
+  endpoint {
+    url = "https://grafana.emrul.oci.dev.remotebrowser.net/prom/api/v1/write"
+
+    basic_auth {
+      username      = "civo_phx1"
+      password_file = "/etc/alloy/secrets/prom_password"
+    }
+  }
+}
