@@ -1,0 +1,173 @@
+{
+  "uid": "kasm-nodes",
+  "title": "Kasm cluster — node health",
+  "tags": ["kasm", "infrastructure"],
+  "timezone": "browser",
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "row",
+      "title": "At a glance",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Nodes reporting",
+      "description": "Should be 3. Fewer means an Alloy pod is down, not necessarily a node.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 1 },
+      "targets": [{ "refId": "A", "expr": "count(count by (node) (node_memory_MemTotal_bytes))" }],
+      "fieldConfig": { "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [
+        { "color": "red", "value": null }, { "color": "green", "value": 3 } ] } }, "overrides": [] }
+    },
+    {
+      "type": "gauge",
+      "title": "CPU used %",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 4, "y": 1 },
+      "targets": [{ "refId": "A", "legendFormat": "{{node}}",
+        "expr": "100 - (avg by (node) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100,
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null }, { "color": "orange", "value": 75 }, { "color": "red", "value": 90 } ] } }, "overrides": [] }
+    },
+    {
+      "type": "gauge",
+      "title": "Memory used %",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 7, "x": 10, "y": 1 },
+      "targets": [{ "refId": "A", "legendFormat": "{{node}}",
+        "expr": "100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100,
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null }, { "color": "orange", "value": 80 }, { "color": "red", "value": 92 } ] } }, "overrides": [] }
+    },
+    {
+      "type": "gauge",
+      "title": "Root disk used %",
+      "description": "This is also where the Tetragon export buffer lives (~550 MB/node). Nodes were already at 74-79% before monitoring was added.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 7, "x": 17, "y": 1 },
+      "targets": [{ "refId": "A", "legendFormat": "{{node}}",
+        "expr": "100 * (1 - (node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}))" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100,
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null }, { "color": "orange", "value": 80 }, { "color": "red", "value": 90 } ] } }, "overrides": [] }
+    },
+    {
+      "type": "row",
+      "title": "CPU and load",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 }
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU utilisation by node",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 7 },
+      "targets": [{ "refId": "A", "legendFormat": "{{node}}",
+        "expr": "100 - (avg by (node) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100,
+        "custom": { "fillOpacity": 15, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU by mode (stacked, all nodes)",
+      "description": "A high iowait or steal share points at the host, not the workload.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 7 },
+      "targets": [{ "refId": "A", "legendFormat": "{{mode}}",
+        "expr": "sum by (mode) (rate(node_cpu_seconds_total{mode!=\"idle\"}[5m]))" }],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 40, "stacking": { "mode": "normal" }, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "type": "row",
+      "title": "Memory",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory used by node",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 15 },
+      "targets": [{ "refId": "A", "legendFormat": "{{node}}",
+        "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes" }],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "fillOpacity": 15, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory breakdown (all nodes)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 15 },
+      "targets": [
+        { "refId": "A", "expr": "sum(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes)", "legendFormat": "used" },
+        { "refId": "B", "expr": "sum(node_memory_Cached_bytes)", "legendFormat": "page cache" },
+        { "refId": "C", "expr": "sum(node_memory_MemAvailable_bytes)", "legendFormat": "available" },
+        { "refId": "D", "expr": "sum(node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes)", "legendFormat": "swap used" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "type": "row",
+      "title": "Disk and network",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Filesystem free space",
+      "description": "Watch this against the Tetragon buffer: 50 MB x 10 rotations per node.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 23 },
+      "targets": [{ "refId": "A", "legendFormat": "{{node}} {{mountpoint}}",
+        "expr": "node_filesystem_avail_bytes{mountpoint=\"/\"}" }],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Disk I/O",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 23 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (node) (rate(node_disk_read_bytes_total[5m]))", "legendFormat": "read {{node}}" },
+        { "refId": "B", "expr": "sum by (node) (rate(node_disk_written_bytes_total[5m]))", "legendFormat": "write {{node}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Network throughput",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 23 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (node) (rate(node_network_receive_bytes_total{device!~\"lo|veth.*|cali.*|cni.*|flannel.*\"}[5m]))", "legendFormat": "rx {{node}}" },
+        { "refId": "B", "expr": "sum by (node) (rate(node_network_transmit_bytes_total{device!~\"lo|veth.*|cali.*|cni.*|flannel.*\"}[5m]))", "legendFormat": "tx {{node}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "type": "row",
+      "title": "Load and monitoring overhead",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Load average (1m)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 31 },
+      "targets": [{ "refId": "A", "expr": "node_load1", "legendFormat": "{{node}}" }],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tetragon BPF map memory (locked kernel memory)",
+      "description": "Non-shared BPF map memlock per policy. This is the part of the monitoring cost that competes with session density.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 31 },
+      "targets": [{ "refId": "A", "legendFormat": "{{node}} {{policy}}",
+        "expr": "tetragon_tracingpolicy_kernel_memory_bytes" }],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] }
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

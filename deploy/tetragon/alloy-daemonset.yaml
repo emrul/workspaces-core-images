@@ -62,6 +62,10 @@ spec:
             # whole backlog nor skips the gap
             - {name: state,     mountPath: /var/lib/alloy}
             - {name: tmp,       mountPath: /tmp}
+            # host filesystems for the Unix exporter (read-only)
+            - {name: hostproc,  mountPath: /host/proc, readOnly: true}
+            - {name: hostsys,   mountPath: /host/sys,  readOnly: true}
+            - {name: hostroot,  mountPath: /host/root, readOnly: true, mountPropagation: HostToContainer}
       volumes:
         - name: config
           configMap: {name: alloy-tetragon-config}
@@ -73,3 +77,9 @@ spec:
           hostPath: {path: /var/lib/alloy-tetragon, type: DirectoryOrCreate}
         - name: tmp
           emptyDir: {}
+        - name: hostproc
+          hostPath: {path: /proc}
+        - name: hostsys
+          hostPath: {path: /sys}
+        - name: hostroot
+          hostPath: {path: /}

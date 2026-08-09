@@ -110,3 +110,45 @@ prometheus.remote_write "obs" {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Node health (CPU / memory / disk / load) for the cluster dashboard.
+//
+// Uses Alloy's built-in Unix exporter rather than a separate node-exporter
+// DaemonSet -- this pod already runs on every node with hostNetwork and already
+// remote-writes. Collectors are restricted deliberately: this Prometheus is a
+// health plane, not a general metrics platform, and the default collector set
+// is far more than we need.
+prometheus.exporter.unix "node" {
+  rootfs_path = "/host/root"
+  procfs_path = "/host/proc"
+  sysfs_path  = "/host/sys"
+
+  set_collectors = ["cpu", "meminfo", "filesystem", "loadavg", "diskstats", "netdev", "stat", "vmstat"]
+
+  filesystem {
+    // Skip the pseudo/ephemeral mounts; we care about the real node disk, which
+    // is also where the Tetragon export buffer lives.
+    mount_points_exclude = "^/(dev|proc|sys|host/proc|host/sys|run/k3s/containerd/.+|var/lib/kubelet/.+|var/lib/docker/.+)($|/)"
+    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+  }
+}
+
+discovery.relabel "node" {
+  targets = prometheus.exporter.unix.node.targets
+
+  rule {
+    target_label = "cluster"
+    replacement  = "civo-phx1"
+  }
+  rule {
+    target_label = "node"
+    replacement  = sys.env("NODE_NAME")
+  }
+}
+
+prometheus.scrape "node" {
+  targets         = discovery.relabel.node.output
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.obs.receiver]
+}

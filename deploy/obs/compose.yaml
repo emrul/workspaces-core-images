@@ -36,6 +36,7 @@ services:
       - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/ds.yaml:ro
       - ./grafana-dashboards.yaml:/etc/grafana/provisioning/dashboards/db.yaml:ro
       - ./dashboards:/etc/grafana/dashboards:ro
+      - ./alerting:/etc/grafana/provisioning/alerting:ro
     networks: [obs]
 
   caddy:

@@ -1,0 +1,153 @@
+apiVersion: 1
+
+# Security alert rules for Kasm session monitoring.
+#
+# NOTE ON ROUTING: these deliberately use the default contact point. Where alert
+# notifications go is still an open decision, and an annotation carrying session
+# identifiers exports them to a third party with its own retention and access
+# model (see the design doc, section 6). Until that is settled, alerts are
+# visible in Grafana and go no further.
+
+groups:
+  - orgId: 1
+    name: kasm-security
+    folder: Kasm
+    interval: 1m
+    rules:
+      - uid: kasm-userns-unexpected
+        title: Unexpected user-namespace creation in a Kasm session
+        condition: THRESHOLD
+        # No data means no userns events at all, which is the normal state.
+        noDataState: OK
+        # A broken query must not look like "all clear".
+        execErrState: Alerting
+        for: 0m
+        annotations:
+          summary: >-
+            A non-browser binary created a user namespace inside a Kasm session.
+          description: >-
+            Nothing on these nodes mediates user-namespace creation: seccomp does
+            not block unshare(CLONE_NEWUSER) and there is no AppArmor. A user
+            namespace gives the tenant root within it, which is the usual first
+            step toward kernel privilege escalation.
+
+            Browsers legitimately create namespaces for their own sandboxes and
+            are excluded below; anything else is a tenant doing it deliberately.
+            The return value does not change the severity - a failed attempt is
+            still an attempt.
+
+            Investigate: identify the session from the pod name, then join id12
+            to Kasm's session records to reach the account.
+          runbook: design/tetragon-session-monitoring.md section 4
+        labels:
+          severity: high
+          area: kasm-session
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: loki
+            model:
+              refId: A
+              datasource: {type: loki, uid: loki}
+              queryType: instant
+              # Match the trailing path component, never the Nix store hash -
+              # that changes on every package update and would silently turn
+              # this alert into a firehose.
+              expr: >-
+                sum(count_over_time({cluster="civo-phx1"} |= "create_user_ns"
+                  | json fn="process_kprobe.function_name", binary="process_kprobe.process.binary"
+                  | fn = "create_user_ns"
+                  | binary !~ ".*/bwrap(\\.real)?"
+                  | binary !~ ".*/lib/firefox/firefox"
+                  | binary !~ ".*/\\.firefox-wrapped"
+                  | binary !~ ".*/libexec/chromium/chromium"
+                  | binary !~ ".*/chrome-sandbox"
+                  [5m]))
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              refId: THRESHOLD
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+
+      - uid: kasm-runtime-socket
+        title: Container-runtime socket connect from a Kasm session
+        condition: THRESHOLD
+        noDataState: OK
+        execErrState: Alerting
+        for: 0m
+        annotations:
+          summary: >-
+            A Kasm session attempted to connect to a container-runtime socket.
+          description: >-
+            There is no legitimate reason for a workspace to talk to the CRI or
+            Docker socket. Treat as an attempted container escape.
+
+            The event fires when the request reaches the LSM hook, which happens
+            before path resolution - so this alerts even when the connect itself
+            returns ENOENT because the socket is not mounted into the pod. That
+            is still a deliberate attempt and is still worth investigating.
+          runbook: design/tetragon-session-monitoring.md section 4
+        labels:
+          severity: critical
+          area: kasm-session
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: loki
+            model:
+              refId: A
+              datasource: {type: loki, uid: loki}
+              queryType: instant
+              expr: >-
+                sum(count_over_time({cluster="civo-phx1"}
+                  |= "kasm-observe-runtime-sockets" [5m]))
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              refId: THRESHOLD
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+
+      - uid: kasm-bpf-perf-module
+        title: BPF, perf or kernel-module surface reached from a Kasm session
+        condition: THRESHOLD
+        noDataState: OK
+        execErrState: Alerting
+        for: 0m
+        annotations:
+          summary: >-
+            A Kasm session reached a kernel subsystem that seccomp should have
+            rejected first.
+          description: >-
+            Seccomp rejects these calls before the hook, so a correctly confined
+            session produces no event here at all. A hit therefore means the
+            applied seccomp profile is not what we think it is - investigate the
+            profile before investigating the session.
+          runbook: design/tetragon-session-monitoring.md section 4
+        labels:
+          severity: high
+          area: kasm-session
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: loki
+            model:
+              refId: A
+              datasource: {type: loki, uid: loki}
+              queryType: instant
+              expr: >-
+                sum(count_over_time({cluster="civo-phx1"}
+                  |~ "kasm-observe-(bpf-perf|modules)" [5m]))
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              refId: THRESHOLD
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
