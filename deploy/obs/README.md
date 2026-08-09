@@ -18,9 +18,11 @@ compartment `emrul-islam-dev`. Stack lives at `/opt/obs` on the host.
 
 ## Endpoints
 
-- `https://<ip>/loki/*` — push + query, basic auth
-- `https://<ip>/prom/*` — remote-write, separate basic-auth credential
-- `https://<ip>/` — Grafana
+Base URL: `https://grafana.emrul.oci.dev.remotebrowser.net`
+
+- `/loki/*` — push + query, basic auth
+- `/prom/*` — remote-write, separate basic-auth credential
+- `/` — Grafana
 
 ## Credentials
 
@@ -30,9 +32,13 @@ leave the host.
 
 ## TLS
 
-No public DNS name, so Caddy uses its own CA rather than ACME. Clients pin
-`caddy-root-ca.crt` (committed here — it is a public certificate, not a secret).
-A browser will warn unless you trust that CA locally.
+Real Let's Encrypt certificate for `grafana.emrul.oci.dev.remotebrowser.net`.
+Clients verify normally — no CA pinning, no browser warning.
+
+**Port 80 is open to 0.0.0.0/0 for the ACME HTTP-01 challenge**, which is what
+lets renewals keep working unattended. **Port 443 remains restricted** to the
+admin IP and the CIVO egress IP, so the actual data paths are not internet
+exposed. Closing :80 would break renewal in ~60 days.
 
 ## Gotchas hit while building this — do not re-learn them
 

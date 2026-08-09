@@ -39,7 +39,7 @@ services:
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
-    ports: ["443:443"]
+    ports: ["80:80", "443:443"]
     env_file: caddy.env
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
