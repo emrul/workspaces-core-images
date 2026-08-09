@@ -91,6 +91,12 @@ and resolving a session to an account is currently manual.
 | ...r818z | 509 | 6m36s | 1.29/s | 6.6 KB | ~30 MB |
 | ...d6463 | 288 | 36m38s | 0.13/s | 5.5 KB | ~2.6 MB |
 
+**Per active session, 2026-08-09:** one real workspace produced **1434 events
+in 10 minutes** (~2.4/s, ~8.6k/hour). That window includes browser startup, so
+it is an *active* figure, not idle — but it means a single busy session is
+roughly the same order as the earlier busiest-node total. Size concurrency
+against this, not against the node figures below.
+
 ~85 MB/hour cluster-wide ≈ 2 GB/day ≈ 29 GB raw per 14 days. The 550 MB/node
 buffer gives ~10 hours at peak, well beyond the 30-minute outage target, and
 rotation caps on-disk use so a shipper outage cannot fill the node disk.
@@ -198,18 +204,43 @@ podSelector:
 > at all**, which is a different result. The policy still earns its place: a
 > successful userns creation from a tenant shell is the signal that matters.
 
-**Open question raised by the first probe (2026-08-09).** In a plain pod on
-these nodes, `unshare -U` / `unshare -Ur` / `unshare --user --map-root-user`
-**all returned 0** — unprivileged user namespaces are freely creatable, and
-`/proc/sys/user/max_user_namespaces` is 122349. With no AppArmor, nothing
-mediates this.
+**ANSWERED 2026-08-09, in a real Kasm session.** `unshare -U true` from the
+session terminal returned **0**, confirmed both by `echo $?` and by the captured
+`return.int_arg`. So:
 
-That test pod carried **no seccomp profile**, so it does *not* show that a real
-Kasm session can do the same — session pods get a seccomp profile from the
-operator, and seccomp would reject `unshare` before this hook, producing no
-event. **Untested, and worth testing:** run the same probe inside a workspace
-launched through Kasm with its normal profile. Test on a session we launch
-ourselves, not by exec'ing into a tenant's live session.
+- **Seccomp does not block `unshare(CLONE_NEWUSER)`** under the profile a real
+  workspace actually gets. It is not merely a property of unconfined test pods.
+- With no AppArmor either (§5), **nothing on these nodes mediates user-namespace
+  creation**. A tenant can obtain a namespace in which they are root — the usual
+  first step toward kernel LPE, and precisely the Model B risk in
+  `security-model.md`.
+
+**But it cannot simply be blocked.** In one ~10-minute session, 29
+`create_user_ns` calls were observed, all returning 0:
+
+| Count | Binary |
+|---:|---|
+| 14 | `/usr/bin/bwrap.real` |
+| 10 | firefox (`…/lib/firefox/firefox`, `.firefox-wrapped`) |
+| 4 | chromium (`…/libexec/chromium/chromium`) |
+| **1** | **`/usr/bin/unshare`** ← the tenant |
+
+28 of 29 are the browser sandboxes doing their job. Disabling user namespaces
+wholesale would break the browsers, which are the product. This is exactly the
+tension `security-model.md` §5.2 predicted, and its answer — per-binary scoping
+— requires AppArmor, which these nodes do not have.
+
+**So prevention is unavailable here, but discrimination is easy.** The legitimate
+creators are a short, stable set of paths. Anything else is signal. Proposed
+rule, which the loaded policy already supports without modification:
+
+> Alert on `create_user_ns` where the binary is **not** bwrap, firefox, or
+> chromium. Baseline those three; treat `/usr/bin/unshare`, any shell, or any
+> unexpected path as high severity regardless of return value.
+
+Match on the resolved path and keep the allowlist in version control — a Nix
+store path changes on every package update, so match the trailing component
+(`/lib/firefox/firefox`), not the hash.
 
 **Runtime sockets** — kprobe `security_socket_connect`, arg 0 `socket`, arg 1
 `sockaddr_un`, one selector matching `Family: AF_UNIX` plus `Equal` over all
@@ -475,6 +506,7 @@ ingest-time API enrichment — it would put a Kasm credential on every node.
 | 2026-08-08 | Correlation blocked, not designed | The source event does not exist in the product today |
 | 2026-08-08 | Attribution retained deliberately | Shared hosting: an unattributed detection cannot be investigated or acted on |
 | 2026-08-09 | Four policies loaded; alert on them rather than sample | Real sessions produce zero kprobe events, so these are signal not volume |
+| 2026-08-09 | **Userns creation is unmediated on these nodes** — detect, do not attempt to prevent | Confirmed in a real session: `unshare -U` returns 0 under the production seccomp profile, and there is no AppArmor. Browsers legitimately create 28 of every 29 namespaces, so blocking breaks the product. Alert on non-browser creators instead |
 | 2026-08-09 | Keep `ignore.callNotFound` on both BPF map hooks | Confirmed on 6.12: `security_bpf_map_create` loads, `security_bpf_map_alloc` is absent and silently skipped. Without the guard the policy would fail to load |
 
 ---
