@@ -1,0 +1,56 @@
+# Observe AF_UNIX connect attempts to container-runtime sockets from Kasm
+# session pods. A connect to the CRI socket from inside a session is a container
+# escape attempt; there is no legitimate reason for it.
+#
+# ONE selector, many Equal values. Tetragon caps a kprobe at MaxSelectors = 5
+# and enforces it at SENSOR CONSTRUCTION -- a server-side dry-run passes and the
+# policy then fails to load. Values within a single matchArgs entry are OR'd, so
+# add paths to `values` rather than adding selectors.
+#
+# security_socket_connect(struct socket *, struct sockaddr *, int) is an LSM
+# hook function; it runs BEFORE unix path resolution, so an event here means the
+# request reached the hook -- not that connect(2) succeeded. ENOENT is normal
+# when the socket is not mounted into the pod, and still produces an event.
+#
+# On phx1 only /run/k3s/containerd/containerd.sock exists. The rest are cheap
+# in-kernel string comparisons kept as defence in depth against a runtime being
+# introduced later. /var/run and /run variants are BOTH listed on purpose: the
+# decoder matches the literal sockaddr_un bytes the caller passed, not a
+# canonicalised path.
+#
+# sockaddr_un requires Tetragon >= v1.7.0 and kernel >= 5.11.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: kasm-observe-runtime-sockets
+spec:
+  podSelector:
+    matchExpressions:
+      - key: kasm.kasmid
+        operator: Exists
+  kprobes:
+    - call: security_socket_connect
+      message: "Container-runtime socket connect attempted from a Kasm session"
+      syscall: false
+      args:
+        - index: 0
+          type: socket
+        - index: 1
+          type: sockaddr_un
+      selectors:
+        - matchArgs:
+            - index: 1
+              operator: Family
+              values:
+                - AF_UNIX
+            - index: 1
+              operator: Equal
+              values:
+                - /run/k3s/containerd/containerd.sock
+                - /run/containerd/containerd.sock
+                - /var/run/crio/crio.sock
+                - /run/crio/crio.sock
+                - /var/run/docker.sock
+                - /run/docker.sock
+          matchActions:
+            - action: Post

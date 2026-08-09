@@ -1,0 +1,56 @@
+# Reached-surface detection for BPF and perf from Kasm session pods.
+#
+# Derived from the pinned upstream policy library:
+#   https://github.com/cilium/tetragon/blob/v1.7.0/examples/policylibrary/bpf.yaml
+# with a session podSelector added. DELIBERATELY OMITTED from that file:
+# security_file_permission and security_mmap_file -- upstream scopes their
+# events to /sys/fs/bpf, but they attach to hot LSM paths and no query here
+# needs them.
+#
+# Meaning of a hit: the request reached this kernel subsystem, i.e. it got past
+# the expected seccomp boundary. Seccomp rejects BEFORE these hooks, so a
+# correctly-confined session should produce NO events here -- a hit means the
+# applied profile needs investigating, not that the hook is working.
+#
+# security_bpf_map_alloc (<6.9) and security_bpf_map_create (6.9+) are the same
+# control across a kernel rename. KEEP `ignore: callNotFound` on BOTH -- without
+# it the policy fails to load on whichever kernel lacks its symbol. phx1 runs
+# 6.12, so _create is the live one.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: kasm-observe-bpf-perf
+spec:
+  podSelector:
+    matchExpressions:
+      - key: kasm.kasmid
+        operator: Exists
+  kprobes:
+    - call: bpf_check
+      message: "BPF program load reached the verifier from a Kasm session"
+      syscall: false
+      args:
+        - index: 1
+          type: bpf_attr
+    - call: security_perf_event_alloc
+      message: "perf event allocation reached the kernel from a Kasm session"
+      syscall: false
+      args:
+        - index: 0
+          type: perf_event
+    - call: security_bpf_map_alloc
+      message: "BPF map creation reached the kernel from a Kasm session"
+      syscall: false
+      args:
+        - index: 0
+          type: bpf_map
+      ignore:
+        callNotFound: true
+    - call: security_bpf_map_create
+      message: "BPF map creation reached the kernel from a Kasm session"
+      syscall: false
+      args:
+        - index: 0
+          type: bpf_map
+      ignore:
+        callNotFound: true

@@ -1,0 +1,53 @@
+# Kernel-module surface reached from Kasm session pods.
+#
+# Derived from the pinned upstream policy library:
+#   https://github.com/cilium/tetragon/blob/v1.7.0/examples/policylibrary/modules.yaml
+# with a session podSelector added.
+#
+# NOTE THE ASYMMETRY between the two hooks, which is upstream's and is retained:
+#   security_kernel_read_file    -- narrowed by matchArgs to READING_MODULE (2),
+#                                   so it is inherently low volume. Explicit
+#                                   module load via finit_module().
+#   security_kernel_module_request -- NO argument selector; posts every automatic
+#                                   module request. Automatic requests have
+#                                   legitimate causes, so treat this as a
+#                                   BASELINE/dashboard signal until its real
+#                                   volume is measured. Do not alert on it yet.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: kasm-observe-modules
+spec:
+  podSelector:
+    matchExpressions:
+      - key: kasm.kasmid
+        operator: Exists
+  kprobes:
+    - call: security_kernel_module_request
+      message: "Kernel module requested and is being loaded automatically"
+      syscall: false
+      return: true
+      args:
+        - index: 0
+          type: string
+      returnArg:
+        index: 0
+        type: int
+    - call: security_kernel_read_file
+      message: "Kernel module is being loaded from a Kasm session"
+      syscall: false
+      return: true
+      args:
+        - index: 0
+          type: file
+        - index: 1
+          type: int
+      returnArg:
+        index: 0
+        type: int
+      selectors:
+        - matchArgs:
+            - index: 1
+              operator: Equal
+              values:
+                - "2"   # READING_MODULE

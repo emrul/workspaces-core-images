@@ -1,0 +1,36 @@
+# Observe user-namespace creation inside Kasm session pods.
+#
+# NOTE ON INTERPRETATION (phx1): these nodes have NO AppArmor, so a negative
+# return does NOT mean "AppArmor blocked it" -- nothing here mediates
+# userns_create. A negative return means the kernel refused for some other
+# reason (max_user_namespaces, capability check). A seccomp rejection produces
+# NO EVENT AT ALL, which is a different result again.
+#
+# Report as "userns creation observed" / "userns creation refused".
+# Never as "AppArmor verified". See design/tetragon-session-monitoring.md §4.
+#
+# create_user_ns(struct cred *new) -> int, kernel/user_namespace.c. Not a
+# syscall, hence syscall: false (the field defaults to true).
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: kasm-observe-userns
+spec:
+  podSelector:
+    matchExpressions:
+      - key: kasm.kasmid
+        operator: Exists
+  kprobes:
+    - call: create_user_ns
+      message: "User namespace creation attempted in a Kasm session"
+      syscall: false
+      return: true
+      args:
+        - index: 0
+          type: nop
+      returnArg:
+        index: 0
+        type: int
+      selectors:
+        - matchActions:
+            - action: Post
