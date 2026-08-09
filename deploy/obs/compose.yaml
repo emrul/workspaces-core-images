@@ -34,6 +34,8 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/ds.yaml:ro
+      - ./grafana-dashboards.yaml:/etc/grafana/provisioning/dashboards/db.yaml:ro
+      - ./dashboards:/etc/grafana/dashboards:ro
     networks: [obs]
 
   caddy:

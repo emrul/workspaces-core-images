@@ -1,0 +1,146 @@
+{
+  "uid": "kasm-tetragon",
+  "title": "Kasm session monitoring",
+  "tags": ["kasm", "tetragon", "security"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Is anything arriving?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Events / sec (all nodes)",
+      "description": "Zero is normal when no Kasm session is running. It does NOT distinguish 'quiet' from 'broken' until the canary exists.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 5, "w": 5, "x": 0, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate({cluster=\"civo-phx1\"}[5m]))", "queryType": "range" }
+      ],
+      "fieldConfig": { "defaults": { "decimals": 2, "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "text", "value": null }, { "color": "green", "value": 0.01 } ] } }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Distinct session pods (1h)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 5, "w": 5, "x": 5, "y": 1 },
+      "targets": [
+        { "refId": "A", "queryType": "instant",
+          "expr": "count(sum by (pod) (count_over_time({cluster=\"civo-phx1\"} | json pod=\"process_exec.process.pod.name\" | pod != \"\" [1h])))" }
+      ],
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Event rate by node",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 5, "w": 14, "x": 10, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (node) (rate({cluster=\"civo-phx1\"}[5m]))", "queryType": "range", "legendFormat": "{{node}}" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10, "showPoints": "never" }, "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "type": "row",
+      "title": "Security signal — policy hits (should normally be EMPTY)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Policy hits by policy",
+      "description": "Real sessions produced zero kprobe events in baseline testing. Anything here is worth investigating, not tuning away.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 6, "w": 10, "x": 0, "y": 7 },
+      "targets": [
+        { "refId": "A", "queryType": "range", "legendFormat": "{{policy}}",
+          "expr": "sum by (policy) (count_over_time({cluster=\"civo-phx1\"} |= \"process_kprobe\" | json policy=\"process_kprobe.policy_name\" [5m]))" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60 } }, "overrides": [] }
+    },
+    {
+      "type": "logs",
+      "title": "Policy events — who did what, where",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 6, "w": 14, "x": 10, "y": 7 },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" },
+      "targets": [
+        { "refId": "A", "queryType": "range",
+          "expr": "{cluster=\"civo-phx1\"} |= \"process_kprobe\" | json policy=\"process_kprobe.policy_name\", fn=\"process_kprobe.function_name\", binary=\"process_kprobe.process.binary\", pod=\"process_kprobe.process.pod.name\", ret=\"process_kprobe.return.int_arg\" | line_format \"{{.policy}} {{.fn}} ret={{.ret}} {{.binary}} pod={{.pod}}\"" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Session activity",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Exec rate by session pod",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 14 },
+      "targets": [
+        { "refId": "A", "queryType": "range", "legendFormat": "{{pod}}",
+          "expr": "topk(10, sum by (pod) (rate({cluster=\"civo-phx1\"} |= \"process_exec\" | json pod=\"process_exec.process.pod.name\" | pod != \"\" [5m])))" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "type": "logs",
+      "title": "Recent execs (binary + pod)",
+      "description": "Command arguments are deliberately not collected — see design doc section 3.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 14 },
+      "options": { "showTime": true, "wrapLogMessage": false, "sortOrder": "Descending" },
+      "targets": [
+        { "refId": "A", "queryType": "range",
+          "expr": "{cluster=\"civo-phx1\"} |= \"process_exec\" | json binary=\"process_exec.process.binary\", pod=\"process_exec.process.pod.name\", parent=\"process_exec.parent.binary\" | pod != \"\" | line_format \"{{.binary}}  (parent {{.parent}})  pod={{.pod}}\"" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Pipeline health — is the absence of events meaningful?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Policies loaded per node (expect 4, errors 0)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 21 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (node, state) (tetragon_tracingpolicy_loaded)", "legendFormat": "{{node}} {{state}}" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 0 }, "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Event loss (any non-zero is a problem)",
+      "description": "queue loss usually means Alloy/Tetragon CPU throttling, not kernel pressure — check the limit first.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 21 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (node) (increase(tetragon_observer_ringbuf_events_lost_total[5m]))", "legendFormat": "ringbuf {{node}}" },
+        { "refId": "B", "expr": "sum by (node) (increase(tetragon_observer_ringbuf_queue_events_lost_total[5m]))", "legendFormat": "queue {{node}}" },
+        { "refId": "C", "expr": "sum by (node) (increase(tetragon_notify_overflowed_events_total[5m]))", "legendFormat": "overflow {{node}}" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 20 } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Pod-enrichment failures (startup blind spot)",
+      "description": "Non-zero means events were dropped because Tetragon could not attribute them to a pod in time.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 21 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (node) (increase(tetragon_event_cache_fetch_failures_total[5m]))", "legendFormat": "{{node}}" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 20 } }, "overrides": [] }
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}
