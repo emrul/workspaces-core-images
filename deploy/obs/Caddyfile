@@ -1,0 +1,32 @@
+{
+	admin off
+	local_certs
+	# Clients reaching this host by IP cannot send SNI, so Caddy has no site to
+	# match and the handshake fails. Pin the default explicitly.
+	default_sni 129.146.181.23
+}
+
+# Explicit hostnames so Caddy's internal CA has something to issue for.
+# A bare ":443" block cannot complete a handshake for an IP SNI.
+https://129.146.181.23, https://localhost {
+	tls internal
+
+	handle /loki/* {
+		basic_auth {
+			{$LOKI_USER} {$LOKI_HASH}
+		}
+		reverse_proxy loki:3100
+	}
+
+	handle /prom/* {
+		basic_auth {
+			{$PROM_USER} {$PROM_HASH}
+		}
+		uri strip_prefix /prom
+		reverse_proxy prometheus:9090
+	}
+
+	handle {
+		reverse_proxy grafana:3000
+	}
+}

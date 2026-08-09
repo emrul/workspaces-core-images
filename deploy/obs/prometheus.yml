@@ -1,0 +1,14 @@
+# HEALTH-ONLY Prometheus. Not a general application-metrics platform.
+# Tetragon agents remote-write in from CIVO; rules key on (cluster, node)
+# because node names are not unique across deployments.
+global:
+  scrape_interval: 60s
+  evaluation_interval: 60s
+  external_labels:
+    collector: obs-1
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs: [{targets: ['localhost:9090']}]
+  - job_name: loki
+    static_configs: [{targets: ['loki:3100']}]

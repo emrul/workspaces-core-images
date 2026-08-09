@@ -1,0 +1,60 @@
+services:
+  loki:
+    image: grafana/loki:3.6.1
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yaml
+    volumes:
+      - ./loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki-data:/loki
+    networks: [obs]
+
+  prometheus:
+    image: prom/prometheus:v3.11.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-remote-write-receiver
+      - --web.external-url=/prom
+      - --web.route-prefix=/
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    networks: [obs]
+
+  grafana:
+    image: grafana/grafana:12.3.1
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/gf_admin
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_SERVER_ROOT_URL: "https://%(domain)s/"
+    secrets: [gf_admin]
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/ds.yaml:ro
+    networks: [obs]
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports: ["443:443"]
+    env_file: caddy.env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [obs]
+
+secrets:
+  gf_admin:
+    file: ./.gf_admin
+
+networks: {obs: {}}
+volumes:
+  loki-data: {}
+  prom-data: {}
+  grafana-data: {}
+  caddy-data: {}
+  caddy-config: {}
