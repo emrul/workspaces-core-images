@@ -159,8 +159,19 @@ planted test literals in export files or pod logs.
 
 ## 4. Detection policies
 
-**Status: none loaded yet.** `tetragon_tracingpolicy_loaded` is zero across all
-states. This is the next step.
+**Status: four loaded, `enabled=4 error=0 load_error=0` on all three nodes**
+(2026-08-09). Sources in `deploy/tetragon/policy-*.yaml`.
+
+| Policy | Hooks |
+|---|---|
+| `kasm-observe-userns` | `create_user_ns` (return captured) |
+| `kasm-observe-runtime-sockets` | `security_socket_connect` + `sockaddr_un` |
+| `kasm-observe-bpf-perf` | `bpf_check`, `security_perf_event_alloc`, `security_bpf_map_alloc`/`_create` |
+| `kasm-observe-modules` | `security_kernel_module_request`, `security_kernel_read_file` |
+
+**Noise: zero.** Across all three nodes, real sessions produced **no kprobe
+events at all** — every one observed so far came from deliberate probes. These
+are high-signal policies, not a volume problem. Alert on them accordingly.
 
 All policies are observe-only, carry the session `podSelector`, and are
 validated with server-side dry-run *and* confirmed loaded via metrics.
@@ -182,6 +193,19 @@ podSelector:
 > *userns creation observed / refused*. A seccomp rejection produces **no event
 > at all**, which is a different result. The policy still earns its place: a
 > successful userns creation from a tenant shell is the signal that matters.
+
+**Open question raised by the first probe (2026-08-09).** In a plain pod on
+these nodes, `unshare -U` / `unshare -Ur` / `unshare --user --map-root-user`
+**all returned 0** — unprivileged user namespaces are freely creatable, and
+`/proc/sys/user/max_user_namespaces` is 122349. With no AppArmor, nothing
+mediates this.
+
+That test pod carried **no seccomp profile**, so it does *not* show that a real
+Kasm session can do the same — session pods get a seccomp profile from the
+operator, and seccomp would reject `unshare` before this hook, producing no
+event. **Untested, and worth testing:** run the same probe inside a workspace
+launched through Kasm with its normal profile. Test on a session we launch
+ourselves, not by exec'ing into a tenant's live session.
 
 **Runtime sockets** — kprobe `security_socket_connect`, arg 0 `socket`, arg 1
 `sockaddr_un`, one selector matching `Family: AF_UNIX` plus `Equal` over all
@@ -280,6 +304,18 @@ allowlist drops it. Startup execs can be lost silently. Alert on
 Fail-closed is the deliberate choice: the alternative exports unrelated host
 activity.
 
+**Measured, 2026-08-09.** A pod ran three `unshare` calls: two in its first
+second, one several seconds later after an `apk add`. Only the *late* one
+produced an event. Re-running all three by `kubectl exec` into the same,
+now-established pod produced all three. **Two of three events were lost in the
+opening seconds of pod life.**
+
+This affects the *policy filter* as well as the export allowlist — a session's
+earliest execs may not be covered by any policy. It is the single largest known
+gap in coverage, and it sits exactly where escape attempts would be cheapest to
+hide. Anything claiming complete startup coverage needs Tetragon's runtime hooks
+first.
+
 ### 5.8 gRPC bypasses the export filters entirely
 
 Allow/deny/field filters are **per-request**. A client with empty filters gets
@@ -300,6 +336,19 @@ state with **no `policy` label**, so it tells you *that* something failed, not
 Abstract socket names use a 107-byte NUL-padded form with the leading `@`
 stripped before matching, so `Equal` on a visually similar value never matches —
 filesystem paths only.
+
+---
+
+### 5.11 A kprobe event is "hook reached", not "operation succeeded"
+
+Demonstrated on the socket policy: a connect to
+`/run/k3s/containerd/containerd.sock` from a pod where that socket is not
+mounted returns **ENOENT**, and still produces a full event with the decoded
+path — because `security_socket_connect` is an LSM hook that runs *before* unix
+path resolution. Read the userspace return separately from the event.
+
+Conversely, a seccomp rejection produces **no event at all**. Absence proves
+nothing on its own.
 
 ---
 
@@ -369,7 +418,7 @@ whether AUP or terms language must cover this before hosted users are observed.
 
 | | |
 |---|---|
-| **Detection policies** | None loaded. Next step. |
+| **Seccomp reality check** | Whether a real Kasm session's seccomp profile blocks `unshare` — see §4. Launch a workspace we own; do not probe a tenant's live session. |
 | **Alloy shipping** | Not deployed. Must tail rotations, keep positions on a persistent hostPath, drop `node_labels` (§5.4), and mount the export dir read-only. |
 | **OCI `obs-1`** | Not provisioned. E4.Flex 2 OCPU / 16 GB decided (x86 avoids ARM image questions and A1 capacity contention). Region open. |
 | **Health plane** | Prometheus (health-only, 7 days), per-node canary DaemonSet, alerts on loss counters, canary gaps, disk >80%, clock offset. Rules key on `(cluster, node)` — node names are not unique across clusters. |
@@ -403,6 +452,8 @@ ingest-time API enrichment — it would put a Kasm credential on every node.
 | 2026-08-08 | Grace period via helm **plugin** post-renderer | Chart hard-codes 1s with no values key; `kubectl patch` breaks the next upgrade |
 | 2026-08-08 | Correlation blocked, not designed | The source event does not exist in the product today |
 | 2026-08-08 | Attribution retained deliberately | Shared hosting: an unattributed detection cannot be investigated or acted on |
+| 2026-08-09 | Four policies loaded; alert on them rather than sample | Real sessions produce zero kprobe events, so these are signal not volume |
+| 2026-08-09 | Keep `ignore.callNotFound` on both BPF map hooks | Confirmed on 6.12: `security_bpf_map_create` loads, `security_bpf_map_alloc` is absent and silently skipped. Without the guard the policy would fail to load |
 
 ---
 
