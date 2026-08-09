@@ -1,0 +1,60 @@
+# Detect execution of binaries that did NOT ship in the image.
+#
+# Everything we ship lives on read-only or immutable paths (/usr, /nix, /store,
+# /dockerstartup). A binary the tenant downloaded, built, or extracted has to be
+# written somewhere first, and there are only a handful of writable locations in
+# the container. So: alert on exec FROM a writable location.
+#
+# Measured on a real session (2026-08-09): 828 execs in 90 minutes, 8 of which
+# were outside the shipped paths. ~99% reduction.
+#
+# WHY THIS IS A PREFIX-ON-WRITABLE LIST AND NOT NotPrefix-ON-SHIPPED:
+# `linux_binprm` supports only Equal, NotEqual, Prefix and Postfix. NotPrefix is
+# a valid operator generally, but NOT for this type -- and Tetragon accepts the
+# policy, loads it, reports enabled, and then silently matches NOTHING. Verified
+# the hard way: a NotPrefix version produced zero events while the same hook with
+# no selector captured the exec correctly. Do not "simplify" this back.
+#
+# WHAT THIS DOES NOT CATCH -- do not oversell it:
+#   * Interpreted payloads. `python3 /tmp/evil.py` execs /usr/bin/python3, which
+#     is ours and not in this list. The payload is in argv, which we deliberately
+#     do not collect. Scripts are the more likely abuse vector and are invisible.
+#   * Fileless exec (memfd_create + execveat) has no on-disk path.
+#   * A writable directory not listed below. This list is the control surface --
+#     if the image gains a writable path, add it here.
+#
+# Known-benign hits are filtered in the ALERT rule, not here, so the events stay
+# in the record for forensics:
+#   * /tmp/staticx-*/kasm_printer_service  - our own StaticX-packed service
+#   * /proc/self/exe                       - normal Go re-exec, but also the
+#                                            runc CVE-2019-5736 escape primitive
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: kasm-observe-foreign-binary
+spec:
+  podSelector:
+    matchExpressions:
+      - key: kasm.kasmid
+        operator: Exists
+  kprobes:
+    - call: security_bprm_check
+      message: "Execution of a binary from a writable path - possible user-supplied binary"
+      syscall: false
+      args:
+        - index: 0
+          type: linux_binprm
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: Prefix
+              values:
+                - /tmp/
+                - /var/tmp/
+                - /dev/shm/
+                - /home/
+                - /root/
+                - /run/user/
+                - /proc/self/exe
+          matchActions:
+            - action: Post

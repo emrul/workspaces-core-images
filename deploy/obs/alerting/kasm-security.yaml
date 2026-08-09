@@ -151,3 +151,59 @@ groups:
               expression: A
               conditions:
                 - evaluator: {type: gt, params: [0]}
+
+      - uid: kasm-foreign-binary
+        title: User-supplied binary executed in a Kasm session
+        condition: THRESHOLD
+        noDataState: OK
+        execErrState: Alerting
+        for: 0m
+        annotations:
+          summary: >-
+            A binary was executed from a writable path inside a Kasm session -
+            it did not ship in the image.
+          description: >-
+            Everything we ship runs from /usr, /nix, /store or /dockerstartup. A
+            binary running from /tmp, /home, /dev/shm or /var/tmp was put there
+            by whoever is using the session.
+
+            Measured baseline: 828 execs in 90 minutes of normal use, 8 outside
+            shipped paths, all explainable. This should be quiet.
+
+            BLIND SPOT - do not read a silent alert as "nothing was run". This
+            catches downloaded ELF binaries only. An interpreted payload
+            (python3 /tmp/x.py, sh /tmp/x.sh, curl | bash) execs an allowlisted
+            interpreter and is invisible here, because the payload lives in argv
+            which is deliberately not collected.
+          runbook: design/tetragon-session-monitoring.md section 4
+        labels:
+          severity: high
+          area: kasm-session
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: loki
+            model:
+              refId: A
+              datasource: {type: loki, uid: loki}
+              queryType: instant
+              # Known-benign exclusions are here rather than in the policy, so
+              # the events stay in the record for forensics even when they do
+              # not page: our own StaticX-packed printer service, and the Go
+              # re-exec pattern (which is also the runc CVE-2019-5736 primitive,
+              # so it is excluded reluctantly - revisit if it ever correlates).
+              expr: >-
+                sum(count_over_time({cluster="civo-phx1"}
+                  |= "kasm-observe-foreign-binary"
+                  | json path="process_kprobe.args[0].linux_binprm_arg.path"
+                  | path !~ "/tmp/staticx-[A-Za-z0-9]+/.*"
+                  | path != "/proc/self/exe"
+                  [5m]))
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              refId: THRESHOLD
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
