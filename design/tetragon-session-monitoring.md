@@ -178,6 +178,8 @@ planted test literals in export files or pod logs.
 | `kasm-observe-runtime-sockets` | `security_socket_connect` + `sockaddr_un` |
 | `kasm-observe-bpf-perf` | `bpf_check`, `security_perf_event_alloc`, `security_bpf_map_alloc`/`_create` |
 | `kasm-observe-modules` | `security_kernel_module_request`, `security_kernel_read_file` |
+| `kasm-observe-foreign-binary` | `security_bprm_check` — exec from a writable path |
+| `kasm-observe-egress` | `tcp_connect` — external, non web/DNS/NTP port |
 
 **Noise: zero.** Across all three nodes, real sessions produced **no kprobe
 events at all** — every one observed so far came from deliberate probes. These
@@ -258,6 +260,33 @@ Do **not** copy `bpf.yaml` wholesale: `security_file_permission` and
 `security_mmap_file` attach to hot LSM paths for no query we have.
 `security_kernel_module_request` has no argument selector upstream (unlike its
 `READING_MODULE`-scoped sibling) — baseline it before alerting.
+
+### Abuse detection — measured baselines
+
+These target §1 duty 2, and each carries a measured carve-out rather than a
+guess. Three need no new kernel probe at all: they are Loki rules over exec
+events we already collect, which is the payoff for keeping raw exec.
+
+| Signal | Baseline measured | Discriminator |
+|---|---|---|
+| User-supplied binary | 828 execs/90min, 8 outside shipped paths | exec from a writable path |
+| Unusual egress | verified: 3333 and 25 alert, 443 does not | external + not web/DNS/NTP |
+| Privilege escalation | `su` runs **21×** per session, **all** from our boot chain | parent binary, *not* uid |
+| Miner names | zero | name match — trivially evaded, bonus only |
+
+Two traps found while measuring these:
+
+- **`su` is not rare.** It runs 21 times in a normal session, always from
+  `kasm-setup`, `nix-activate`, `timeout` or `runc`, dropping privilege rather
+  than raising it. `sudo` is not installed at all. A naive "alert on su" rule is
+  pure noise.
+- **Process `uid` is not trustworthy.** Values like `176553984`, `2368929792`
+  and `3597729792` appear on session processes, alongside sane `0` and `1000`.
+  Do not build rules on uid; use the parent binary.
+
+Mining detection deliberately does not lean on names. A downloaded miner trips
+the user-supplied-binary rule whatever it is called, and its pool connection
+trips the egress rule; the name list only catches the careless.
 
 ### Later, and deliberately re-prioritised
 

@@ -1,0 +1,56 @@
+# Outbound connections from Kasm sessions on unusual destinations.
+#
+# This is the core abuse-detection signal for shared hosting (design doc §1
+# duty 2): mining pools, reverse shells, spam relay and port scanning all leave
+# by this path, and none of them are caught by containment controls because
+# nothing is escaping the container.
+#
+# Filtering is in-kernel and AND'ed within the single selector:
+#   NotDPort  - ignore the ports normal desktop use actually needs
+#   NotDAddr  - ignore cluster-internal traffic (pod and service CIDRs)
+# so what remains is "a session connected somewhere external, on a port that is
+# not web, DNS or NTP". A browser generates almost none of this.
+#
+# Mining pools commonly use 3333/4444/5555/7777/8888/9999/14444/45700, reverse
+# shells anything, SMTP relay 25/465/587. Rather than enumerate bad ports -
+# which is an arms race - this enumerates the small set of GOOD ones.
+#
+# VERIFY AFTER ANY EDIT: NotDPort is implemented in Tetragon but is not listed
+# in the argument_types documentation for `sock`. An unsupported operator loads
+# cleanly and then silently matches nothing (see policy-foreign-binary.yaml for
+# the same trap with NotPrefix). Always confirm with a live probe, never assume
+# the policy is working because it reports enabled.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: kasm-observe-egress
+spec:
+  podSelector:
+    matchExpressions:
+      - key: kasm.kasmid
+        operator: Exists
+  kprobes:
+    - call: tcp_connect
+      message: "Outbound connection from a Kasm session on an unusual port"
+      syscall: false
+      args:
+        - index: 0
+          type: sock
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: NotDPort
+              values:
+                - "80"     # http
+                - "443"    # https
+                - "53"     # dns
+                - "123"    # ntp
+                - "8443"   # kasm internal https
+            - index: 0
+              operator: NotDAddr
+              values:
+                - 127.0.0.1
+                - 10.42.0.0/16   # k3s pod CIDR
+                - 10.43.0.0/16   # k3s service CIDR
+          matchActions:
+            - action: Post
