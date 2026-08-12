@@ -57,7 +57,10 @@
 set -euo pipefail
 
 NIX_APP_REPO="${NIX_APP_REPO:-localhost/nix}"
-DOCKER="${DOCKER:-podman}"
+# Engine: podman under the DinD harness, docker on a docker-only host. Was a
+# hard `podman` default, which silently pointed at a missing binary once the
+# build moved onto the host.
+DOCKER="${DOCKER:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
 OUT_DIR="${OUT_DIR:-/artifacts}"
 PARALLEL="${PARALLEL:-2}"
 SCAN_MAX_APPS="${SCAN_MAX_APPS:-0}"

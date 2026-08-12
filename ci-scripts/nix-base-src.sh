@@ -32,6 +32,27 @@
 #                       exists (a quay robot token, our own registry, a mirror)
 #   REGISTRY_AUTH_FILE  where podman keeps the login (default /tmp/kasm-nix-auth.json)
 
+# ── container engine ────────────────────────────────────────────────────────
+# podman under the DinD harness, docker on a host that has only docker. Same
+# detection as bin/build-nix-store-volume, and overridable so a caller can pin
+# it. Both base scripts source this file, so this is the single place it lives.
+if [ -z "${CONTAINER_CLI:-}" ]; then
+  if command -v podman >/dev/null 2>&1; then
+    CONTAINER_CLI=podman
+  elif command -v docker >/dev/null 2>&1; then
+    CONTAINER_CLI=docker
+  else
+    echo "[base-src] FATAL: need podman or docker on PATH" >&2; exit 1
+  fi
+fi
+
+# `image exists` is podman-only; docker needs `image inspect`. The codebase's
+# established idiom (bin/build-nix-store-volume) tries both.
+image_present() {
+  "${CONTAINER_CLI}" image exists "$1" 2>/dev/null \
+    || "${CONTAINER_CLI}" image inspect "$1" >/dev/null 2>&1
+}
+
 # The RapidFort curated Noble image the single-app catalogue is built on.
 # One line to revert: set NIX_BASE_SRC_UBUNTU=ubuntu:24.04.
 : "${RF_UBUNTU_IMAGE:=quay.io/rfcurated/rfubu:24.04-rfcurated}"
@@ -71,7 +92,7 @@ registry_auth_setup() {
   reg="${RF_REGISTRY:-quay.io}"
 
   if [ -n "${RF_ROOT_URL:-}" ]; then
-    bash "${NIX_CI_SCRIPTS:-/work/ci-scripts}/rf-credhelper-login.sh" || return 1
+    bash "${NIX_CI_SCRIPTS:-${KASM_REPO:-/work}/ci-scripts}/rf-credhelper-login.sh" || return 1
     return 0
   fi
 
@@ -84,12 +105,12 @@ registry_auth_setup() {
     echo "[base-src] no registry credentials in env — public images only" >&2
     return 0
   fi
-  if printf '%s' "${pass}" | podman login "${reg}" -u "${user}" --password-stdin >/dev/null 2>&1; then
+  if printf '%s' "${pass}" | "${CONTAINER_CLI}" login "${reg}" -u "${user}" --password-stdin >/dev/null 2>&1; then
     echo "[base-src] authenticated to ${reg} as ${user%%+*}+… (auth file: ${REGISTRY_AUTH_FILE})" >&2
     return 0
   fi
   # Do not print the response: it can echo the credential back.
-  echo "[base-src] ERROR: podman login ${reg} FAILED for the supplied credentials" >&2
+  echo "[base-src] ERROR: ${CONTAINER_CLI} login ${reg} FAILED for the supplied credentials" >&2
   return 1
 }
 
@@ -99,10 +120,10 @@ registry_auth_setup() {
 pull_src() {
   local img="$1"
   if src_is_private_registry "${img}"; then
-    podman pull -q "${img}" >/dev/null 2>&1 && return 0
+    "${CONTAINER_CLI}" pull -q "${img}" >/dev/null 2>&1 && return 0
   else
-    podman pull -q "docker.io/library/${img}" >/dev/null 2>&1 && return 0
-    podman pull -q "${img}" >/dev/null 2>&1 && return 0
+    "${CONTAINER_CLI}" pull -q "docker.io/library/${img}" >/dev/null 2>&1 && return 0
+    "${CONTAINER_CLI}" pull -q "${img}" >/dev/null 2>&1 && return 0
   fi
 
   if src_is_private_registry "${img}" && [ -z "${RF_USERNAME:-${RF_ACCESS_ID:-}}" ]; then
@@ -124,7 +145,7 @@ EOF
 
 # The digest podman recorded for a tag (manifest-list digest → arch-stable).
 src_digest_of() {
-  podman image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$1" 2>/dev/null \
+  "${CONTAINER_CLI}" image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$1" 2>/dev/null \
     | sed 's/.*@//'
 }
 

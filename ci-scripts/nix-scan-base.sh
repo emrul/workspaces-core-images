@@ -31,7 +31,10 @@
 #   HOST_UID/HOST_GID  chown reports back to the runner UID (root writes them)
 set -uo pipefail
 
-DOCKER="${DOCKER:-podman}"
+# Engine: podman under the DinD harness, docker on a docker-only host. Was a
+# hard `podman` default, which silently pointed at a missing binary once the
+# build moved onto the host.
+DOCKER="${DOCKER:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
 FILTER="${NIX_BASES:-}"
 OUT_DIR="${OUT_DIR:-/artifacts}"
 export TRIVY_HOME="${TRIVY_HOME:-/tmp/trivy}"

@@ -18,8 +18,27 @@
 # See design/nix-ci-disk.md.
 set -u
 
+# podman under the DinD harness, docker on a docker-only host. Every subcommand
+# used below exists in both (images / rmi / image prune / builder prune /
+# volume ls|rm|inspect / system df) — checked before swapping, because
+# `image exists` does NOT exist in docker, and a blanket rename would have
+# broken base-staleness checking elsewhere in this tree.
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
+
 CAP_G="${NIX_STAGE_CAP_G:-250}"
-freeG() { df -PBG /var/lib/containers 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4); print $4+0}'; }
+# Free space on the ENGINE'S OWN store, not a hardcoded path. /var/lib/containers
+# is where the DinD harness mounted it; on a docker host the data-root is
+# elsewhere (e.g. /srv/nix-build/docker). df on a missing path prints nothing,
+# which this function would have reported as 0 G free — i.e. "disk full" — so the
+# fallback chain matters more than it looks.
+STORE_DIR="${STORE_DIR:-$(
+  "${CONTAINER_CLI}" info --format '{{.DockerRootDir}}' 2>/dev/null \
+    || "${CONTAINER_CLI}" info --format '{{.Store.GraphRoot}}' 2>/dev/null
+)}"
+[ -d "${STORE_DIR:-}" ] || STORE_DIR=/var/lib/containers
+[ -d "${STORE_DIR}" ] || STORE_DIR=/
+echo "[gc] store dir: ${STORE_DIR}"
+freeG() { df -PBG "${STORE_DIR}" 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4); print $4+0}'; }
 
 echo "[gc] free before: $(freeG)G"
 
@@ -35,29 +54,29 @@ echo "[gc] free before: $(freeG)G"
 # base images (ubuntu/fedora/alpine/golang/nixos-nix) and the localhost
 # nix-<distro>/kasm-core bases, forcing slow re-pulls/rebuilds. Removing the tags
 # here turns their layers dangling so step 1 reclaims them.
-podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+"${CONTAINER_CLI}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
   | grep -E '^(registry\.gitlab\.com/|127\.0\.0\.1:[0-9]+/)' \
-  | sort -u | xargs -r -n1 podman rmi -f >/dev/null 2>&1 || true
+  | sort -u | xargs -r -n1 "${CONTAINER_CLI}" rmi -f >/dev/null 2>&1 || true
 
 # 1. dangling image layers
-podman image prune -f >/dev/null 2>&1 || true
+"${CONTAINER_CLI}" image prune -f >/dev/null 2>&1 || true
 
 # 1b. dangling BUILD CACHE — intermediate layers left by past `podman build`
 # runs (base + fat-store + per-app finish). This is the single biggest churn
 # source (measured ~89 G on the forge) and `image prune` does NOT touch it.
 # Use -f (dangling/unused only), NEVER -a: `builder prune -a` also drops the
 # cache backing live images and cascades into removing the tagged base images.
-podman builder prune -f >/dev/null 2>&1 || true
+"${CONTAINER_CLI}" builder prune -f >/dev/null 2>&1 || true
 
 # 2. superseded per-app / fat-store dev tags (keep ALL distro base images —
 # nix-ubuntu*, nix-fedora, nix-alpine — which publish-base pushes from this store)
-podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+"${CONTAINER_CLI}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
   | grep -E '^localhost/nix-' | grep -vE 'nix-ubuntu|nix-fedora|nix-alpine|nixbase' \
-  | sort -u | xargs -r -n1 podman rmi -f >/dev/null 2>&1 || true
+  | sort -u | xargs -r -n1 "${CONTAINER_CLI}" rmi -f >/dev/null 2>&1 || true
 
 # 3. stale anonymous volumes (old registry staging etc.) — never the Nix cache
-for v in $(podman volume ls --format '{{.Name}}' 2>/dev/null | grep -vE '^nix-build-stage-'); do
-  podman volume rm "$v" >/dev/null 2>&1 || true
+for v in $("${CONTAINER_CLI}" volume ls --format '{{.Name}}' 2>/dev/null | grep -vE '^nix-build-stage-'); do
+  "${CONTAINER_CLI}" volume rm "$v" >/dev/null 2>&1 || true
 done
 
 # NOTE — in-place `nix-store --gc` on the staging volume is FORBIDDEN.
@@ -76,16 +95,16 @@ done
 # it must first register the seed image's full runtime closure as a gcroot.
 
 # 4. size-guarded reset of the Nix cache (rare; next build re-seeds)
-for sv in $(podman volume ls --format '{{.Name}}' 2>/dev/null | grep -E '^nix-build-stage-'); do
-  mp=$(podman volume inspect "$sv" --format '{{.Mountpoint}}' 2>/dev/null) || continue
+for sv in $("${CONTAINER_CLI}" volume ls --format '{{.Name}}' 2>/dev/null | grep -E '^nix-build-stage-'); do
+  mp=$("${CONTAINER_CLI}" volume inspect "$sv" --format '{{.Mountpoint}}' 2>/dev/null) || continue
   [ -n "$mp" ] || continue
   szg=$(du -sBG "$mp" 2>/dev/null | awk '{gsub(/G/,"",$1); print $1+0}')
   echo "[gc] ${sv} = ${szg:-?}G (cap ${CAP_G}G)"
   if [ "${szg:-0}" -gt "$CAP_G" ]; then
     echo "[gc] ${sv} over cap — removing (next build re-seeds the Nix store)"
-    podman volume rm -f "$sv" >/dev/null 2>&1 || true
+    "${CONTAINER_CLI}" volume rm -f "$sv" >/dev/null 2>&1 || true
   fi
 done
 
 echo "[gc] free after:  $(freeG)G"
-podman system df 2>/dev/null || true
+"${CONTAINER_CLI}" system df 2>/dev/null || true

@@ -29,6 +29,8 @@
 set -euo pipefail
 
 REG="${RF_REGISTRY:-quay.io}"
+# podman under DinD, docker on a docker-only host.
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
 HELPER="${RF_CRED_HELPER:-/work/.rf/docker-credential-rfcurated}"
 export REGISTRY_AUTH_FILE="${REGISTRY_AUTH_FILE:-/tmp/kasm-nix-auth.json}"
 
@@ -48,7 +50,7 @@ export RF_ROOT_URL RF_ACCESS_ID RF_SECRET_ACCESS_KEY
 # with both installed — and the failure otherwise surfaces as a generic "could not
 # mint a token", which sends you looking at your credentials instead.
 if command -v docker >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; then
-  die "RapidFort's credential helper refuses to run with BOTH docker and podman on PATH. Re-run with a PATH that exposes only one (the builder has podman only)."
+  die "RapidFort's credential helper refuses to run with BOTH docker and podman on PATH. Re-run with a PATH that exposes only one (whichever CONTAINER_CLI resolves to)."
 fi
 
 # The helper reads env, but also looks for ~/.rapidfort/credentials. Write it too:
@@ -79,8 +81,8 @@ user="$(printf '%s' "${out}" | python3 -c 'import sys,json; print(json.load(sys.
 secret="$(printf '%s' "${out}" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("Secret",""))' 2>/dev/null || true)"
 [ -n "${user}" ] && [ -n "${secret}" ] || die "helper returned no usable credential for ${REG}"
 
-printf '%s' "${secret}" | podman login "${REG}" -u "${user}" --password-stdin >/dev/null \
-  || die "podman login ${REG} failed with the minted token"
+printf '%s' "${secret}" | "${CONTAINER_CLI}" login "${REG}" -u "${user}" --password-stdin >/dev/null \
+  || die "${CONTAINER_CLI} login ${REG} failed with the minted token"
 
 # The minted token is short-lived (RF issues ~3600s). Fine for a base build: the
 # source-image pull happens in the first minute. If a later stage ever needs the

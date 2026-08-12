@@ -19,9 +19,22 @@
 # plus human-readable [base-check] lines on stderr.
 set -euo pipefail
 
+# Repo root. /work is where the DinD harness bind-mounts it; on a host that runs
+# the build directly (docker-on-host) it is the checkout this script lives in.
+# Explicit if/else on purpose: `A && echo X || cd Y && pwd` parses as
+# ((A && echo) || cd) && pwd, so pwd runs even on the /work branch and the value
+# comes back as two lines.
+if [ -z "${KASM_REPO:-}" ]; then
+  if [ -d /work/ci-scripts ]; then
+    KASM_REPO=/work
+  else
+    KASM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  fi
+fi
+
 # Source images + registry auth, shared with nix-base-build.sh so a base can never
 # be BUILT from one image and CHECKED against another.
-. /work/ci-scripts/nix-base-src.sh
+. "${KASM_REPO}/ci-scripts/nix-base-src.sh"
 
 WANT="${BASE_DISTROS:-ubuntu fedora alpine resolute}"
 CHECK_UPSTREAM="${CHECK_UPSTREAM:-1}"
@@ -80,10 +93,10 @@ for d in ${WANT}; do
 
   # Existence first, and always: this is what makes a cold or gc-reset store
   # self-healing rather than a build failure.
-  if ! podman image exists "${nix}" 2>/dev/null; then
+  if ! image_present "${nix}"; then
     echo "[base-check] ${d}: STALE (no local base)" >&2; stale="${stale} ${d}"; continue
   fi
-  have="$(podman image inspect --format '{{index .Config.Labels "dev.kasm.base.src-digest"}}' "${nix}" 2>/dev/null || true)"
+  have="$("${CONTAINER_CLI}" image inspect --format '{{index .Config.Labels "dev.kasm.base.src-digest"}}' "${nix}" 2>/dev/null || true)"
   if [ -z "${have}" ] || [ "${have}" = "<no value>" ]; then
     echo "[base-check] ${d}: STALE (base unstamped)" >&2; stale="${stale} ${d}"; continue
   fi
@@ -102,7 +115,7 @@ for d in ${WANT}; do
   # Stale here `continue`s: the base is already going to be rebuilt, and the
   # rebuild picks up a moved distro digest too, so it still appears once.
   if [ -n "${WANT_REV}" ]; then
-    have_rev="$(podman image inspect --format '{{index .Config.Labels "dev.kasm.base.nixpkgs-rev"}}' "${nix}" 2>/dev/null || true)"
+    have_rev="$("${CONTAINER_CLI}" image inspect --format '{{index .Config.Labels "dev.kasm.base.nixpkgs-rev"}}' "${nix}" 2>/dev/null || true)"
     if [ -z "${have_rev}" ] || [ "${have_rev}" = "<no value>" ]; then
       echo "[base-check] ${d}: STALE (no nixpkgs-rev stamp — predates the rev check)" >&2
       stale="${stale} ${d}"; continue

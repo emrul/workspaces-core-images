@@ -50,6 +50,21 @@ variables:
   NIX_BASE_SRC_UBUNTU: "quay.io/rfcurated/rfubu:24.04-rfcurated"
   RF_REGISTRY: "quay.io"
   RF_CLI_VERSION: "1.6.4490"   # RF CLI version published to our package registry
+  # ── build execution shim ──────────────────────────────────────────────────
+  # host-run.sh runs each build step DIRECTLY on the runner; dind-run.sh wraps it
+  # in a privileged podman-in-podman container. Same argument shape, so this is a
+  # one-variable switch either way.
+  #
+  # host-run.sh is the default because the runner has docker on the host and every
+  # build script is engine-agnostic, so the nesting bought nothing and cost three
+  # things: `sudo nerdctl run` orphans the runner cannot kill (one survived a
+  # cancelled pipeline by 27 days), a client-cleanup hang that turned a successful
+  # 122-minute build into a red pipeline, and images landing in podman's store
+  # where a co-located Kasm cannot see them.
+  #
+  # Set NIX_RUNNER_SHIM=dind-run.sh to fall back — needed on any runner WITHOUT a
+  # host container engine (the forge box was one).
+  NIX_RUNNER_SHIM: "host-run.sh"
   # Disk budget (enforced by dind-build.sh's pre-flight gate + end-of-build reclaim
   # + nix-gc.sh). Tune to the runner's provisioned disk — see docs/ci_cd_flow.md.
   # OPS SIZING: provision the store at
@@ -214,7 +229,7 @@ gc:
     - if: '$NIX_GC == "1"'
   script:
     - |
-      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e NIX_STAGE_CAP_G="$NIX_STAGE_CAP_G" \
@@ -273,7 +288,7 @@ base-check:
                    echo "[base-check] helper unavailable — ubuntu upstream digest will read as unresolved" ;;
         esac
       fi
-      out="$(bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      out="$(bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e BASE_DISTROS="${BASE_DISTROS:-}" \
@@ -334,7 +349,7 @@ base:
         */*/*) case " ${reb} " in *" ubuntu "*)
                  bash ci-scripts/rf-fetch-credhelper.sh ;; esac ;;
       esac
-      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e BASE_DISTROS="${reb}" -e BUILD_PARALLEL="$BUILD_PARALLEL" \
@@ -400,7 +415,7 @@ build:
       # and base-check now guarantees the base is rebuilt when absent.
       RESOLUTE_APPS="$(awk '/^\[profiles\./{p=$0;sub(/^\[profiles\./,"",p);sub(/\].*/,"",p)} /^[[:space:]]*app_base[[:space:]]*=/&&p!=""{v=$0;sub(/^[^"]*"/,"",v);sub(/".*/,"",v);if(v=="resolute")printf "%s ",p}' bin/nix-profiles.toml)"
       echo "resolute multi-store apps: ${RESOLUTE_APPS:-<none>}"
-      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/root/.cache/nix-build-output" \
         -v "$CI_PROJECT_DIR:/work:ro" \
@@ -451,7 +466,7 @@ publish-base:
         echo "no base rebuilt this run — skipping publish-base"; exit 0
       fi
       echo "publishing rebuilt bases: ${NIX_BASES}"
-      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" -e NIX_BASES="$NIX_BASES" \
@@ -480,7 +495,7 @@ publish:
       # skips unchanged ones; a gated filter here would strand images that
       # rebuilt beyond the git-gated set (pin drift) and break fat↔app layer
       # dedup on the registry. The __none__ early-exit above still applies.
-      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/root/.cache/nix-build-output" \
         -v "$CI_PROJECT_DIR:/work:ro" \
@@ -575,7 +590,7 @@ scan-base:
         echo "no base rebuilt this run — nothing to scan"; exit 0
       fi
       echo "scanning rebuilt bases: ${NIX_BASES}"
-      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -v "$CI_PROJECT_DIR:/artifacts" \
@@ -627,7 +642,7 @@ scan-nix:
       else
         SBOM_PUBLISH_INTENT=1
       fi
-      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/build-output:ro" \
         -v "$CI_PROJECT_DIR:/work:ro" \
@@ -684,7 +699,7 @@ sbom-publish:
   script:
     - |
       if [ "${NIX_PROFILES:-}" = "__none__" ]; then echo "nothing published — skipping"; exit 0; fi
-      bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
+      bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -v "$CI_PROJECT_DIR:/artifacts" \
         -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \

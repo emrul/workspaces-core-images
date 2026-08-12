@@ -19,11 +19,24 @@
 #   BASE_BUILT_SHA  commit sha, stamped as kasm.base.builtsha (the app-build
 #                   freshness guard in dind-build.sh reads it).
 set -euo pipefail
-cd /work
+
+# Repo root. /work is where the DinD harness bind-mounts it; on a host that runs
+# the build directly (docker-on-host) it is the checkout this script lives in.
+# Explicit if/else on purpose: `A && echo X || cd Y && pwd` parses as
+# ((A && echo) || cd) && pwd, so pwd runs even on the /work branch and the value
+# comes back as two lines.
+if [ -z "${KASM_REPO:-}" ]; then
+  if [ -d /work/ci-scripts ]; then
+    KASM_REPO=/work
+  else
+    KASM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  fi
+fi
+cd "${KASM_REPO}"
 
 # Source images + registry auth live in one place, shared with nix-base-check.sh
 # (the ubuntu base is a private RapidFort curated image — see that file).
-. /work/ci-scripts/nix-base-src.sh
+. "${KASM_REPO}/ci-scripts/nix-base-src.sh"
 
 PAR="${BUILD_PARALLEL:-3}"
 WANT="${BASE_DISTROS:-ubuntu fedora alpine resolute}"
@@ -79,7 +92,7 @@ EOF
   # Explicit `|| return 1` so a failed build propagates even under the caller's
   # `set +e` (the retry subshell) — otherwise a core-build failure would fall
   # through to the nix build and be masked as success.
-  podman build --build-arg BASE_IMAGE="${src}" --build-arg DISTRO="${distarg}" \
+  "${CONTAINER_CLI}" build --build-arg BASE_IMAGE="${src}" --build-arg DISTRO="${distarg}" \
     --build-arg BG_IMG="${bg}" "${core_extra[@]}" -f "${coredf}" -t "${coretag}" . || return 1
   echo "[base:${d}] building ${nixtag}"
   # Stamp: builtsha (freshness guard), the source image ref/digest, and the
@@ -99,16 +112,16 @@ EOF
     # stages nix-stores into ctx, but the dockerfile also COPYs
     # src/ubuntu/install/nix/{units,scripts}/* — copy those in so both are present.
     mkdir -p "${ctx}/src/ubuntu/install"
-    cp -a /work/src/ubuntu/install/nix "${ctx}/src/ubuntu/install/nix"
+    cp -a "${KASM_REPO}"/src/ubuntu/install/nix "${ctx}/src/ubuntu/install/nix"
     bin/nix-bake-closure \
       --base "${coretag}" --tag "${nixtag}" --store-id services \
       --pkg kasmvnc --pkg profile_sync --pkg audio_input \
       --pkg recorder --pkg webcam --pkg gamepad --pkg jq \
-      --dockerfile /work/dockerfile-nix-ubuntu-resolute \
-      --overlay /work/bin/nix-kasm-overlay \
+      --dockerfile "${KASM_REPO}/dockerfile-nix-ubuntu-resolute" \
+      --overlay "${KASM_REPO}/bin/nix-kasm-overlay" \
       ${NIXPKGS_REV:+--nixpkgs-rev "${NIXPKGS_REV}"} \
       --context "${ctx}" \
-      --docker podman --nix-runner container \
+      --docker "${CONTAINER_CLI}" --nix-runner container \
       --nix-image "${NIX_STAGE_IMAGE:-docker.io/nixos/nix:latest}" \
       ${NIX_STAGE_VOLUME:+--nix-volume "${NIX_STAGE_VOLUME}"} \
       --label "kasm.base.builtsha=${BASE_BUILT_SHA:-unknown}" \
@@ -122,7 +135,7 @@ EOF
     rm -rf "${ctx}"
     [ "${rc}" = 0 ] || return 1
   else
-    podman build --build-arg BASE_IMAGE="${coretag}" \
+    "${CONTAINER_CLI}" build --build-arg BASE_IMAGE="${coretag}" \
       --label "kasm.base.builtsha=${BASE_BUILT_SHA:-unknown}" \
       --label "dev.kasm.base.src-image=${src}" \
       --label "dev.kasm.base.src-digest=${digest}" \
@@ -132,7 +145,7 @@ EOF
       --label "dev.kasm.base.nixpkgs-rev=${NIXPKGS_REV:-unknown}" \
       -f "${nixdf}" -t "${nixtag}" . || return 1
   fi
-  echo "[base:${d}] done: $(podman image inspect -f '{{.Id}}' "${nixtag}") src-digest=${digest:-unknown}"
+  echo "[base:${d}] done: $("${CONTAINER_CLI}" image inspect -f '{{.Id}}' "${nixtag}") src-digest=${digest:-unknown}"
   return 0
 }
 
