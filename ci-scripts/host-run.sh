@@ -150,7 +150,43 @@ preflight_store_access() {
 EOF
   return 1
 }
+# ── preflight: BuildKit, when the engine is docker ────────────────────────────
+# The core dockerfiles start `FROM --platform=$BUILDPLATFORM …`, and BUILDPLATFORM
+# is a BuildKit-only built-in ARG. Without the buildx plugin docker falls back to
+# the classic builder, where it expands to EMPTY and the build dies with
+#   failed to parse platform : "" is an invalid OS component of ""
+# 125 steps in — which reads like a Dockerfile bug, not a missing plugin.
+# (Pipeline 2755408295 failed exactly this way.) `docker buildx imagetools` is
+# also what nix-publish.sh uses to wrap a pushed image in an index, and that call
+# is guarded, so without buildx the manifest would silently not be wrapped.
+preflight_buildkit() {
+  case "${CONTAINER_CLI}" in *docker*) ;; *) return 0 ;; esac
+  "${CONTAINER_CLI}" buildx version >/dev/null 2>&1 && return 0
+  cat >&2 <<EOF
+[host-run] FATAL: ${CONTAINER_CLI} has no buildx plugin, so BuildKit is unavailable.
+
+  Symptom if this ran: the core build reaches
+    Step 2/125 : FROM --platform=\$BUILDPLATFORM alpine:3 AS containerinit_fetch
+  and fails with 'failed to parse platform : "" is an invalid OS component',
+  because BUILDPLATFORM is a BuildKit-only ARG and the classic builder leaves it
+  empty. nix-publish.sh's index wrapping (buildx imagetools) also silently skips.
+
+  Fix now:
+      sudo apt-get install -y docker-buildx        # Ubuntu package
+      docker buildx version                        # should print a version
+
+  Fix durably (kasm-nix-infra):
+      cloud-init installs it for a rebuilt host; provision-runner.sh --verify
+      asserts it.
+
+  Or fall back to podman-in-podman with the CI variable
+  NIX_RUNNER_SHIM=dind-run.sh (podman's builder needs no plugin).
+EOF
+  return 1
+}
+
 preflight_store_access || exit 1
+preflight_buildkit || exit 1
 
 echo "[host-run] ${name}: running on the host (${CONTAINER_CLI}, repo ${repo})"
 printf '[host-run]   %s\n' "${cmd[*]}"
