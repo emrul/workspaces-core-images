@@ -65,6 +65,12 @@ variables:
   # Set NIX_RUNNER_SHIM=dind-run.sh to fall back — needed on any runner WITHOUT a
   # host container engine (the forge box was one).
   NIX_RUNNER_SHIM: "host-run.sh"
+  # The engine the jobs drive. Must match the shim: host-run.sh runs on the host
+  # (docker there), dind-run.sh runs inside quay.io/podman/stable (podman). A
+  # hardcoded `podman` here survived the shim switch and failed publish-base with
+  # `podman: command not found` — the shim moved the execution context, and these
+  # inline calls did not move with it.
+  NIX_CLI: "docker"
   # Disk budget (enforced by dind-build.sh's pre-flight gate + end-of-build reclaim
   # + nix-gc.sh). Tune to the runner's provisioned disk — see docs/ci_cd_flow.md.
   # OPS SIZING: provision the store at
@@ -103,7 +109,11 @@ default:
     # that fail the NEXT job's `git clean` at checkout (seen: pipeline
     # 2687485367 prepare). Runner sudo is nerdctl-scoped, so un-root the
     # workdir via a container. Idempotent, best-effort.
-    - sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w" quay.io/podman/stable chown -R "$(id -u):$(id -g)" /w >/dev/null 2>&1 || true
+    # Only needed for the DinD path: the privileged container wrote root-owned
+    # files into the checkout. host-run.sh runs as the runner user, so there is
+    # nothing to chown — and calling it unconditionally would need nerdctl and a
+    # podman image that a host-only runner may not have.
+    - if [ "$NIX_RUNNER_SHIM" = "dind-run.sh" ]; then sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w" quay.io/podman/stable chown -R "$(id -u):$(id -g)" /w >/dev/null 2>&1 || true; fi
 
 stages:
   - prepare
@@ -473,8 +483,8 @@ publish-base:
         -e REG="$CI_REGISTRY" -e REG_USER="$CI_REGISTRY_USER" -e REG_PASS="$CI_REGISTRY_PASSWORD" \
         "$DIND_IMG" bash -c '
           set -euo pipefail
-          echo "$REG_PASS" | podman login "$REG" -u "$REG_USER" --password-stdin
-          DOCKER=podman bash /work/ci-scripts/nix-publish-base.sh
+          echo "$REG_PASS" | "$NIX_CLI" login "$REG" -u "$REG_USER" --password-stdin
+          DOCKER="$NIX_CLI" bash /work/ci-scripts/nix-publish-base.sh
         '
 
 # ── publish: tag kasm names + push (scoped to NIX_PROFILES) ──────────────────
@@ -516,8 +526,8 @@ publish:
           # CI (pipeline 2703225764: 34/34 "pushed").
           command -v skopeo >/dev/null 2>&1 || dnf install -y -q skopeo >/dev/null 2>&1 || true
           command -v jq     >/dev/null 2>&1 || dnf install -y -q jq     >/dev/null 2>&1 || true
-          echo "$REG_PASS" | podman login "$REG" -u "$REG_USER" --password-stdin || exit 1
-          DOCKER=podman bash /work/ci-scripts/nix-publish.sh; rc=$?
+          echo "$REG_PASS" | "$NIX_CLI" login "$REG" -u "$REG_USER" --password-stdin || exit 1
+          DOCKER="$NIX_CLI" bash /work/ci-scripts/nix-publish.sh; rc=$?
           # Always surface the reports (even on partial push failure) before exiting.
           for f in nix-build-report.json nix-build-report.md publish-junit.xml; do
             cp "/root/.cache/nix-build-output/$f" "/artifacts/$f" 2>/dev/null || true
@@ -595,7 +605,7 @@ scan-base:
         -v "$CI_PROJECT_DIR:/work:ro" \
         -v "$CI_PROJECT_DIR:/artifacts" \
         -e NIX_BASES="$NIX_BASES" -e S3_BUCKET="${S3_BUCKET:-}" \
-        -e OUT_DIR=/artifacts -e DOCKER=podman \
+        -e OUT_DIR=/artifacts -e DOCKER="$NIX_CLI" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         "$DIND_IMG" bash /work/ci-scripts/nix-scan-base.sh
   artifacts:
@@ -647,7 +657,7 @@ scan-nix:
         -v "$DIND_ROOT/output:/build-output:ro" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -v "$CI_PROJECT_DIR:/artifacts" \
-        -e NIX_PROFILES="$NIX_PROFILES" -e OUT_DIR=/artifacts -e DOCKER=podman \
+        -e NIX_PROFILES="$NIX_PROFILES" -e OUT_DIR=/artifacts -e DOCKER="$NIX_CLI" \
         -e SCAN_MAX_APPS="${SCAN_MAX_APPS:-0}" -e SKIP_VULNIX="${SKIP_VULNIX:-0}" \
         -e SCAN_ALL="${SCAN_ALL:-0}" -e SKIP_FAT_SCAN="${SKIP_FAT_SCAN:-1}" \
         -e SBOM_PUBLISH_INTENT="$SBOM_PUBLISH_INTENT" \
