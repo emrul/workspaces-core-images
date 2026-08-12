@@ -274,6 +274,11 @@ assemble_app() {
     [[ -n "${BUILT_AT}" ]] && mut+=( --label "dev.kasm.nix.built-at=${BUILT_AT}" )
     [[ -n "${GIT_SHA}" ]]  && mut+=( --label "org.opencontainers.image.revision=${GIT_SHA}" )
     [[ -n "${lbl_ver}" ]]  && mut+=( --label "org.opencontainers.image.version=${lbl_ver}" )
+    # Which OS base this workspace is built on. dev.kasm.nix.base-rev above is the
+    # NIXPKGS rev — a different axis entirely; don't conflate them.
+    [[ -n "${OSBASE_NAME}" ]]   && mut+=( --label "org.opencontainers.image.base.name=${OSBASE_NAME}" )
+    [[ -n "${OSBASE_DIGEST}" ]] && mut+=( --label "org.opencontainers.image.base.digest=${OSBASE_DIGEST}" )
+    [[ -n "${OSBASE_FLAVOR}" ]] && mut+=( --label "dev.kasm.base.flavor=${OSBASE_FLAVOR}" )
     "${CRANE}" append --insecure -b "${base_ref}" "${a_args[@]}" -t "${app_ref}" \
       && "${CRANE}" mutate --insecure "${app_ref}" "${mut[@]}" -t "${app_ref}" \
       || { printf 'assemble\n' > "${RESULTS}/${p}.fail"; return 0; }
@@ -290,6 +295,21 @@ assemble_app() {
 
 if [[ "${#apps[@]}" -gt 0 ]]; then
   [[ -n "${APP_BASE_IMAGE:-}" ]] || fail "APP_BASE_IMAGE required to assemble per-app images"
+
+  # OS-base provenance, read off the base image itself (ci-scripts/nix-base-build.sh
+  # stamped it there) and re-stamped on every per-app image below. `crane append`
+  # does carry the base's config labels forward, but a provenance label that exists
+  # only by inheritance is one that goes missing without anyone noticing — and these
+  # are the labels used to verify the catalogue is on the hardened base.
+  base_label() {
+    "${CONTAINER_CLI}" image inspect --format "{{index .Config.Labels \"$1\"}}" \
+      "${APP_BASE_IMAGE}" 2>/dev/null | sed 's/^<no value>$//'
+  }
+  OSBASE_NAME="$(base_label org.opencontainers.image.base.name)"
+  OSBASE_DIGEST="$(base_label org.opencontainers.image.base.digest)"
+  OSBASE_FLAVOR="$(base_label dev.kasm.base.flavor)"
+  log "app base: ${APP_BASE_IMAGE} (from ${OSBASE_NAME:-unknown}, flavor ${OSBASE_FLAVOR:-unknown})"
+
   base_ref="${REG_LOCAL}/nixbase:${APP_TAG}"
   "${CONTAINER_CLI}" tag "${APP_BASE_IMAGE}" "${base_ref}"
   "${CONTAINER_CLI}" push ${TLS_FLAG} "${base_ref}" >/dev/null
@@ -337,6 +357,18 @@ resolute_ready() {
 }
 if [[ -n "${RESOLUTE_APPS}" ]] && resolute_ready; then
   rbase_ref="${REG_LOCAL}/nixresolutebase:${RESOLUTE_TAG}"
+  # Resolute has its OWN OS base (ubuntu:26.04 today, not the RapidFort image the
+  # single-app catalogue uses), so read its provenance separately rather than
+  # reusing the per-app values — otherwise these images would claim a base they
+  # are not built on.
+  rbase_label() {
+    "${CONTAINER_CLI}" image inspect --format "{{index .Config.Labels \"$1\"}}" \
+      "${RESOLUTE_BASE_IMAGE}" 2>/dev/null | sed 's/^<no value>$//'
+  }
+  RBASE_NAME="$(rbase_label org.opencontainers.image.base.name)"
+  RBASE_DIGEST="$(rbase_label org.opencontainers.image.base.digest)"
+  RBASE_FLAVOR="$(rbase_label dev.kasm.base.flavor)"
+  log "resolute base: ${RESOLUTE_BASE_IMAGE} (from ${RBASE_NAME:-unknown}, flavor ${RBASE_FLAVOR:-unknown})"
   "${CONTAINER_CLI}" tag "${RESOLUTE_BASE_IMAGE}" "${rbase_ref}"
   "${CONTAINER_CLI}" push ${TLS_FLAG} "${rbase_ref}" >/dev/null
   for p in ${RESOLUTE_APPS}; do
@@ -369,6 +401,9 @@ if [[ -n "${RESOLUTE_APPS}" ]] && resolute_ready; then
     [[ -n "${BUILT_AT}" ]]  && r_mut+=( --label "dev.kasm.nix.built-at=${BUILT_AT}" )
     [[ -n "${GIT_SHA}" ]]   && r_mut+=( --label "org.opencontainers.image.revision=${GIT_SHA}" )
     [[ -n "${r_ver_lbl}" ]] && r_mut+=( --label "org.opencontainers.image.version=${r_ver_lbl}" )
+    [[ -n "${RBASE_NAME}" ]]   && r_mut+=( --label "org.opencontainers.image.base.name=${RBASE_NAME}" )
+    [[ -n "${RBASE_DIGEST}" ]] && r_mut+=( --label "org.opencontainers.image.base.digest=${RBASE_DIGEST}" )
+    [[ -n "${RBASE_FLAVOR}" ]] && r_mut+=( --label "dev.kasm.base.flavor=${RBASE_FLAVOR}" )
     "${CRANE}" append --insecure -b "${rbase_ref}" "${r_args[@]}" -t "${r_ref}" \
       && "${CRANE}" mutate --insecure "${r_ref}" "${r_mut[@]}" -t "${r_ref}" \
       || { log "resolute ${p}: crane assemble FAILED"; continue; }

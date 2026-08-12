@@ -132,6 +132,39 @@ RF_USERNAME=$(jq -r .Username <<<"$creds") RF_PASSWORD=$(jq -r .Secret <<<"$cred
   bash ci-scripts/rf-auth-check.sh
 ```
 
+### Verifying what a published image is built on
+
+Every image records its OS base, using the **standard OCI base annotations** so
+generic tooling understands them, plus one convenience label for at-a-glance checks:
+
+| label | value |
+|---|---|
+| `org.opencontainers.image.base.name` | e.g. `quay.io/rfcurated/rfubu:24.04-rfcurated` |
+| `org.opencontainers.image.base.digest` | that image's digest |
+| `dev.kasm.base.flavor` | `rapidfort-curated` or `upstream` |
+
+`ci-scripts/nix-base-build.sh` stamps them on each distro base;
+`bin/nix-crane-assemble` re-stamps them on every per-app image. The re-stamp is
+deliberate rather than relying on `crane append` carrying the base config forward —
+a provenance label that exists only by inheritance is one that can go missing without
+anyone noticing, and these are the labels used to prove the catalogue is hardened.
+
+⚠️ Do not confuse `dev.kasm.nix.base-rev` with these: that one is the **nixpkgs**
+rev, a completely different axis.
+
+Read them back off the registry with no pulls (curl + python3 only — none of our
+hosts has skopeo):
+
+```bash
+GITLAB_TOKEN=<read_registry PAT> bash ci-scripts/nix-verify-base.sh
+# or gate a pipeline on it:
+EXPECT_FLAVOR=rapidfort-curated bash ci-scripts/nix-verify-base.sh
+```
+
+`-` in the FLAVOR column means that image predates labelling — i.e. the rebuild has
+not reached it yet. Resolute images correctly report their own base (`ubuntu:26.04`),
+not the RapidFort one.
+
 ### Rolling the switch out
 
 Changing the source image makes the ubuntu base stale, and `base` is **manual** — so

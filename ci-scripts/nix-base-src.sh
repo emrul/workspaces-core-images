@@ -127,3 +127,13 @@ src_digest_of() {
   podman image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$1" 2>/dev/null \
     | sed 's/.*@//'
 }
+
+# A one-word answer to "what is this built on?", for at-a-glance validation of a
+# published image. The exact source ref and digest are recorded too (as the
+# standard OCI base annotations) — this is the cheap check, not the truth.
+src_flavor_of() {
+  case "$1" in
+    *rfcurated*|*rapidfort*) echo "rapidfort-curated" ;;
+    *) echo "upstream" ;;
+  esac
+}

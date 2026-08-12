@@ -62,6 +62,11 @@ EOF
   # pull error — is worse than stopping now with an actionable message.
   pull_src "${src}" || { echo "[base:${d}] cannot pull source image ${src}" >&2; return 1; }
   digest="$(src_digest "${src}")"
+  # Recorded on the base AND propagated onto every per-app image by
+  # nix-crane-assemble, so "what is this built on?" is answerable from a published
+  # artifact rather than from build logs.
+  flavor="$(src_flavor_of "${src}")"
+  echo "[base:${d}] source flavor: ${flavor}"
   echo "[base:${d}] building ${coretag} (from ${src} @ ${digest:-unknown})"
   # resolute gets its Kasm services from the Nix overlay (baked below) → build the
   # core without their per-distro artifacts (KasmVNC, profile-sync, audio-input,
@@ -109,6 +114,9 @@ EOF
       --label "kasm.base.builtsha=${BASE_BUILT_SHA:-unknown}" \
       --label "dev.kasm.base.src-image=${src}" \
       --label "dev.kasm.base.src-digest=${digest}" \
+      --label "dev.kasm.base.flavor=${flavor}" \
+      --label "org.opencontainers.image.base.name=${src}" \
+      ${digest:+--label "org.opencontainers.image.base.digest=${digest}"} \
       --label "dev.kasm.base.nixpkgs-rev=${NIXPKGS_REV:-unknown}" \
       && rc=0 || rc=1
     rm -rf "${ctx}"
@@ -118,6 +126,9 @@ EOF
       --label "kasm.base.builtsha=${BASE_BUILT_SHA:-unknown}" \
       --label "dev.kasm.base.src-image=${src}" \
       --label "dev.kasm.base.src-digest=${digest}" \
+      --label "dev.kasm.base.flavor=${flavor}" \
+      --label "org.opencontainers.image.base.name=${src}" \
+      ${digest:+--label "org.opencontainers.image.base.digest=${digest}"} \
       --label "dev.kasm.base.nixpkgs-rev=${NIXPKGS_REV:-unknown}" \
       -f "${nixdf}" -t "${nixtag}" . || return 1
   fi
