@@ -17,6 +17,8 @@ happens inside `quay.io/podman/stable` against a persistent podman store.
 | `base` | `base` | Auto — rebuilds the stale/affected distro bases (`ci-scripts/nix-base-build.sh`), core + `nix-<distro>` for each, **parallel across distros** (`BUILD_PARALLEL`), stamping each with its source-image digest. Skips fast when all bases are fresh. Force with the `BASE_DISTROS` variable. |
 | `build` | `build` | `runs/nix-portal/dind-build.sh` → `build-nix-store-volume --emit-app-images` → fat store + one `localhost/nix-<profile>:dev` per GUI app (per-app builds parallelised, `BUILD_PARALLEL`). |
 | `publish` | `publish` | inside the store: `podman login` the registry, then `ci-scripts/nix-publish.sh` tags each to its kasm name and pushes to `$REGISTRY_NS` (scoped to `NIX_PROFILES`). |
+| `scan` | `security-page` | Upserts this run's scan rows into `security.json` (`ci-scripts/nix-security-page.py`, merging against what the registry currently serves) and publishes it as an **artifact** — it no longer writes any docroot. |
+| `scan` | `refresh-registry` | Triggers the `kasm-nix-registry` pipeline (job-token auth, `strategy: depend`, `allow_failure`) passing `SECURITY_JOB_ID`, so the Pages site is rebuilt around the new `security.json`. Pages deployments are immutable — republishing is the only way to update the security page. |
 
 CLI/library profiles (`node`, `python`, `terraform`, …) have no
 `custom_startup.sh`, so `--emit-app-images` never produces an image for them —

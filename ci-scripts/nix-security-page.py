@@ -15,13 +15,19 @@ Exit 0 with a SKIP message (and no output file) when publishing would make
 the served data worse: failed scans in the report, no rows, or the live
 file being unavailable while this report covers only a slice of the
 catalog. The CI job treats "no output file" as nothing-to-publish.
+
+The output is an ARTIFACT, not a deploy: the registry is served from GitLab
+Pages (immutable deployments), so the security-page job hands this file to the
+registry project's pipeline via refresh-registry, which rebuilds the site
+around it. LIVE_URL therefore reads back from the published Pages site — the
+same file this run is about to supersede.
 """
 import json
 import sys
 import time
 import urllib.request
 
-LIVE_URL = "https://kasm-nix-registry.emrul.dev/1.1/security.json"
+LIVE_URL = "https://sandbox.registry.kasm.com/1.1/security.json"
 FRESH_MIN_IMAGES = 20  # full-catalog threshold for seeding without a live file
 
 

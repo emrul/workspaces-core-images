@@ -662,18 +662,31 @@ sbom-publish:
       - sbom-attach-report.json
 
 # ── security-page: refresh the registry site's security.json ────────────────
-# Auto-updates https://kasm-nix-registry.emrul.dev/1.1/security.json after
-# every successful scan+publish on the default branch. UPSERT semantics
+# Feeds https://sandbox.registry.kasm.com/1.1/security.json after every
+# successful scan+publish on the default branch. UPSERT semantics
 # (ci-scripts/nix-security-page.py): change-gated pipelines merge just their
 # scanned rows into the live file, so incremental runs (e.g. the twice-daily
-# chrome schedule) refresh their rows without clobbering the catalog. The
-# runner lives on the forge host, so the docroot is a local bind mount —
-# writes go through sudo-nerdctl containers (the runner's sudo surface).
-# Manual full regeneration stays in the registry repo (gen_security.py +
-# deploy.sh), which now pulls the live file first so it can't clobber this.
+# chrome schedule) refresh their rows without clobbering the catalog.
+#
+# This job no longer WRITES the site. The registry moved to GitLab Pages, whose
+# deployments are immutable — there is no docroot to cp into (the old
+# sudo-nerdctl write to /srv/portal/kasm-nix-registry/1.1 is gone, and with it
+# the forge dependency). Instead: publish security.json as an artifact, export
+# this job's id, and let refresh-registry trigger the registry pipeline, which
+# fetches the artifact by job id and rebuilds the site. `LIVE_URL` reads back
+# from the published Pages site, so the upsert still merges against what is
+# actually being served.
 security-page:
   stage: scan
   needs: [scan-nix, publish]
+  variables:
+    # Machine read-back of the currently-served file (the upsert's merge base).
+    # Deliberately the project's UNIQUE Pages domain, not sandbox.registry.kasm.com:
+    # it needs no DNS, so this works from the first deploy and can't be broken by a
+    # DNS/cert hiccup. Matters because nix-security-page.py SKIPS a partial scan
+    # when it can't read the live file (refusing to shrink the served table), so a
+    # vanity-domain outage would silently stop security refreshes.
+    LIVE_URL: "https://kasm-nix-registry-1c7067.gitlab.io/1.1/security.json"
   rules:
     - if: '$NIX_GC == "1"'
       when: never
@@ -684,16 +697,19 @@ security-page:
     - |
       # Change-gated no-op pipelines (NIX_PROFILES=__none__) skip scan-nix's
       # work — no report file means nothing scanned, nothing to publish.
+      : > security-page.env
       if [ ! -f nix-scan-report.json ]; then
         echo "no nix-scan-report.json this run — nothing scanned, skipping"; exit 0
       fi
-      sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w" "$DIND_IMG" \
+      sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w" -e LIVE_URL="$LIVE_URL" "$DIND_IMG" \
         python3 /w/ci-scripts/nix-security-page.py /w/nix-scan-report.json /w/security.json
       if [ -f security.json ]; then
-        sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w:ro" \
-          -v /srv/portal/kasm-nix-registry/1.1:/site \
-          "$DIND_IMG" cp /w/security.json /site/security.json
-        echo "security.json published to the registry docroot"
+        # Handed to refresh-registry → the registry pipeline fetches this job's
+        # artifact by id (the /jobs/artifacts/<ref>/raw endpoint is useless here:
+        # it only reads the ref's LATEST successful pipeline, and this job is
+        # ruled out of update/no-op pipelines).
+        echo "SECURITY_PAGE_JOB_ID=$CI_JOB_ID" > security-page.env
+        echo "security.json ready as an artifact (job $CI_JOB_ID) — registry pipeline will pick it up"
       else
         echo "nothing to publish (skip reason in the log above)"
       fi
@@ -702,6 +718,40 @@ security-page:
     expire_in: 30 days
     paths:
       - security.json
+    reports:
+      dotenv: security-page.env
+
+# ── refresh-registry: republish the registry site with the new security.json ──
+# Pages can't be patched in place, so a scan refresh reaches the public site only
+# by rebuilding it. Triggers the registry project's pipeline (job-token auth — the
+# registry project allowlists this one; no trigger token to store), passing the
+# producing job id so the build fetches exactly this run's report. When
+# security-page had nothing to publish, SECURITY_JOB_ID is empty and the registry
+# build simply carries forward what it is already serving.
+refresh-registry:
+  stage: scan
+  needs:
+    - job: security-page
+      artifacts: true
+  rules:
+    - if: '$NIX_GC == "1"'
+      when: never
+    - if: '$NIX_UPDATE != ""'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  # Distinct names on purpose: a `variables:` entry that references ITSELF expands
+  # to empty, so security-page exports SECURITY_PAGE_JOB_ID and we forward it as
+  # the SECURITY_JOB_ID the registry build reads.
+  variables:
+    SECURITY_JOB_ID: "$SECURITY_PAGE_JOB_ID"
+  # Surface a failed republish here (strategy: depend mirrors the downstream
+  # status) without letting a Pages-side flake fail an otherwise good image
+  # pipeline — the images are published either way.
+  allow_failure: true
+  trigger:
+    project: kasm-technologies/labs-sandbox/kasm-nix-registry
+    branch: main
+    strategy: depend
 
 # ── assess: BP-02/BP-03 assessment envelope — the remediator's input ─────────
 # Fail-closed join of this pipeline's three machine reports (scan-nix rows +
