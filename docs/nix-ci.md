@@ -56,6 +56,111 @@ the root-owned `sudo nerdctl` build orphaned (the runner can't kill a root child
 of the `gitlab-runner` user), and it keeps building + holds the podman store
 lock, blocking the next pipeline.
 
+## Hardened base (RapidFort)
+
+The single-app catalogue is built on RapidFort's **curated** Noble image rather than
+`docker.io/library/ubuntu:24.04`:
+
+```
+quay.io/rfcurated/rfubu:24.04-rfcurated
+  → dockerfile-kasm-core-minimal   → localhost/kasm-core-ubuntu-noble-minimal:dev
+  → dockerfile-nix-ubuntu          → localhost/nix-ubuntu:dev   ← every single-app image
+```
+
+Switching one variable switches the whole catalogue, because every per-app image is
+assembled `FROM localhost/nix-ubuntu:dev`. `ci-scripts/nix-base-src.sh` owns the
+distro → source-image mapping (shared by `nix-base-build.sh` and
+`nix-base-check.sh`, which each used to carry their own copy).
+
+| variable | meaning |
+|---|---|
+| `NIX_BASE_SRC_UBUNTU` | the ubuntu source image. Set to `ubuntu:24.04` to revert. |
+| `RF_REGISTRY` | registry the token is minted for (`quay.io`) |
+| `RF_ROOT_URL` | RapidFort platform URL — **protected** CI variable |
+| `RF_ACCESS_ID` / `RF_SECRET_ACCESS_KEY` | RapidFort **platform** credentials — **masked + protected** CI variables |
+| `RF_CLI_VERSION` | version of the credential helper in our package registry |
+
+Only `ubuntu` moves. `fedora`, `alpine` and `resolute` (which the TraceLabs desktop
+builds on) stay on their stock upstream images.
+
+### Why the auth is not a plain `podman login`
+
+RapidFort issues **no static registry credential**. `RF_ACCESS_ID` /
+`RF_SECRET_ACCESS_KEY` are *platform* credentials — quay rejects them directly
+(`{"code":"UNAUTHORIZED","message":"Invalid Username or Password"}`, verified). What
+actually authenticates is a quay **robot token** that RapidFort's Docker credential
+helper mints on demand:
+
+```
+platform creds ──▶ docker-credential-rfcurated get ──▶ {rfcurated+<org>, <token>}
+                                                        expires_in: 3600
+```
+
+One hour — so the working credential cannot be a CI variable either. It has to be
+minted per job:
+
+1. `ci-scripts/rf-fetch-credhelper.sh` (on the runner) downloads the helper from
+   this project's **generic package registry** with `CI_JOB_TOKEN`, into
+   `$CI_PROJECT_DIR/.rf/` — which the base job already mounts into DIND at
+   `/work/.rf/`. The binary is ~10 MB of vendor code and is deliberately **not**
+   committed; publish a new version with `ci-scripts/rf-publish-credhelper.sh` and
+   bump `RF_CLI_VERSION`.
+2. `ci-scripts/rf-credhelper-login.sh` (inside DIND) runs the helper's `get`, then
+   pipes the returned token into `podman login` on stdin. We call `get` ourselves
+   rather than registering a `credHelpers` entry, so the exchange happens once, at a
+   known point, with our own error messages.
+
+The auth file is `REGISTRY_AUTH_FILE=/tmp/kasm-nix-auth.json` and the helper's
+`~/.rapidfort/credentials` is written mode `600` — both **inside the ephemeral DIND
+container**, never in the persistent store (`/var/lib/containers`) and never in a
+layer.
+
+⚠️ **The helper refuses to run when both `docker` and `podman` are on `PATH`**
+("ERROR: Both Docker and Podman are available in PATH"). The builder is podman-only
+so this never fires in CI, but it does on a mixed developer box — hence the explicit
+pre-flight check, because otherwise it surfaces as a generic "could not mint a
+token" and sends you auditing your credentials.
+
+**Checking credentials by hand** — `ci-scripts/rf-auth-check.sh` asks the registry
+directly with curl (no podman, no RF CLI) and separates "credentials rejected" from
+"no such repo" from "no such tag". Note it needs a *registry* credential, so feed it
+the helper's output rather than the platform creds:
+
+```bash
+creds=$(echo quay.io | ~/rapidfort/docker-credential-rfcurated get)
+RF_USERNAME=$(jq -r .Username <<<"$creds") RF_PASSWORD=$(jq -r .Secret <<<"$creds") \
+  bash ci-scripts/rf-auth-check.sh
+```
+
+### Rolling the switch out
+
+Changing the source image makes the ubuntu base stale, and `base` is **manual** — so
+the order matters, and it is the same trap as any base change (see the TRAP note
+under Change-gating):
+
+1. play **`base`** — rebuilds core-minimal + nix-ubuntu from the RF image
+2. play **`publish-base`**
+3. re-run **`build`** — per-app images layer onto the new base. Without step 1 they
+   silently layer onto the *stale* warm `localhost/nix-ubuntu:dev`.
+4. **`publish`**
+
+### Two things to watch
+
+- **i386.** `dockerfile-kasm-core-minimal` installs VirtualGL, which does
+  `dpkg --add-architecture i386` and pulls ~10 `:i386` libraries
+  (`src/ubuntu/install/virtualgl/install_virtualgl.sh`). RF's apt mirror is a pinned
+  RapidFort snapshot, and i386 multiarch was noted as absent during the evaluation.
+  The `chrome-rf-poc` chain built cleanly through this step, so the libraries
+  resolve — but if a base build fails on the RF image, this is the first place to
+  look. Steam/Wine, which need a real i386 userspace at runtime, are the apps most
+  at risk.
+- **The CVE numbers will look better than the remediation warrants.** RF replaces
+  ~37 core libraries with `rf-*` forks built from newer upstream. Real patching, but
+  the renamed packages also fall outside the Ubuntu CVE feed, so scanners stop
+  matching them: the evaluation measured Trivy 34→0 and grype 106→3, mostly a
+  detection artifact rather than 106 fixed bugs. Report the drop with that caveat
+  attached — see `design/cve-scanning.md`.
+
 ## Runner (this is the caching strategy)
 
 A dedicated **self-hosted runner on the forge box** (`ssh ubuntu@51.195.190.65`),

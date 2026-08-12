@@ -18,10 +18,23 @@
 #   NIX_BASES_STALE=<space list of distro names>
 # plus human-readable [base-check] lines on stderr.
 set -euo pipefail
+
+# Source images + registry auth, shared with nix-base-build.sh so a base can never
+# be BUILT from one image and CHECKED against another.
+. /work/ci-scripts/nix-base-src.sh
+
 WANT="${BASE_DISTROS:-ubuntu fedora alpine resolute}"
 CHECK_UPSTREAM="${CHECK_UPSTREAM:-1}"
 
-src_of() { case "$1" in ubuntu) echo ubuntu:24.04 ;; fedora) echo fedora:42 ;; alpine) echo alpine:3.21 ;; resolute) echo ubuntu:26.04 ;; esac; }
+src_of() { base_src_image "$1"; }
+# Only the upstream half needs credentials. NEVER fatal here: this script runs on
+# every pipeline, and "cannot reach the private registry" must degrade to an
+# unresolved digest, not take the prepare stage down.
+# (Written as `if`, not `cond && { … }` — under `set -e` a false test as the last
+# top-level command would exit the script.)
+if [ "${CHECK_UPSTREAM}" = "1" ]; then
+  registry_auth_setup || echo "[base-check] registry auth unavailable — private sources will read as unresolved" >&2
+fi
 nix_of() { case "$1" in ubuntu) echo localhost/nix-ubuntu:dev ;; fedora) echo localhost/nix-fedora:dev ;; alpine) echo localhost/nix-alpine:dev ;; resolute) echo localhost/nix-ubuntu-resolute:dev ;; esac; }
 
 # The nixpkgs rev the base SHOULD have been built from. A base is a nix store
@@ -106,8 +119,11 @@ for d in ${WANT}; do
     continue
   fi
 
-  podman pull -q "docker.io/library/${src}" >/dev/null 2>&1 || podman pull -q "${src}" >/dev/null 2>&1 || true
-  up="$(podman image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "${src}" 2>/dev/null | sed 's/.*@//' || true)"
+  # NON-fatal on purpose (unlike the builder): an unpullable source image — private
+  # registry with no credentials on this pipeline, or a network blip — must degrade
+  # to "unresolved, don't force a rebuild", never fail the prepare stage.
+  pull_src "${src}" || true
+  up="$(src_digest_of "${src}" || true)"
   if [ -n "${up}" ] && [ "${up}" != "${have}" ]; then
     echo "[base-check] ${d}: STALE (${src} moved: have=${have} upstream=${up})" >&2; stale="${stale} ${d}"
   elif [ -z "${up}" ]; then

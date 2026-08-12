@@ -21,30 +21,34 @@
 set -euo pipefail
 cd /work
 
+# Source images + registry auth live in one place, shared with nix-base-check.sh
+# (the ubuntu base is a private RapidFort curated image — see that file).
+. /work/ci-scripts/nix-base-src.sh
+
 PAR="${BUILD_PARALLEL:-3}"
 WANT="${BASE_DISTROS:-ubuntu fedora alpine resolute}"
+
+# Authenticate once, up front, before any parallel pull can race on it.
+registry_auth_setup || exit 1
 
 # Per-distro build recipe:
 #   src_image | core_dockerfile | core_tag | DISTRO arg | BG_IMG | nix_dockerfile | nix_tag
 base_row() {
   case "$1" in
-    ubuntu) echo "ubuntu:24.04|dockerfile-kasm-core-minimal|localhost/kasm-core-ubuntu-noble-minimal:dev|ubuntu|bg_noble.png|dockerfile-nix-ubuntu|localhost/nix-ubuntu:dev" ;;
-    fedora) echo "fedora:42|dockerfile-kasm-core-fedora|localhost/kasm-core-fedora:dev|fedora42|bg_fedora.png|dockerfile-nix-fedora|localhost/nix-fedora:dev" ;;
-    alpine) echo "alpine:3.21|dockerfile-kasm-core-alpine|localhost/kasm-core-alpine:dev|alpine|bg_alpine.png|dockerfile-nix-alpine|localhost/nix-alpine:dev" ;;
+    ubuntu) echo "$(base_src_image ubuntu)|dockerfile-kasm-core-minimal|localhost/kasm-core-ubuntu-noble-minimal:dev|ubuntu|bg_noble.png|dockerfile-nix-ubuntu|localhost/nix-ubuntu:dev" ;;
+    fedora) echo "$(base_src_image fedora)|dockerfile-kasm-core-fedora|localhost/kasm-core-fedora:dev|fedora42|bg_fedora.png|dockerfile-nix-fedora|localhost/nix-fedora:dev" ;;
+    alpine) echo "$(base_src_image alpine)|dockerfile-kasm-core-alpine|localhost/kasm-core-alpine:dev|alpine|bg_alpine.png|dockerfile-nix-alpine|localhost/nix-alpine:dev" ;;
     # Resolute (26.04): Kasm publishes no per-distro KasmVNC .deb, so its core is
     # built INCLUDE_KASMVNC=0 and the nix finish BAKES the Nix KasmVNC closure in
     # (see the resolute branch in build_one). DISTRO=ubuntu (shares src/ubuntu).
-    resolute) echo "ubuntu:26.04|dockerfile-kasm-core-ubuntu-resolute|localhost/kasm-core-ubuntu-resolute:dev|ubuntu|bg_kasm.png|dockerfile-nix-ubuntu-resolute|localhost/nix-ubuntu-resolute:dev" ;;
+    resolute) echo "$(base_src_image resolute)|dockerfile-kasm-core-ubuntu-resolute|localhost/kasm-core-ubuntu-resolute:dev|ubuntu|bg_kasm.png|dockerfile-nix-ubuntu-resolute|localhost/nix-ubuntu-resolute:dev" ;;
     *) return 1 ;;
   esac
 }
 
-# Resolve the digest podman pulled for a tag (manifest-list digest → arch-stable),
-# matching what nix-base-check.sh compares against.
-src_digest() {
-  podman image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$1" 2>/dev/null \
-    | sed 's/.*@//'
-}
+# src_digest_of() comes from nix-base-src.sh — the same helper nix-base-check.sh
+# compares against.
+src_digest() { src_digest_of "$1"; }
 
 build_one() {
   d="$1"
@@ -53,7 +57,10 @@ build_one() {
 $row
 EOF
   echo "[base:${d}] pull ${src}"
-  podman pull -q "docker.io/library/${src}" >/dev/null 2>&1 || podman pull -q "${src}" >/dev/null 2>&1 || true
+  # FATAL here, unlike the staleness checker: building a base on a stale local copy
+  # of the source image — or failing three layers down inside `podman build` with a
+  # pull error — is worse than stopping now with an actionable message.
+  pull_src "${src}" || { echo "[base:${d}] cannot pull source image ${src}" >&2; return 1; }
   digest="$(src_digest "${src}")"
   echo "[base:${d}] building ${coretag} (from ${src} @ ${digest:-unknown})"
   # resolute gets its Kasm services from the Nix overlay (baked below) → build the

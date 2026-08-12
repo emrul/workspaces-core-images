@@ -35,6 +35,21 @@ variables:
   NIX_BASES: ""             # publish-base filter; empty = every base in the store
   BUILD_PARALLEL: "4"       # per-app build concurrency in build-nix-store-volume
   ALLOW_STALE_BASE: ""      # set "1" to bypass the build's base-freshness guard
+  # ── Hardened base (RapidFort) ─────────────────────────────────────────────
+  # The single-app catalogue is built on RapidFort's CURATED Noble image instead
+  # of docker.io ubuntu:24.04. Revert by setting this to ubuntu:24.04.
+  #
+  # The image is private, and RapidFort issues NO static registry credential:
+  # their RF_ACCESS_ID/RF_SECRET_ACCESS_KEY are PLATFORM credentials that quay
+  # rejects outright. A ~1h quay robot token is minted per job by RF's Docker
+  # credential helper (fetched from our package registry, run in the builder —
+  # ci-scripts/rf-{fetch-credhelper,credhelper-login}.sh).
+  #
+  # Required MASKED + PROTECTED CI variables:
+  #   RF_ROOT_URL  RF_ACCESS_ID  RF_SECRET_ACCESS_KEY
+  NIX_BASE_SRC_UBUNTU: "quay.io/rfcurated/rfubu:24.04-rfcurated"
+  RF_REGISTRY: "quay.io"
+  RF_CLI_VERSION: "1.6.4490"   # RF CLI version published to our package registry
   # Disk budget (enforced by dind-build.sh's pre-flight gate + end-of-build reclaim
   # + nix-gc.sh). Tune to the runner's provisioned disk — see docs/ci_cd_flow.md.
   # OPS SIZING: provision the store at
@@ -250,6 +265,14 @@ base-check:
           | sed -n 's/.*"revision":"\([0-9a-f]\{40\}\)".*/\1/p' | head -1)"
       fi
       echo "[base-check] nixpkgs ref '${nixpkgs_ref:-<none>}' -> rev '${want_rev:-<unresolved>}'"
+      # Only the upstream-digest half touches the private RF registry, so only
+      # stage the credential helper when that half is actually running.
+      if [ "${digest_check}" = 1 ]; then
+        case "${NIX_BASE_SRC_UBUNTU:-}" in
+          */*/*) bash ci-scripts/rf-fetch-credhelper.sh || \
+                   echo "[base-check] helper unavailable — ubuntu upstream digest will read as unresolved" ;;
+        esac
+      fi
       out="$(bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
@@ -257,6 +280,11 @@ base-check:
         -e CHECK_UPSTREAM="${digest_check}" \
         -e NIXPKGS_REF="${nixpkgs_ref}" \
         -e NIXPKGS_REV_WANT="${want_rev}" \
+        -e NIX_BASE_SRC_UBUNTU="${NIX_BASE_SRC_UBUNTU:-}" \
+        -e RF_REGISTRY="${RF_REGISTRY:-}" \
+        -e RF_ROOT_URL="${RF_ROOT_URL:-}" \
+        -e RF_ACCESS_ID="${RF_ACCESS_ID:-}" \
+        -e RF_SECRET_ACCESS_KEY="${RF_SECRET_ACCESS_KEY:-}" \
         "$DIND_IMG" bash /work/ci-scripts/nix-base-check.sh)"
       echo "$out"
       stale="$(printf '%s\n' "$out" | sed -n 's/^NIX_BASES_STALE=//p' | tail -1)"
@@ -299,12 +327,24 @@ base:
         echo "all distro bases fresh — nothing to rebuild"; exit 0
       fi
       echo "rebuilding distro bases: ${reb}  (parallel=${BUILD_PARALLEL})"
+      # RapidFort base: stage the credential helper on the runner (it lands in
+      # $CI_PROJECT_DIR/.rf, which is mounted into DIND at /work/.rf). Only needed
+      # when the ubuntu base is a private image AND ubuntu is being rebuilt.
+      case "${NIX_BASE_SRC_UBUNTU:-}" in
+        */*/*) case " ${reb} " in *" ubuntu "*)
+                 bash ci-scripts/rf-fetch-credhelper.sh ;; esac ;;
+      esac
       bash ci-scripts/dind-run.sh "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e BASE_DISTROS="${reb}" -e BUILD_PARALLEL="$BUILD_PARALLEL" \
         -e BASE_BUILT_SHA="$CI_COMMIT_SHA" \
         -e NIXPKGS_REV="${NIXPKGS_REV_RESOLVED:-}" \
+        -e NIX_BASE_SRC_UBUNTU="${NIX_BASE_SRC_UBUNTU:-}" \
+        -e RF_REGISTRY="${RF_REGISTRY:-}" \
+        -e RF_ROOT_URL="${RF_ROOT_URL:-}" \
+        -e RF_ACCESS_ID="${RF_ACCESS_ID:-}" \
+        -e RF_SECRET_ACCESS_KEY="${RF_SECRET_ACCESS_KEY:-}" \
         "$DIND_IMG" bash /work/ci-scripts/nix-base-build.sh
 
 # ── build: fat store + per-app images (parallel) ────────────────────────────

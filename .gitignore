@@ -10,3 +10,6 @@ target
 *.swo
 .env.cosign
 bin/nix-profiles-tracelabs-spike.toml
+
+# RapidFort credential helper, staged by ci-scripts/rf-fetch-credhelper.sh
+.rf/
