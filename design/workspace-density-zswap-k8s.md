@@ -30,7 +30,23 @@ adds an in-session Chrome workload.
 | Workspace memory requests/limits set | ⚠️ **agent doesn't map memory_bytes** — use direct CR (`runs/chrome-density/zswap-test-session.yaml`); Kasm-launched sessions get no mem req → zero swap (§3.3a) | 2026-08-06 |
 | zswap density measured (idle) | ☐ | |
 | zswap density measured (Chrome) | ☐ | |
-| Torn down, nodes clean | ☐ **hard gate before customer returns** | |
+| Torn down, nodes clean | ☐ **STILL LIVE 2026-08-12** — 10 GB swap + zswap `enabled=Y compressor=zstd` on all 3 nodes (648 KB used), kubelet `LimitedSwap` drop-in in place. Hard gate is **tomorrow**; teardown is `deploy/civo/README.md` §5 | 2026-08-12 |
+
+**Recreate path:** the whole deployment, including this optional layer, is now
+documented in `deploy/civo/README.md` (§2.13 for the four-step precondition chain,
+`deploy/civo/optional-zswap/` for the kubelet drop-in that was previously a
+by-hand-only step).
+
+Two corrections from that review (2026-08-12):
+
+- **Sessions are `cores=2`, not `cores=1`** as §6.0a records. CPU oversubscription
+  is now done in the agent instead — `KASM_CPU_REQUEST_FACTOR=0.15` on the Kasm CR
+  turns 2 cores into a 300m request with no limit, which is the 300m the §6.0b peak
+  run measured. Same effect, different lever; the workspace keeps an honest core
+  count in the UI.
+- **The `kasm.com/zswap=on` node label was never applied.** The enabler's busybox
+  container has no `kubectl`, so §3.1 step 3 silently does nothing. The DaemonSet's
+  presence is the marker; do not write an alert or selector against that label.
 
 **Deadline:** customer resumes use of this environment ~2026-08-13. All node
 mutations reverted and verified clean before then (§8).

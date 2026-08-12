@@ -1,0 +1,40 @@
+# KasmImagePuller — pre-pulls workspace images onto every node.
+#
+# Why it matters for a rebuild: without it the first session on a node blocks on a
+# ~2.2 GB pull, and the density work's page-cache sharing (co-located sessions
+# sharing /nix/store file pages) only appears once the image is resident. It is
+# also the thing that makes a mutable `:nix` tag deceptive — imagePullPolicy
+# IfNotPresent means a republished tag is NOT picked up; see the
+# kasm-k8s-image-updates note (evict + repull, or use immutable tags).
+#
+# CREDENTIALS: the live CR carries a GitLab deploy-token username/password
+# IN PLAINTEXT in spec.images[].password — this CRD has no secretRef. The
+# placeholders below must be filled at apply time and this file must never be
+# committed with a real token in it:
+#
+#   sed -e "s|__GITLAB_DEPLOY_USER__|$GL_USER|" -e "s|__GITLAB_DEPLOY_TOKEN__|$GL_TOKEN|" \
+#       30-image-puller.yaml | kubectl apply -f -
+#
+# Anyone with `get kasmimagepullers` in kasm-system can read the token, so scope it
+# to read_registry on the one project and rotate it on any exposure.
+apiVersion: kasm.com/v1
+kind: KasmImagePuller
+metadata:
+  name: kasm-image-puller
+  namespace: kasm-system
+spec:
+  imagePullPolicy: IfNotPresent
+  images:
+    - image: registry.gitlab.com/kasm-technologies/labs-sandbox/kasm-nix/tracelabs-osint:nix
+      registry: https://registry.gitlab.com
+      username: __GITLAB_DEPLOY_USER__
+      password: __GITLAB_DEPLOY_TOKEN__
+      unpack: false
+    - image: registry.gitlab.com/kasm-technologies/labs-sandbox/kasm-nix/only-office:nix
+      registry: https://registry.gitlab.com
+      username: __GITLAB_DEPLOY_USER__
+      password: __GITLAB_DEPLOY_TOKEN__
+      unpack: false
+    - image: kasmweb/kasmos-desktop:1.19.0-rolling-daily
+      registry: https://index.docker.io/v1/
+      unpack: false

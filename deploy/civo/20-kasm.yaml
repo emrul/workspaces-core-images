@@ -1,0 +1,122 @@
+# The Kasm deployment CR — captured from live state 2026-08-12.
+#
+# This one object drives the whole platform: db, api, manager, proxy, guac, rdp
+# gateways, the k8s agent, the session proxy and the workspaces operator. It is
+# the single most important artifact for a rebuild and, until now, existed only
+# in the cluster.
+#
+# EVERY image below is a private *playground* build, several from an unmerged
+# branch. Recreate depends on those tags still existing:
+#
+#   kasm-agent:userns-20260809         hostUsers=false + session cpu/mem request
+#                                      shaping (branch feat/userns-hostusers-oversub
+#                                      in kasm-technologies/playground/kasm-kubernetes-operator)
+#   kasm-workspaces-operator:refactor-smb-k3ssock-20260806
+#   kasm-nginx-sidecar:v0.2.0
+#   kasm-egress-installer:dev228-ziti-dnsmnt-20260721054842
+#
+# Two settings here are the load-test/density result, not defaults:
+#
+#   KASM_CPU_REQUEST_FACTOR=0.15  — the agent multiplies the image's `cores` (2)
+#     by this to get the pod CPU *request* (300m), leaving no limit so sessions
+#     burst via Shares. This is what let 18 sessions land 6/node on 4-core nodes;
+#     without it a 2-core request fits ~1 session/node beside the control plane.
+#     See design/workspace-density-zswap-k8s.md §6.0b.
+#
+#   agent.nginxProbeTimeoutSeconds / nginxReconcileIntervalSeconds — raised while
+#     chasing the nginx-reload-at-provision failure. Do not lower blindly.
+#
+# hostUsers=false is NOT set here: the agent applies it to every session pod
+# itself (kasm-agent/agent/provisioner.py). It is the control that makes container
+# root an unprivileged host uid — the security posture Tetragon alerts prove is on
+# (design/tetragon-session-monitoring.md §4).
+#
+# Prerequisites, in order: DNS for both names → ClusterIssuers (10-) →
+# `gitlab-pull` docker-registry secret in kasm-system → the operator helm release.
+apiVersion: kasm.com/v1alpha1
+kind: Kasm
+metadata:
+  name: kasm
+  namespace: kasm-system
+spec:
+  version: "1.19.0"
+  deploymentSize: small
+  publicAddr: tracelabs.kasm.com
+  imagePullPolicy: Always
+  imagePullSecrets:
+    enabled: true
+    name: gitlab-pull
+  applyHealthChecks: true
+  applySecurity: true
+  isOpenshift: false
+
+  # ClusterIP only; the Traefik IngressRouteTCPs in 21- are the ingress path.
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: false
+    backendProtocol: http
+    tls: true
+
+  certificate:
+    secretName: kasm-tls
+    certManager:
+      enabled: true
+      addWildCard: false
+      issuerGroup: cert-manager.io
+      issuerKind: ClusterIssuer
+      issuerName: letsencrypt-prod
+
+  agent:
+    enabled: true
+    zoneName: default
+    managerPort: 8181
+    managerProtocol: http
+    heartbeatInterval: 5
+    metricsInterval: 30
+    imageAvailabilityPolicy: all
+    sessionAddr: sessions.tracelabs.kasm.com
+    sessionProxyReplicas: 1
+    env:
+      - name: KASM_CPU_REQUEST_FACTOR
+        value: "0.15"
+    image:
+      registry: registry.gitlab.com/kasm-technologies/playground/kasm-kubernetes-operator
+      repository: kasm-agent
+      tag: userns-20260809
+    nginxSidecarImage:
+      registry: registry.gitlab.com/kasm-technologies/playground/kasm-kubernetes-operator
+      repository: kasm-nginx-sidecar
+      tag: v0.2.0
+    nginxSidecarLogLevel: INFO
+    nginxProbeTimeoutSeconds: 120
+    nginxReconcileIntervalSeconds: 30
+    sessionCertificate:
+      secretName: kasm-session-tls
+      certManager:
+        enabled: true
+        issuerGroup: cert-manager.io
+        issuerKind: ClusterIssuer
+        issuerName: letsencrypt-prod
+
+  workspacesOperator:
+    deploy: true
+    seccompInstaller:
+      enabled: true
+    image:
+      registry: registry.gitlab.com/kasm-technologies/playground/kasm-kubernetes-operator
+      repository: kasm-workspaces-operator
+      tag: refactor-smb-k3ssock-20260806
+    env:
+      - name: DEFAULT_IMAGE_PULLER
+        value: registry.gitlab.com/kasm-technologies/playground/kasm-kubernetes-operator/kasm-image-puller:v0.2.0
+      - name: DEFAULT_VIDEO_PLUGIN
+        value: registry.gitlab.com/kasm-technologies/playground/kasm-kubernetes-operator/kasm-video-device-plugin:v0.2.0
+      - name: DEFAULT_SECCOMP_INSTALLER
+        value: registry.gitlab.com/kasm-technologies/playground/kasm-kubernetes-operator/kasm-seccomp-installer:v0.2.0
+      - name: DEFAULT_EGRESS_INSTALLER
+        value: registry.gitlab.com/kasm-technologies/playground/kasm-kubernetes-operator/kasm-egress-installer:dev228-ziti-dnsmnt-20260721054842
+      # k3s keeps containerd here, not /run/containerd. The image puller and
+      # seccomp installer both need this to find the runtime.
+      - name: CONTAINERD_HOST_DIR
+        value: /run/k3s/containerd

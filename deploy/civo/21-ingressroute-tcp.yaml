@@ -1,0 +1,44 @@
+# Traefik TLS-passthrough routes — how traffic actually reaches Kasm.
+#
+# The Kasm CR sets `ingress.enabled: false` and `service.type: ClusterIP`, so
+# NOTHING in the operator's output exposes the deployment. These two hand-applied
+# IngressRouteTCPs are the entire north-south path, and they are easy to forget on
+# a rebuild: every Kasm pod can be Running and the site still unreachable.
+#
+# Passthrough (not an HTTP router) is required because kasm-proxy and the session
+# proxy terminate TLS themselves using the cert-manager secrets named in the Kasm
+# CR. Traefik only does SNI-based L4 routing here, which is also why the match is
+# HostSNI and both names must be real DNS pointing at a node IP.
+#
+# `traefik.containo.us/v1alpha1` is the API group the CIVO traefik2-nodeport
+# application serves. On a newer Traefik use traefik.io/v1alpha1 instead — the
+# object is otherwise identical.
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: kasm-proxy-passthrough
+  namespace: kasm-system
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: HostSNI(`tracelabs.kasm.com`)
+      services:
+        - name: kasm-proxy-svc
+          port: 8443
+  tls:
+    passthrough: true
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: kasm-sessions-passthrough
+  namespace: kasm-system
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: HostSNI(`sessions.tracelabs.kasm.com`)
+      services:
+        - name: kasm-session-proxy-svc
+          port: 4444
+  tls:
+    passthrough: true

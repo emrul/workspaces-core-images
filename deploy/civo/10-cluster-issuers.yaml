@@ -1,0 +1,43 @@
+# cert-manager ClusterIssuers for the CIVO kasm-tracelabs cluster.
+#
+# The `cert-manager` CIVO marketplace application installs cert-manager itself
+# but creates NO issuer, so certificates stay Pending until these exist. Both
+# the Kasm CR's `certificate` (tracelabs.kasm.com) and `agent.sessionCertificate`
+# (sessions.tracelabs.kasm.com) reference `letsencrypt-prod` by name.
+#
+# The HTTP-01 solver uses ingress class `traefik` — the CIVO `traefik2-nodeport`
+# application. DNS for both names must already resolve to a node's external IP
+# before applying the Kasm CR, or the challenge fails and the issuance retries
+# with backoff.
+#
+# Use letsencrypt-staging while iterating: prod has a 5-per-week duplicate-cert
+# rate limit per name set, and a rebuild loop will exhaust it.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    email: emrul.islam@kasm.com
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    email: emrul.islam@kasm.com
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik

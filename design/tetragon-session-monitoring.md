@@ -169,8 +169,9 @@ planted test literals in export files or pod logs.
 
 ## 4. Detection policies
 
-**Status: four loaded, `enabled=4 error=0 load_error=0` on all three nodes**
-(2026-08-09). Sources in `deploy/tetragon/policy-*.yaml`.
+**Status: six loaded, `enabled=6 error=0 load_error=0` on all three nodes**
+(verified 2026-08-12). Sources in `deploy/tetragon/policy-*.yaml`; install order in
+`deploy/civo/README.md` §2.10.
 
 | Policy | Hooks |
 |---|---|
@@ -523,7 +524,7 @@ whether AUP or terms language must cover this before hosted users are observed.
 | **Health plane** | Prometheus (health-only, 7 days), per-node canary DaemonSet, alerts on loss counters, canary gaps, disk >80%, clock offset. Rules key on `(cluster, node)` — node names are not unique across clusters. |
 | **Kill switch** | Two modes: stop shipping (pause Alloy, preserve positions), stop collection (drain via unsatisfiable node selector). Must verify post-drain that no BPF pins survive under `/sys/fs/bpf/tetragon`. |
 | **Kasm session correlation** | **Blocked.** `provision.create` fires *before* provisioning succeeds and carries no `kasm_id`, `server_id`, or account; the documented JSON log files are absent from the k8s `api`/`manager` pods. Needs a post-success lifecycle event (`session.started`/`session.ended`) with `container_id`, `kasm_id`, account, image, server — a `kasm_backend` change owned by another team. |
-| **Config home** | `values-tetragon.yaml` and the post-renderer live in a scratchpad. This repo builds container images; infra config does not belong here. |
+| **Config home** | ~~scratchpad~~ **done** — `values-tetragon.yaml`, the post-renderer and the policies are committed under `deploy/tetragon/`, and the live helm values match that file byte for byte (checked 2026-08-12). The whole deployment's recreate path is `deploy/civo/README.md`. The objection stands in principle — this repo builds container images — but a rebuild needing files nobody can find was the worse failure. |
 
 Rules that survive whenever correlation is built: ingest a session *dimension*
 (a few lines per session), never URL-level data, never a session ID as a Loki
