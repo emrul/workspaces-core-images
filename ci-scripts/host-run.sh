@@ -77,15 +77,20 @@ done
 
 # Rewrite any container-side mount path to its host side. Longest container path
 # first, so a /work mapping cannot shadow a /work/sub one.
+# Rewrite mount paths ANYWHERE in a string, not just as a prefix: the publish
+# jobs pass `bash -c '<script>'` and the script BODY names /work/ci-scripts/...
+# A prefix-only rewrite left those untouched and the job died with exit 127
+# (pipeline 2755553438). Longest container path first so a short mapping cannot
+# shadow a longer one.
 remap() {
   local v="$1" line c h
   while IFS= read -r line; do
     [ -n "${line}" ] || continue
     c="${line%%|*}"; h="${line#*|}"
-    case "${v}" in
-      "${c}")   printf '%s' "${h}"; return ;;
-      "${c}"/*) printf '%s' "${h}/${v#${c}/}"; return ;;
-    esac
+    # "<path>/..." anywhere, then a bare "<path>" at a word boundary or end
+    v="$(printf '%s' "${v}" | sed -e "s|${c}/|${h}/|g" \
+                                  -e "s|${c}\([[:space:]\"'\`;)]\)|${h}\1|g" \
+                                  -e "s|${c}\$|${h}|")"
   done <<EOF
 $(printf '%s' "${mounts}" | awk -F'|' '{print length($1), $0}' | sort -rn | cut -d' ' -f2-)
 EOF

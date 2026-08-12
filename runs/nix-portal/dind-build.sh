@@ -107,7 +107,16 @@ fi
 # stale anonymous registry volumes. Prune them so the store stays bounded — WITHOUT
 # touching the nix-build-stage-* volume (the Nix build cache that avoids
 # re-realizing unchanged packages) or the base images. See design/nix-ci-disk.md.
-freeG() { df -PBG /var/lib/containers 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4); print $4+0}'; }
+# Free space on the ENGINE'S store, not the DinD mount path. /var/lib/containers
+# does not exist on a docker host, df prints nothing, and every `[ "$(freeG)" -lt
+# N ]` below then dies with "integer expression expected" — which is how this
+# surfaced (pipeline 2755553438), not as a disk message.
+STORE_DIR="${STORE_DIR:-$("$CONTAINER_CLI" info --format '{{.DockerRootDir}}' 2>/dev/null \
+  || "$CONTAINER_CLI" info --format '{{.Store.GraphRoot}}' 2>/dev/null)}"
+[ -d "${STORE_DIR:-}" ] || STORE_DIR=/var/lib/containers
+[ -d "${STORE_DIR}" ] || STORE_DIR=/
+echo "[driver] store dir: ${STORE_DIR}"
+freeG() { df -PBG "${STORE_DIR}" 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4); print $4+0}'; }
 echo "[driver] free before prune: $(freeG)G"
 "$CONTAINER_CLI" image prune -f >/dev/null 2>&1 || true
 # Dangling build cache — the biggest churn source (intermediate layers from past
