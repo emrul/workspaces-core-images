@@ -7,7 +7,7 @@
 # Mounts expected (wired by dind-launch.sh):
 #   /work                          → repo (ro)
 #   /var/lib/containers            → host /srv/nix-build/containers (persistent
-#                                    podman store: warm cache + built images)
+#                                    "$CONTAINER_CLI" store: warm cache + built images)
 #   /root/.cache/nix-build-output  → host /srv/nix-build/output (logs, STATUS,
 #                                    app-*.tar — all visible on the host)
 #
@@ -21,7 +21,19 @@
 #                 build-nix-store-volume; default min(nproc,4)).
 set -euo pipefail
 
-cd /work
+# Repo root and engine. /work + "$CONTAINER_CLI" are what the DinD harness provides; on a
+# host run (NIX_RUNNER_SHIM=host-run.sh) it is the checkout and docker. This
+# script is the BUILD JOB'S ENTRY POINT, not just a fallback driver — it was
+# left as a DinD-ism and failed the first real host build with
+#   dind-build.sh: line 24: cd: /work: No such file or directory
+if [ -z "${KASM_REPO:-}" ]; then
+  if [ -d /work/ci-scripts ]; then KASM_REPO=/work
+  else KASM_REPO="$(cd "$(dirname "$0")/../.." && pwd)"; fi
+fi
+export KASM_REPO
+CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
+export CONTAINER_CLI
+cd "${KASM_REPO}"
 OUT=/root/.cache/nix-build-output
 mkdir -p "$OUT"
 LOG="$OUT/build.log"
@@ -45,24 +57,25 @@ if [ "${PROFILES:-}" = "__none__" ]; then
   exit 0
 fi
 
-# ── 1. ensure the app base is present in the podman store ─────────────────
+# ── 1. ensure the app base is present in the "$CONTAINER_CLI" store ─────────────────
 # APP_BASE_IMAGE overrides the default Noble base — used by the TraceLabs
 # Phase-0 spike to build on localhost/nix-ubuntu-resolute:dev (the reviewer-
 # sanctioned "separate invocation"; per-profile app_base is later work). The
 # tar-load fallback only applies to the default Noble base (that's the only
 # one staged to $OUT/nix-ubuntu.tar).
 APP_BASE_IMAGE="${APP_BASE_IMAGE:-localhost/nix-ubuntu:dev}"
-if ! podman image exists "$APP_BASE_IMAGE"; then
+if ! "$CONTAINER_CLI" image exists "$APP_BASE_IMAGE" 2>/dev/null \
+   && ! "$CONTAINER_CLI" image inspect "$APP_BASE_IMAGE" >/dev/null 2>&1; then
   if [ "$APP_BASE_IMAGE" = "localhost/nix-ubuntu:dev" ] && [ -f "$OUT/nix-ubuntu.tar" ]; then
     echo "[driver] loading nix-ubuntu:dev from $OUT/nix-ubuntu.tar"
-    podman load -i "$OUT/nix-ubuntu.tar"
+    "$CONTAINER_CLI" load -i "$OUT/nix-ubuntu.tar"
   else
     echo "[driver] FATAL: app base '$APP_BASE_IMAGE' absent (and no tar fallback)"
     status "FAILED no-base $(date -u +%FT%TZ)"
     exit 1
   fi
 fi
-echo "[driver] base image OK: $APP_BASE_IMAGE $(podman image inspect -f '{{.Id}}' "$APP_BASE_IMAGE")"
+echo "[driver] base image OK: $APP_BASE_IMAGE $("$CONTAINER_CLI" image inspect -f '{{.Id}}' "$APP_BASE_IMAGE")"
 
 # ── 1a. base-freshness guard ──────────────────────────────────────────────
 # If this commit changed files baked INTO the base image (NIX_BASE_AFFECTED=1,
@@ -72,7 +85,7 @@ echo "[driver] base image OK: $APP_BASE_IMAGE $(podman image inspect -f '{{.Id}}
 # Compare the base's kasm.base.builtsha label to this commit and fail with
 # instructions. Only enforced in CI (CI_COMMIT_SHA set); override ALLOW_STALE_BASE=1.
 if [ "${NIX_BASE_AFFECTED:-0}" = "1" ] && [ "${ALLOW_STALE_BASE:-0}" != "1" ] && [ -n "${CI_COMMIT_SHA:-}" ]; then
-  base_sha="$(podman image inspect -f '{{ index .Config.Labels "kasm.base.builtsha" }}' localhost/nix-ubuntu:dev 2>/dev/null || true)"
+  base_sha="$("$CONTAINER_CLI" image inspect -f '{{ index .Config.Labels "kasm.base.builtsha" }}' localhost/nix-ubuntu:dev 2>/dev/null || true)"
   if [ "${base_sha}" != "${CI_COMMIT_SHA}" ]; then
     echo "[driver] FATAL: base-affecting files changed in this commit, but the nix-ubuntu"
     echo "[driver]   base in the store was built from '${base_sha:-<unstamped>}', not this"
@@ -86,31 +99,31 @@ if [ "${NIX_BASE_AFFECTED:-0}" = "1" ] && [ "${ALLOW_STALE_BASE:-0}" != "1" ] &&
 fi
 
 # ── 1b. reclaim churn before building (KEEP the Nix cache + base images) ────
-# The persistent podman store accumulates transient artifacts each run:
+# The persistent "$CONTAINER_CLI" store accumulates transient artifacts each run:
 # superseded localhost/nix-<app>:dev + nix-store:dev tags, dangling layers, and
 # stale anonymous registry volumes. Prune them so the store stays bounded — WITHOUT
 # touching the nix-build-stage-* volume (the Nix build cache that avoids
 # re-realizing unchanged packages) or the base images. See design/nix-ci-disk.md.
 freeG() { df -PBG /var/lib/containers 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4); print $4+0}'; }
 echo "[driver] free before prune: $(freeG)G"
-podman image prune -f >/dev/null 2>&1 || true
+"$CONTAINER_CLI" image prune -f >/dev/null 2>&1 || true
 # Dangling build cache — the biggest churn source (intermediate layers from past
-# `podman build` runs), which `image prune` misses. -f only (NEVER -a: that drops
+# `"$CONTAINER_CLI" build` runs), which `image prune` misses. -f only (NEVER -a: that drops
 # live images' cache and cascades into removing the tagged base images).
-podman builder prune -f >/dev/null 2>&1 || true
+"$CONTAINER_CLI" builder prune -f >/dev/null 2>&1 || true
 # Keep ALL distro bases (nix-ubuntu*, nix-fedora, nix-alpine) — publish-base
 # pushes them from this same store, and the base job may have just rebuilt them.
 # (A keep list of only nix-ubuntu silently deleted the freshly-built alpine and
 # fedora bases here, so publish-base reported them "missing" — pipeline 2682481145.)
-podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+"$CONTAINER_CLI" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
   | grep -E '^localhost/nix-' | grep -vE 'nix-ubuntu|nix-fedora|nix-alpine|nixbase' \
-  | sort -u | xargs -r -n1 podman rmi -f >/dev/null 2>&1 || true
+  | sort -u | xargs -r -n1 "$CONTAINER_CLI" rmi -f >/dev/null 2>&1 || true
 # Backstop: if still tight, drop stale anonymous volumes (old registry staging,
 # etc.) — but NEVER the nix-build-stage-* Nix cache.
 if [ "$(freeG)" -lt 80 ]; then
   echo "[driver] low disk ($(freeG)G) — pruning stale volumes (keeping nix-build-stage-*)"
-  for v in $(podman volume ls --format '{{.Name}}' 2>/dev/null | grep -vE '^nix-build-stage-'); do
-    podman volume rm "$v" >/dev/null 2>&1 || true
+  for v in $("$CONTAINER_CLI" volume ls --format '{{.Name}}' 2>/dev/null | grep -vE '^nix-build-stage-'); do
+    "$CONTAINER_CLI" volume rm "$v" >/dev/null 2>&1 || true
   done
 fi
 echo "[driver] free after prune: $(freeG)G"
@@ -128,11 +141,11 @@ DISK_MIN_GB="${DISK_MIN_GB:-120}"
 CAP_G="${NIX_STAGE_CAP_G:-150}"
 if [ "$(freeG)" -lt "${DISK_MIN_GB}" ]; then
   echo "[driver] low disk $(freeG)G < ${DISK_MIN_GB}G floor — GC (Nix-cache cap ${CAP_G}G)"
-  NIX_STAGE_CAP_G="${CAP_G}" sh /work/ci-scripts/nix-gc.sh || true
+  NIX_STAGE_CAP_G="${CAP_G}" sh "${KASM_REPO}/ci-scripts/nix-gc.sh" || true
 fi
 if [ "$(freeG)" -lt "${DISK_MIN_GB}" ]; then
   echo "[driver] still low $(freeG)G < ${DISK_MIN_GB}G — nuking the Nix build cache (next build re-seeds)"
-  NIX_STAGE_CAP_G=0 sh /work/ci-scripts/nix-gc.sh || true
+  NIX_STAGE_CAP_G=0 sh "${KASM_REPO}/ci-scripts/nix-gc.sh" || true
 fi
 free_final="$(freeG)"
 if [ "${free_final}" -lt "${DISK_MIN_GB}" ]; then
@@ -188,7 +201,7 @@ fi
 # freeG() is free GB on /var/lib/containers; consumed = before - after (a
 # GC mid-build can make this negative → net reclaim, which is fine to report).
 disk_before="$(freeG)"
-podman system df 2>/dev/null > "$OUT/podman-df-before.txt" || true
+"$CONTAINER_CLI" system df 2>/dev/null > "$OUT/podman-df-before.txt" || true
 t_start="$(date +%s 2>/dev/null || echo 0)"
 started_at="$(date -u +%FT%TZ)"
 
@@ -200,7 +213,7 @@ bash bin/build-nix-store-volume "${args[@]}"
 # DOWNSTREAM jobs start with headroom. scan-nix needs ~40G export scratch and
 # publish needs to git-checkout; both are separate jobs that run AFTER this one
 # on the same store, and neither GCs. The start-of-build prune (1b) only clears
-# the PREVIOUS run's churn — this build's fresh ~89G of `podman build` cache
+# the PREVIOUS run's churn — this build's fresh ~89G of `"$CONTAINER_CLI" build` cache
 # otherwise sits full through scan/publish (the recurring "No space left on
 # device" at their git-checkout). Cache-ONLY, mirroring 1b's proven-safe set:
 # dangling layers + build cache + throwaway crane staging volumes. KEEP every
@@ -208,16 +221,16 @@ bash bin/build-nix-store-volume "${args[@]}"
 # and nix-build-stage-* (the Nix cache). NOT the full nix-gc, which drops the :dev
 # images the very next jobs need.
 echo "[driver] end-of-build reclaim: free before=$(freeG)G"
-podman image prune -f >/dev/null 2>&1 || true
-podman builder prune -f >/dev/null 2>&1 || true
-for v in $(podman volume ls --format '{{.Name}}' 2>/dev/null | grep -vE '^nix-build-stage-'); do
-  podman volume rm "$v" >/dev/null 2>&1 || true
+"$CONTAINER_CLI" image prune -f >/dev/null 2>&1 || true
+"$CONTAINER_CLI" builder prune -f >/dev/null 2>&1 || true
+for v in $("$CONTAINER_CLI" volume ls --format '{{.Name}}' 2>/dev/null | grep -vE '^nix-build-stage-'); do
+  "$CONTAINER_CLI" volume rm "$v" >/dev/null 2>&1 || true
 done
 echo "[driver] end-of-build reclaim: free after=$(freeG)G (kept :dev images + Nix cache for scan/publish)"
 
 t_end="$(date +%s 2>/dev/null || echo 0)"
 disk_after="$(freeG)"
-podman system df 2>/dev/null > "$OUT/podman-df-after.txt" || true
+"$CONTAINER_CLI" system df 2>/dev/null > "$OUT/podman-df-after.txt" || true
 # metrics.json — folded into nix-build-report.json by the publish stage. Written
 # with printf (no jq): the DIND image is not guaranteed to ship jq, and every
 # value here is a controlled number or timestamp.
@@ -239,7 +252,7 @@ echo "[driver] metrics: ${dur}s, disk consumed ${consumed}G (free ${disk_before}
 # Count runnable nix-<app> images in the store (the refactor builds straight
 # into the overlay store — there are no app-*.tar to count). `|| true` keeps a
 # zero match from tripping `set -e`/pipefail.
-app_count=$(podman images --format '{{.Repository}}' 2>/dev/null \
+app_count=$("$CONTAINER_CLI" images --format '{{.Repository}}' 2>/dev/null \
   | grep -E '/nix-[a-z0-9-]+$' | grep -vE 'nix-store|nix-ubuntu' | sort -u | wc -l | tr -d ' ' || true)
 echo "[driver] done $(date -u +%FT%TZ): fat store + ${app_count} runnable app image(s) in store"
 status "SUCCESS apps=${app_count} $(date -u +%FT%TZ)"
