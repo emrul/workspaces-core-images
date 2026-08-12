@@ -34,7 +34,10 @@ export KASM_REPO
 CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
 export CONTAINER_CLI
 cd "${KASM_REPO}"
-OUT=/root/.cache/nix-build-output
+# $HOME, not a literal /root: under DinD the job ran as root so they were the
+# same path, but on a host run this is the gitlab-runner user and /root is
+# unwritable ("mkdir: cannot create directory '/root': Permission denied").
+OUT="${OUT:-${XDG_CACHE_HOME:-${HOME:-/root}/.cache}/nix-build-output}"
 mkdir -p "$OUT"
 LOG="$OUT/build.log"
 

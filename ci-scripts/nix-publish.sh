@@ -66,7 +66,8 @@ run() { if [[ "${DRY_RUN}" == 1 ]]; then echo "  DRY: $*"; else "$@"; fi; }
 # the local image) to the currently-published image's same label (read from the
 # registry with no layer pull). Folds in the build-side sidecars written to
 # REPORT_DIR by the build stage (labels.json, closure-diffs.tsv, metrics.json).
-REPORT_DIR="${REPORT_DIR:-/root/.cache/nix-build-output}"
+# Must match dind-build.sh's OUT: same cache, same reason for $HOME over /root.
+REPORT_DIR="${REPORT_DIR:-${XDG_CACHE_HOME:-${HOME:-/root}/.cache}/nix-build-output}"
 RESULTS="${REPORT_DIR}/publish-results.tsv"        # profile\tkasm\tdest\tstatus\taction\trev\tver\tnewSP\tprevSP\tcandCfg\tmanifest\tremoteCfg\tequivBasis
 mkdir -p "${REPORT_DIR}" 2>/dev/null || true
 # Fall back to a temp dir if the output mount isn't writable (standalone runs),

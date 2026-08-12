@@ -39,6 +39,7 @@ name="${1:?usage: host-run.sh <name> <run args...> <image> <cmd...>}"; shift
 
 env_pairs=()
 repo=""
+mounts=""   # "<container path>|<host path>" per line
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -51,8 +52,15 @@ while [ $# -gt 0 ]; do
       esac
       shift 2 ;;
     -v|--volume)
-      # HOST:CONTAINER[:opts] — only the /work mount carries meaning for us
+      # HOST:CONTAINER[:opts]. EVERY mount is recorded, not just /work: a job that
+      # mounts a path and then names the CONTAINER side in -e (as the scan jobs do
+      # with `-v $CI_PROJECT_DIR:/artifacts -e OUT_DIR=/artifacts`) would otherwise
+      # be handed a path that does not exist on the host — and /artifacts at the
+      # filesystem root is not writable by the runner user either.
       _m="$2"; _rest="${_m#*:}"; _c="${_rest%%:*}"; _h="${_m%%:*}"
+      case "${_c}" in
+        /*) mounts="${mounts}${_c}|${_h}"$'\n' ;;
+      esac
       [ "${_c}" = "/work" ] && repo="${_h}"
       shift 2 ;;
     -*) shift ;;                     # any other run flag: irrelevant on a host
@@ -67,15 +75,37 @@ done
 
 : "${repo:=${CI_PROJECT_DIR:-$PWD}}"
 
-# Rewrite the container-side repo path to the host checkout.
+# Rewrite any container-side mount path to its host side. Longest container path
+# first, so a /work mapping cannot shadow a /work/sub one.
+remap() {
+  local v="$1" line c h
+  while IFS= read -r line; do
+    [ -n "${line}" ] || continue
+    c="${line%%|*}"; h="${line#*|}"
+    case "${v}" in
+      "${c}")   printf '%s' "${h}"; return ;;
+      "${c}"/*) printf '%s' "${h}/${v#${c}/}"; return ;;
+    esac
+  done <<EOF
+$(printf '%s' "${mounts}" | awk -F'|' '{print length($1), $0}' | sort -rn | cut -d' ' -f2-)
+EOF
+  printf '%s' "${v}"
+}
+
 cmd=()
-for a in "$@"; do
-  case "$a" in
-    /work/*) cmd+=("${repo}/${a#/work/}") ;;
-    /work)   cmd+=("${repo}") ;;
-    *)       cmd+=("$a") ;;
+for a in "$@"; do cmd+=("$(remap "$a")"); done
+
+# ...and the same for -e values, which is where the mount paths actually travel
+# (OUT_DIR=/artifacts and friends).
+remapped_env=()
+for kv in ${env_pairs[@]+"${env_pairs[@]}"}; do
+  _k="${kv%%=*}"; _v="${kv#*=}"
+  case "${_v}" in
+    /*) remapped_env+=("${_k}=$(remap "${_v}")") ;;
+    *)  remapped_env+=("${kv}") ;;
   esac
 done
+env_pairs=(${remapped_env[@]+"${remapped_env[@]}"})
 
 CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
 
