@@ -127,7 +127,7 @@ DB_ID="$("${GRYPE}" db status -o json 2>/dev/null | jq -r '.checksum // .Checksu
 # note in the header for why --vex is not used. A malformed VEX file is a
 # FATAL error: silently scanning without suppressions would misreport, and
 # silently suppressing wrongly would be worse.
-VEX_FILE="${VEX_FILE:-/work/security/vex/kasm-nix.openvex.json}"
+VEX_FILE="${VEX_FILE:-${KASM_REPO:-/work}/security/vex/kasm-nix.openvex.json}"
 # A grype ignore rule body is CATALOG-WIDE (vulnerability id + package name +
 # exact version) — it cannot express per-image scope. Scope is therefore
 # enforced by WHICH RULES ARE EMITTED: a statement's product must be either the
@@ -147,7 +147,7 @@ VEX_FILE="${VEX_FILE:-/work/security/vex/kasm-nix.openvex.json}"
 # Needed by the VEX lint below (profile-scope existence check) as well as by the
 # resolute/target logic further down, so it is defaulted before first use —
 # referencing it unset would abort the whole job under `set -u`.
-PROFILES_TOML="${PROFILES_TOML:-/work/bin/nix-profiles.toml}"
+PROFILES_TOML="${PROFILES_TOML:-${KASM_REPO:-/work}/bin/nix-profiles.toml}"
 
 GRYPE_CFG=""; VEX_RULES=0; VEX_OK=0
 L3_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"

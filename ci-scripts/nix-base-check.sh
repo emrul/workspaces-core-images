@@ -31,6 +31,10 @@ if [ -z "${KASM_REPO:-}" ]; then
     KASM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   fi
 fi
+# Exported, not just set: registry_auth_setup runs rf-credhelper-login.sh as a
+# CHILD bash which re-reads KASM_REPO (and CONTAINER_CLI). Unexported, the child
+# fell back to a literal /work — the first host-run pipeline failed exactly there.
+export KASM_REPO
 
 # Source images + registry auth, shared with nix-base-build.sh so a base can never
 # be BUILT from one image and CHECKED against another.

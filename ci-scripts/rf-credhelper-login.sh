@@ -31,7 +31,10 @@ set -euo pipefail
 REG="${RF_REGISTRY:-quay.io}"
 # podman under DinD, docker on a docker-only host.
 CONTAINER_CLI="${CONTAINER_CLI:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
-HELPER="${RF_CRED_HELPER:-/work/.rf/docker-credential-rfcurated}"
+# ${KASM_REPO}, not a literal /work: under DinD that IS /work, and on a host
+# run it is the checkout. A hardcoded /work here failed the first host-run
+# pipeline (2755399951) with "credential helper not found".
+HELPER="${RF_CRED_HELPER:-${KASM_REPO:-/work}/.rf/docker-credential-rfcurated}"
 export REGISTRY_AUTH_FILE="${REGISTRY_AUTH_FILE:-/tmp/kasm-nix-auth.json}"
 
 log() { printf '[rf-login] %s\n' "$*" >&2; }

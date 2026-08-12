@@ -45,6 +45,9 @@ if [ -z "${CONTAINER_CLI:-}" ]; then
     echo "[base-src] FATAL: need podman or docker on PATH" >&2; exit 1
   fi
 fi
+# Exported so child scripts (rf-credhelper-login.sh) use the SAME engine rather
+# than re-detecting one.
+export CONTAINER_CLI
 
 # `image exists` is podman-only; docker needs `image inspect`. The codebase's
 # established idiom (bin/build-nix-store-volume) tries both.
