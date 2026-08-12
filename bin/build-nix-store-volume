@@ -1240,6 +1240,14 @@ done
 echo "[inner] running nix-collect-garbage (removes unreachable paths only)" >&2
 nix-collect-garbage 2>&1 | tail -3
 
+# Hand the TRANSIENT staging tree to whoever runs phase 2. Only .build — the nix
+# store keeps root:nixbld (nix requires it, and phase 2 only reads it).
+if [ -n "${HOST_UID:-}" ] && [ "${HOST_UID}" != "0" ] && [ -d /nix/.build ]; then
+  chown -R "${HOST_UID}:${HOST_GID:-${HOST_UID}}" /nix/.build 2>/dev/null \
+    && echo "[inner] .build handed to uid ${HOST_UID} for host-side assembly" >&2 \
+    || echo "[inner] WARNING could not chown /nix/.build to ${HOST_UID}" >&2
+fi
+
 echo "[inner] complete; context.tar ready for outer build" >&2
 INNER
 
@@ -1291,6 +1299,13 @@ inner_run_args=(
     -e "APP_TAG=${APP_TAG}"
     -e "APP_BASE_REF=${APP_BASE_IMAGE}"
     -e "NIX_EVAL_GATE=${NIX_EVAL_GATE:-0}"
+    # Who runs phase 2. The inner build writes .build/ as root; phase 2 (crane
+    # assembly) then writes into the SAME tree from the host. Under DinD both
+    # were root so it never mattered; on a host run phase 2 is the runner user
+    # and cannot write into a root-owned staging tree ("mkdir:
+    # .build/layers/.blobs: Permission denied"). 0 under DinD → no-op there.
+    -e "HOST_UID=$(id -u)"
+    -e "HOST_GID=$(id -g)"
     # When the ubuntu base actually rebuilt this run, eval-gated (warm, store-
     # unchanged) apps must still be RE-ASSEMBLED onto the new base — the inner
     # build reads this to add them to changed.txt. Without it the inner container
