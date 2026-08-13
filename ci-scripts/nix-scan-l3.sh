@@ -84,7 +84,15 @@ CTR_PREFIX="l3scan-$$"
 cleanup() {
   "${DOCKER}" ps -aq --filter "name=^${CTR_PREFIX}-" 2>/dev/null \
     | xargs -r "${DOCKER}" rm -f >/dev/null 2>&1 || true
-  chmod -R u+w "${WORK}" 2>/dev/null || true; rm -rf "${WORK}"
+  # u+rwX, not u+w: an exported rootfs carries directories without u+x (0444),
+  # and you cannot traverse one to delete its contents. Under DinD this never
+  # showed because root ignores the mode bits entirely.
+  chmod -R u+rwX "${WORK}" 2>/dev/null || true
+  # A cleanup failure must NEVER fail a successful scan: this is the EXIT trap,
+  # so its last command decides the script's status. Leaked temp files are a disk
+  # concern, and the next run's mktemp is unaffected.
+  rm -rf "${WORK}" 2>/dev/null || echo "[scan] WARNING could not fully remove ${WORK}" >&2
+  true
 }
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
@@ -474,7 +482,8 @@ scan_one() {  # $1=name $2=image-ref $3=has-nix-symlinks(1|0)
                 vexed:$vexed,fixed_critical_raw:$fixed_crit_raw}}' \
         > "${WORK}/rows/${name}.json" || return 1
   gzip -f "${SBOM_DIR}/${name}.syft.json" "${SBOM_DIR}/${name}.cdx.json" "${GRYPE_DIR}/${name}.grype.json"
-  chmod -R u+w "${d}"; rm -rf "${d}"
+  chmod -R u+rwX "${d}" 2>/dev/null || true
+  rm -rf "${d}" 2>/dev/null || echo "[scan] WARNING could not fully remove ${d}" >&2
 }
 
 # ── bounded-parallel app scans ────────────────────────────────────────────────
