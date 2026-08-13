@@ -176,7 +176,22 @@ push_and_digest() { # $1=dest → sets $push_dig (index digest when available)
     fi
   fi
 }
-remote_manifest_digest() { command -v skopeo >/dev/null 2>&1 && skopeo inspect --format '{{.Digest}}' "docker://$1" 2>/dev/null || true; }
+have_imagetools() { command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; }
+remote_manifest_digest() { # $1=ref → index digest, or empty
+  # skopeo first (the DinD image has it), then buildx imagetools. The docker-on-host
+  # runner has NO skopeo and its sudo is nerdctl-scoped, so we cannot install one --
+  # without this fallback every pushed image records an empty manifestDigest and
+  # assess fail()s with "pushed but no manifest digest recorded or resolvable".
+  if command -v skopeo >/dev/null 2>&1; then
+    skopeo inspect --format '{{.Digest}}' "docker://$1" 2>/dev/null && return 0
+  fi
+  # NOT `--format '{{.Manifest.Digest}}'`: buildx 0.12 ignores that template and
+  # prints its default human block. A manifest digest IS the sha256 of the raw
+  # manifest bytes, so hash them -- true by definition, immune to output changes.
+  have_imagetools || return 0
+  local raw; raw="$(raw_manifest "$1")"; [[ -n "${raw}" ]] || return 0
+  printf '%s' "${raw}" | { sha256sum 2>/dev/null || shasum -a 256; } | awk '{print "sha256:"$1}'
+}
 
 # An index has no .config and no rootfs — the platform child manifest does.
 # Both equivalence helpers below MUST descend into it, or they silently return
@@ -192,10 +207,20 @@ repo_of() { # $1=ref → ref without its :tag
   local name="${1##*/}"
   if [[ "${name}" == *:* ]]; then echo "${1%:*}"; else echo "$1"; fi
 }
+raw_manifest() { # $1=ref → raw manifest/index JSON, or empty
+  # One place that knows how to read a manifest, so child_ref and
+  # remote_config_digest degrade together rather than one silently winning.
+  if command -v skopeo >/dev/null 2>&1; then
+    skopeo inspect --raw "docker://$1" 2>/dev/null || true
+    return 0
+  fi
+  have_imagetools || return 0
+  docker buildx imagetools inspect --raw "$1" 2>/dev/null || true
+}
 child_ref() { # $1=ref → ref pinned to the platform child, or $1 if not an index
-  command -v skopeo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || { echo "$1"; return; }
+  command -v jq >/dev/null 2>&1 || { echo "$1"; return; }
   local raw mt child
-  raw="$(skopeo inspect --raw "docker://$1" 2>/dev/null || true)"
+  raw="$(raw_manifest "$1")"
   [[ -z "${raw}" ]] && { echo "$1"; return; }
   mt="$(printf '%s' "${raw}" | jq -r '.mediaType // empty' 2>/dev/null || true)"
   case "${mt}" in
@@ -207,8 +232,14 @@ child_ref() { # $1=ref → ref pinned to the platform child, or $1 if not an ind
   esac
 }
 remote_config_digest() {
-  command -v skopeo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
-  skopeo inspect --raw "docker://$(child_ref "$1")" 2>/dev/null | jq -r '.config.digest // empty' 2>/dev/null || true
+  command -v jq >/dev/null 2>&1 || return 0
+  if command -v skopeo >/dev/null 2>&1; then
+    skopeo inspect --raw "docker://$(child_ref "$1")" 2>/dev/null | jq -r '.config.digest // empty' 2>/dev/null || true
+    return 0
+  fi
+  # Without this, every image reports status=new on the docker-on-host runner and
+  # the content-identical skip can never fire -- we would re-push all 37 each run.
+  raw_manifest "$(child_ref "$1")" | jq -r '.config.digest // empty' 2>/dev/null || true
 }
 
 # Classify by comparing published (prev) store-path to this build's (new).
@@ -379,7 +410,13 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
   fi
 fi
 
-ensure_skopeo || echo "[nix-publish] WARN skopeo unavailable — every image will show status=new" >&2
+if ! ensure_skopeo; then
+  if have_imagetools; then
+    echo "[nix-publish] skopeo unavailable — using buildx imagetools for registry reads" >&2
+  else
+    echo "[nix-publish] WARN no skopeo and no buildx — every image will show status=new" >&2
+  fi
+fi
 # jq is needed for the content-based push decision (remote rootfs.diff_ids);
 # without it content_state returns 'unknown' and every app is re-pushed (safe,
 # but loses the dedup skip). ensure it up front so the skip stays effective.
