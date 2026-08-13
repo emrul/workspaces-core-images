@@ -428,8 +428,6 @@ build:
       bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/root/.cache/nix-build-output" \
-        -e REPORT_DIR=/root/.cache/nix-build-output \
-        -e OUT=/root/.cache/nix-build-output \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -e PROFILES="$NIX_PROFILES" -e BUILD_PARALLEL="$BUILD_PARALLEL" \
         -e NIX_BASE_AFFECTED="$NIX_BASE_AFFECTED" -e NIX_BASE_REBUILT="$NIX_BASE_REBUILT" \
@@ -510,8 +508,6 @@ publish:
       bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
         -v "$DIND_ROOT/output:/root/.cache/nix-build-output" \
-        -e REPORT_DIR=/root/.cache/nix-build-output \
-        -e OUT=/root/.cache/nix-build-output \
         -v "$CI_PROJECT_DIR:/work:ro" \
         -v "$CI_PROJECT_DIR:/artifacts" \
         -e REGISTRY_NS="$REGISTRY_NS" -e KASM_TAG="$KASM_TAG" -e NIX_PROFILES="" \
@@ -533,9 +529,21 @@ publish:
           echo "$REG_PASS" | "$NIX_CLI" login "$REG" -u "$REG_USER" --password-stdin || exit 1
           DOCKER="$NIX_CLI" bash /work/ci-scripts/nix-publish.sh; rc=$?
           # Always surface the reports (even on partial push failure) before exiting.
+          # Resolve REPORT_DIR exactly as nix-publish.sh does rather than naming
+          # the container path: on the host that literal is remapped to the
+          # root-owned $DIND_ROOT/output, which the scripts cannot write and did
+          # not write — so the copy silently shipped an earlier report.
+          RD="${XDG_CACHE_HOME:-${HOME:-/root}/.cache}/nix-build-output"
           for f in nix-build-report.json nix-build-report.md publish-junit.xml; do
-            cp "/root/.cache/nix-build-output/$f" "/artifacts/$f" 2>/dev/null || true
+            cp "$RD/$f" "/artifacts/$f" 2>/dev/null || true
           done
+          # REPORT_DIR persists between pipelines on a shell-executor host, so a
+          # copy miss publishes stale evidence that looks perfectly valid. Fail
+          # here, where the cause is one line up, rather than leaving it to assess.
+          if ! grep -q "$CI_COMMIT_SHA" /artifacts/nix-build-report.json 2>/dev/null; then
+            echo "[publish] FATAL nix-build-report.json absent or not from $CI_COMMIT_SHA (looked in $RD) — refusing to publish stale evidence" >&2
+            rc=1
+          fi
           chown "${HOST_UID}:${HOST_GID}" /artifacts/nix-build-report.* /artifacts/publish-junit.xml 2>/dev/null || true
           echo "===== nix-build-report.md ====="; cat /artifacts/nix-build-report.md 2>/dev/null || true
           exit "$rc"
