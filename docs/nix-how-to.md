@@ -572,5 +572,6 @@ Two internal profiles also ship in the volume but aren't user-selectable:
 - [`design/nix-package-process.md`](../design/nix-package-process.md) — full architecture, update-cadence rationale, layer split mechanics.
 - [`docs/core-nix-ubuntu/README.md`](core-nix-ubuntu/README.md) — Dockerhub-style per-image readme.
 - [`bin/nix-profiles.toml`](../bin/nix-profiles.toml) — the canonical profile set.
+- [`security/sbom-signing-demo.sh`](../security/sbom-signing-demo.sh) — guided walkthrough of the signatures and attested SBOMs published with every image (verify → extract → read → re-scan); see also [`design/cve-scanning.md`](../design/cve-scanning.md).
 - Nix package search: https://search.nixos.org/packages
 - OCI image volumes: [Podman `--mount type=image`](https://docs.podman.io/en/latest/markdown/podman-run.1.html), [Docker 28+](https://docs.docker.com/engine/release-notes/28/), [k8s image volumes](https://kubernetes.io/docs/tasks/configure-pod-container/image-volumes/).
