@@ -386,6 +386,7 @@ base:
         -e NIXPKGS_REV="${NIXPKGS_REV_RESOLVED:-}" \
         -e AK_URL="${AK_URL:-}" \
         -e CRITICAL_DISTROS="${CRITICAL_DISTROS:-}" \
+        -e BASE_NO_CACHE="${BASE_NO_CACHE:-}" \
         -e NIX_BASE_SRC_UBUNTU="${NIX_BASE_SRC_UBUNTU:-}" \
         -e RF_REGISTRY="${RF_REGISTRY:-}" \
         -e RF_ROOT_URL="${RF_ROOT_URL:-}" \

@@ -18,6 +18,8 @@
 #                   it. Build proceeds in two passes: parallel, then serial retry.
 #   BASE_BUILT_SHA  commit sha, stamped as kasm.base.builtsha (the app-build
 #                   freshness guard in dind-build.sh reads it).
+#   BASE_NO_CACHE   set to 1 to build the cores with --no-cache. Needed to prove
+#                   anything about a step the layer cache would otherwise skip.
 #   AK_URL          Artifact Keeper base URL. Set => distro package sources are
 #                   rewritten to the cache for the core build and restored before
 #                   the image is squashed. Unset/empty => no-op. See
@@ -48,6 +50,17 @@ cd "${KASM_REPO}"
 
 PAR="${BUILD_PARALLEL:-3}"
 WANT="${BASE_DISTROS:-ubuntu fedora alpine resolute}"
+
+# Opt-in cold build. The core dockerfiles cache aggressively, so a rerun can
+# report success while never executing the artifact_keeper apply/revert layers at
+# all (observed: 270 CACHED steps, base done in 114s, zero [artifact_keeper] lines
+# — a green run that validated nothing about AK). Set BASE_NO_CACHE=1 to force the
+# core build to actually run those steps.
+nocache_args=()
+if [ -n "${BASE_NO_CACHE:-}" ]; then
+  nocache_args=(--no-cache)
+  echo "[base] BASE_NO_CACHE set — core builds will NOT use the layer cache"
+fi
 
 # Artifact Keeper passthrough. Opt-in: with AK_URL unset the array is empty and
 # the core build line below is byte-identical to before, which is what makes the
@@ -112,7 +125,20 @@ EOF
   # `set +e` (the retry subshell) — otherwise a core-build failure would fall
   # through to the nix build and be masked as success.
   "${CONTAINER_CLI}" build --build-arg BASE_IMAGE="${src}" --build-arg DISTRO="${distarg}" \
-    --build-arg BG_IMG="${bg}" "${core_extra[@]}" "${ak_args[@]}" -f "${coredf}" -t "${coretag}" . || return 1
+    --build-arg BG_IMG="${bg}" "${core_extra[@]}" "${ak_args[@]}" "${nocache_args[@]}" \
+    -f "${coredf}" -t "${coretag}" . || return 1
+
+  # Assert the tag is actually USABLE, not merely reported as built. A build can
+  # print "naming to <tag> done" and "unpacking to <tag> done" and still leave
+  # nothing resolvable — that is exactly what a co-located Kasm agent with
+  # prune_images_mode=Aggressive did here, deleting single-tagged bases seconds
+  # after they were tagged (fixed in kasm-nix-infra §4b). Without this check the
+  # symptom surfaced two stages later as "failed to resolve source metadata",
+  # pointing nowhere near the cause.
+  "${CONTAINER_CLI}" image inspect "${coretag}" >/dev/null 2>&1 || {
+    echo "[base:${d}] FATAL: ${coretag} built but is not resolvable — something removed it. Check the Kasm agent's prune_images_mode." >&2
+    return 1
+  }
 
   # Leak guard. The core is squashed via `COPY --from=base_layer / /`, so a
   # rewritten sources file would ship internal infra inside kasmweb/core-*. The
