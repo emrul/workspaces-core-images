@@ -90,7 +90,40 @@ rewrite() {
 # ERE syntax — see the sed -E note in rewrite().
 S='https?://'
 
+# Ubuntu's stock sources are all http://, so the base image ships NO CA bundle —
+# verified on ubuntu:26.04, where /etc/ssl/certs is empty and the
+# ca-certificates package is not installed. Rewriting those sources to an https
+# AK URL introduces a trust dependency the image cannot satisfy, and apt dies with
+#
+#   SSL connection failed: certificate verify failed [IP: <ak>]
+#
+# The fix is ordering, not scheme: install ca-certificates FIRST, while the
+# sources still point at upstream http, then rewrite. Costs one small upstream
+# fetch before the cache starts paying off.
+#
+# Only ubuntu needs this. alpine:3.21 and fedora:42 both reach AK over https out
+# of the box (verified by fetch inside each image), so neither pays this cost.
+ensure_ca_bundle() {
+  local bundle="${R}/etc/ssl/certs/ca-certificates.crt"
+  if [ -s "${bundle}" ]; then
+    log "CA bundle already present; no pre-install needed"
+    return 0
+  fi
+  if [ -n "${R}" ]; then
+    log "AK_TEST_ROOT set — skipping ca-certificates install (test mode)"
+    return 0
+  fi
+  log "no CA bundle: installing ca-certificates over upstream http before rewriting"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq || die "apt-get update failed before the AK rewrite"
+  apt-get install -y --no-install-recommends ca-certificates \
+    || die "could not install ca-certificates; an https AK URL cannot be trusted"
+  [ -s "${bundle}" ] || die "ca-certificates installed but ${bundle} is still missing"
+  log "CA bundle installed ($(grep -c 'BEGIN CERT' "${bundle}") certs)"
+}
+
 apply_ubuntu() {
+  ensure_ca_bundle
   local expr=(
     "s|${S}archive\.ubuntu\.com/ubuntu|${AK_URL}/debian/ubuntu-archive|g"
     "s|${S}security\.ubuntu\.com/ubuntu|${AK_URL}/debian/ubuntu-security|g"

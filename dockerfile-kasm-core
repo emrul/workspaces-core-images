@@ -259,6 +259,13 @@ RUN touch $STARTUPDIR/wm.log \
     && chown 1000:1000 /run/pcscd
 
 ### Cleanup job
+# Re-COPY before revert. The apply-time copy vanished between stages on alpine
+# (exit 127, "No such file or directory" at revert) and the mechanism is still
+# unexplained — nothing in the tree rm -rf's this directory. Rather than depend on
+# it surviving ~200 build steps, restate it: the layer is tiny and this makes
+# revert unconditionally able to run, which is the property that actually matters
+# (a missed revert ships internal infra to customers).
+COPY ./src/ubuntu/install/artifact_keeper /dockerstartup/install/artifact_keeper/
 # Restore pristine package sources BEFORE cleanup, so the final
 # `COPY --from=base_layer / /` cannot squash a rewritten sources file into the
 # published image. Unconditional on purpose — a half-configured build must still
