@@ -120,10 +120,19 @@ EOF
   # is what actually protects the publish — and it is one grep.
   if [ -n "${AK_URL:-}" ]; then
     ak_host="${AK_URL#*://}"; ak_host="${ak_host%%/*}"
-    if "${CONTAINER_CLI}" run --rm --entrypoint="" "${coretag}" \
-         sh -c "grep -rl -- '${ak_host}' /etc/apt /etc/yum.repos.d /etc/apk /etc/zypp 2>/dev/null" \
-         | grep -q .; then
-      echo "[base:${d}] FATAL: ${ak_host} still referenced in ${coretag} package sources" >&2
+    # MUST fail closed. The first version piped `docker run` into `grep -q .`, so a
+    # run that could not start (image missing) produced no output, grep returned 1,
+    # and the guard reported "passed" without having inspected anything — which is
+    # exactly what happened in pipeline 2760452605 and hid the missing core images.
+    # `|| true` inside the container keeps grep's no-match exit 1 from looking like
+    # a run failure, so a non-zero status here means the RUN itself failed.
+    if ! ak_hits="$("${CONTAINER_CLI}" run --rm --entrypoint="" "${coretag}" \
+         sh -c "grep -rl -- '${ak_host}' /etc/apt /etc/yum.repos.d /etc/apk /etc/zypp 2>/dev/null || true")"; then
+      echo "[base:${d}] FATAL: leak guard could not inspect ${coretag} — image missing or run failed. Refusing to treat that as a pass." >&2
+      return 1
+    fi
+    if [ -n "${ak_hits}" ]; then
+      echo "[base:${d}] FATAL: ${ak_host} still referenced in ${coretag}: ${ak_hits}" >&2
       return 1
     fi
     echo "[base:${d}] leak guard passed: no ${ak_host} reference in ${coretag}"
