@@ -84,6 +84,12 @@ variables:
   DIND_ROOT: "/srv/nix-build"
   DIND_IMG: "quay.io/podman/stable"
   GIT_SUBMODULE_STRATEGY: normal
+  # Artifact Keeper passthrough. Empty = OFF and the build is byte-identical to
+  # one without the feature. Set (per-pipeline variable, or a protected CI
+  # variable on an opt-in branch) to route distro package sources through the
+  # cache for the `base` stage. Deliberately NOT enabled on develop/release while
+  # the instance has no HA answer — see design/artifact-keeper-flag-design.md §8.
+  AK_URL: ""
   NIX_GC: ""                # set to "1" on a scheduled pipeline → run only `gc`
   NIX_UPDATE: ""            # set to a cadence (twice-daily|weekly) on a schedule
                             # → run bin/nix-kasm-update first to refresh self-hosted
@@ -365,6 +371,7 @@ base:
         -e BASE_DISTROS="${reb}" -e BUILD_PARALLEL="$BUILD_PARALLEL" \
         -e BASE_BUILT_SHA="$CI_COMMIT_SHA" \
         -e NIXPKGS_REV="${NIXPKGS_REV_RESOLVED:-}" \
+        -e AK_URL="${AK_URL:-}" \
         -e NIX_BASE_SRC_UBUNTU="${NIX_BASE_SRC_UBUNTU:-}" \
         -e RF_REGISTRY="${RF_REGISTRY:-}" \
         -e RF_ROOT_URL="${RF_ROOT_URL:-}" \

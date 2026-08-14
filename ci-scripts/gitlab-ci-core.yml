@@ -24,6 +24,11 @@ variables:
   MIRROR_ORG_NAME: "kasmtech"
 before_script:
   - export SANITIZED_BRANCH="$(echo ${CI_COMMIT_REF_NAME:0:64} | sed -r 's#^release/##' | sed 's/\//_/g')"
+  # Artifact Keeper passthrough (design/artifact-keeper-flag-design.md §4).
+  # AK_URL unset => AK_BUILD_ARGS empty => build.sh's $7 gains only a trailing
+  # space, which its deliberate word-split discards. Off-path stays identical.
+  - export AK_BUILD_ARGS=""
+  - if [ -n "${AK_URL:-}" ]; then AK_BUILD_ARGS="--build-arg AK_URL=${AK_URL}"; echo "Artifact Keeper passthrough ENABLED via ${AK_URL}"; fi
 
 #######################
 # Build from template #

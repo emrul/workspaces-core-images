@@ -18,6 +18,10 @@
 #                   it. Build proceeds in two passes: parallel, then serial retry.
 #   BASE_BUILT_SHA  commit sha, stamped as kasm.base.builtsha (the app-build
 #                   freshness guard in dind-build.sh reads it).
+#   AK_URL          Artifact Keeper base URL. Set => distro package sources are
+#                   rewritten to the cache for the core build and restored before
+#                   the image is squashed. Unset/empty => no-op. See
+#                   design/artifact-keeper-flag-design.md.
 set -euo pipefail
 
 # Repo root. /work is where the DinD harness bind-mounts it; on a host that runs
@@ -44,6 +48,17 @@ cd "${KASM_REPO}"
 
 PAR="${BUILD_PARALLEL:-3}"
 WANT="${BASE_DISTROS:-ubuntu fedora alpine resolute}"
+
+# Artifact Keeper passthrough. Opt-in: with AK_URL unset the array is empty and
+# the core build line below is byte-identical to before, which is what makes the
+# off-path regression test meaningful. Same empty-array idiom as core_extra.
+# Routing apk/apt/dnf through the cache should also take pressure off the mirror
+# contention described in the BASE_BUILD_ATTEMPTS note above.
+ak_args=()
+if [ -n "${AK_URL:-}" ]; then
+  ak_args=(--build-arg "AK_URL=${AK_URL}")
+  echo "[base] Artifact Keeper passthrough ENABLED via ${AK_URL}"
+fi
 
 # Authenticate once, up front, before any parallel pull can race on it.
 registry_auth_setup || exit 1
@@ -97,7 +112,22 @@ EOF
   # `set +e` (the retry subshell) — otherwise a core-build failure would fall
   # through to the nix build and be masked as success.
   "${CONTAINER_CLI}" build --build-arg BASE_IMAGE="${src}" --build-arg DISTRO="${distarg}" \
-    --build-arg BG_IMG="${bg}" "${core_extra[@]}" -f "${coredf}" -t "${coretag}" . || return 1
+    --build-arg BG_IMG="${bg}" "${core_extra[@]}" "${ak_args[@]}" -f "${coredf}" -t "${coretag}" . || return 1
+
+  # Leak guard. The core is squashed via `COPY --from=base_layer / /`, so a
+  # rewritten sources file would ship internal infra inside kasmweb/core-*. The
+  # in-image revert already checks this, but verifying against the BUILT artifact
+  # is what actually protects the publish — and it is one grep.
+  if [ -n "${AK_URL:-}" ]; then
+    ak_host="${AK_URL#*://}"; ak_host="${ak_host%%/*}"
+    if "${CONTAINER_CLI}" run --rm --entrypoint="" "${coretag}" \
+         sh -c "grep -rl -- '${ak_host}' /etc/apt /etc/yum.repos.d /etc/apk /etc/zypp 2>/dev/null" \
+         | grep -q .; then
+      echo "[base:${d}] FATAL: ${ak_host} still referenced in ${coretag} package sources" >&2
+      return 1
+    fi
+    echo "[base:${d}] leak guard passed: no ${ak_host} reference in ${coretag}"
+  fi
   echo "[base:${d}] building ${nixtag}"
   # Stamp: builtsha (freshness guard), the source image ref/digest, and the
   # nixpkgs rev this base's store closure was built from. The last one exists

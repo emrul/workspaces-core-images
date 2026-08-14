@@ -35,6 +35,17 @@ FROM $BASE_IMAGE AS install_tools
 ARG DISTRO=fedora37
 
 ### Setup package rules
+# Artifact Keeper passthrough — opt-in, empty AK_URL is a no-op.
+# Must sit before the first package-manager call in this stage; the insertion
+# point differs per family (design/artifact-keeper-flag-design.md §4).
+ARG AK_URL=""
+# Literal path, not $INST_SCRIPTS: that ENV is only defined in base_layer, so in
+# the install_tools stage it expands to empty (which is why the neighbouring
+# COPY lands in /tools). apply and revert can run in different stages, so both
+# ends must agree on an absolute path.
+COPY ./src/ubuntu/install/artifact_keeper /dockerstartup/install/artifact_keeper/
+RUN AK_URL="$AK_URL" DISTRO="$DISTRO" bash /dockerstartup/install/artifact_keeper/artifact_keeper.sh apply
+
 COPY ./src/ubuntu/install/package_rules $INST_SCRIPTS/package_rules/
 RUN bash $INST_SCRIPTS/package_rules/package_rules.sh && rm -rf $INST_SCRIPTS/package_rules/
 
@@ -259,6 +270,14 @@ RUN touch $STARTUPDIR/wm.log \
     && chown 1000:1000 /run/pcscd
 
 ### Cleanup job
+ARG AK_URL=""
+# Restore pristine package sources BEFORE cleanup, so the final
+# `COPY --from=base_layer / /` cannot squash a rewritten sources file into the
+# published image. Unconditional on purpose — a half-configured build must still
+# self-heal — hence no `if AK_URL` guard here.
+RUN AK_URL="$AK_URL" bash /dockerstartup/install/artifact_keeper/artifact_keeper.sh revert \
+      && rm -rf /dockerstartup/install/artifact_keeper/
+
 COPY ./src/ubuntu/install/cleanup $INST_SCRIPTS/cleanup/
 # KASM_LANG_PROFILE: full (default, no trim) | latin | en. See
 # src/ubuntu/install/cleanup/cleanup.sh for the per-profile contents.
