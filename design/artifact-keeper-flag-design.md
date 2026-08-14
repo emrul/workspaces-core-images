@@ -10,6 +10,45 @@ must remain "off" and the off-path must be byte-identical to today's build.
 
 ---
 
+## 0. Scope — Ubuntu, Alpine and Fedora only
+
+**Phase 1 covers only the three families we ship Nix bases for.** Everything
+else below is retained as analysis but is explicitly **deferred** — do not
+implement it.
+
+| | Families | Core dockerfiles |
+|---|---|---|
+| **In scope** | ubuntu (incl. resolute), alpine, fedora | `dockerfile-kasm-core`, `-minimal`, `-ubuntu-resolute`, `-alpine`, `-fedora` |
+| **Deferred** | debian, kasmos, kali, parrot, oracle, centos, rocky, alma, rhel9, opensuse | `-kasmos`, `-oracle`, `-centos`, `-suse` |
+
+Rationale: AK only earns its keep underneath something we build and ship on a
+cadence. The Nix bases are `dockerfile-nix-ubuntu`, `-nix-ubuntu-resolute`,
+`-nix-alpine` and `-nix-fedora`, whose `BASE_IMAGE` defaults point at
+`kasm-core-ubuntu-noble`, `kasm-core-ubuntu-resolute`, `kasm-core-alpine` and
+`kasm-core-fedora` respectively. Those four chains are the whole target.
+`-minimal` is in scope because the CI row for `nix-ubuntu` actually builds from
+`core-ubuntu-noble-minimal:nix` (`template-vars.yaml:387`), not from the full
+core image.
+
+**How the scoping is enforced — and why it costs almost nothing.**
+`dockerfile-kasm-core` is shared by the ubuntu, debian and kali matrix rows
+(`template-vars.yaml:47`, `64`, `98`, `114`, `131`, `148`), so per-dockerfile
+gating would be wrong. Instead the `artifact_keeper.sh` mapping table (§3)
+simply carries **no entry** for a deferred `$DISTRO`: `apply` is a no-op there,
+and `revert` finds no `.ak-orig` files to restore. Adding a family later is one
+table row, not a dockerfile change.
+
+Two simplifications fall out of the narrowing, both worth banking:
+
+- **The parrot conflict disappears.** §3 flagged that a parrot rewrite collides
+  with the existing MIT-mirror substitution at `package_rules.sh:26`. Deferring
+  parrot means nothing has to touch `package_rules.sh` at all.
+- **Alpine becomes the only irregular insertion point.** §4 called out alpine
+  and suse as the two files breaking the pattern; with suse deferred, alpine is
+  the sole exception.
+
+---
+
 ## 1. Flag surface
 
 Three variables, all empty-by-default. Empty ⇒ every code path below is a no-op.
@@ -73,17 +112,28 @@ regardless of family).
 Takes `apply` | `revert`, dispatches on `$DISTRO` exactly as `package_rules.sh`
 does. Per-family rewrite:
 
+**Build the table with these three families only.** The deferred rows are kept
+below for whoever picks up phase 2; they must not appear in the shipped table.
+
 | Family | Files | Rewrite |
 |---|---|---|
-| ubuntu | `/etc/apt/sources.list`, `/etc/apt/sources.list.d/*.sources` (deb822 on noble+) | `archive.ubuntu.com/ubuntu` → `$AK_URL/debian/ubuntu-archive`; `security.ubuntu.com/ubuntu` → `$AK_URL/debian/ubuntu-security`; `ports.ubuntu.com/ubuntu-ports` → `$AK_URL/debian/ubuntu-ports` |
-| debian / kasmos | same | `deb.debian.org/debian` → `$AK_URL/debian/debian-archive`; `security.debian.org/…` → `$AK_URL/debian/debian-security` |
-| kali | same | `http.kali.org/kali` → `$AK_URL/debian/kali-rolling` |
-| parrot | `/etc/apt/sources.list.d/parrot.list` | `deb.parrot.sh/parrot` → `$AK_URL/debian/parrot-7` (**note:** replaces the existing MIT-mirror substitution at `package_rules.sh:26` — the two must not both fire) |
+| ubuntu (incl. resolute) | `/etc/apt/sources.list`, `/etc/apt/sources.list.d/*.sources` (deb822 on noble+) | `archive.ubuntu.com/ubuntu` → `$AK_URL/debian/ubuntu-archive`; `security.ubuntu.com/ubuntu` → `$AK_URL/debian/ubuntu-security`; `ports.ubuntu.com/ubuntu-ports` → `$AK_URL/debian/ubuntu-ports` |
 | alpine | `/etc/apk/repositories` | `dl-cdn.alpinelinux.org/alpine` → `$AK_URL/alpine/alpine` |
 | fedora | `/etc/yum.repos.d/fedora*.repo` | metalink → baseurl `$AK_URL/rpm/fedora-<ver>-os` and `-updates`. **Must disable `metalink=`** — dnf prefers it and will bypass the rewrite |
+
+<details>
+<summary><b>Deferred — do not implement</b></summary>
+
+| Family | Files | Rewrite |
+|---|---|---|
+| debian / kasmos | same as ubuntu | `deb.debian.org/debian` → `$AK_URL/debian/debian-archive`; `security.debian.org/…` → `$AK_URL/debian/debian-security` |
+| kali | same | `http.kali.org/kali` → `$AK_URL/debian/kali-rolling` |
+| parrot | `/etc/apt/sources.list.d/parrot.list` | `deb.parrot.sh/parrot` → `$AK_URL/debian/parrot-7` (**note:** collides with the existing MIT-mirror substitution at `package_rules.sh:26` — the two must not both fire) |
 | oracle | `/etc/yum.repos.d/oracle-linux-ol*.repo` | `yum.oracle.com/repo/OracleLinux/OL<n>/…` → `$AK_URL/rpm/oraclelinux-<n>-<component>` |
 | rocky / alma / rhel9 | `/etc/yum.repos.d/*.repo` | mirrorlist → baseurl `$AK_URL/rpm/{rocky,almalinux}-<n>-<component>`; same metalink caveat |
 | opensuse | `/etc/zypp/repos.d/*.repo` | `download.opensuse.org/distribution/leap/16.0/repo/{oss,non-oss}` → `$AK_URL/rpm/opensuse-leap-16-{oss,nonoss}` |
+
+</details>
 
 The upstream→AK mapping is a data table in the script, not scattered `sed`s, so
 that adding a repo is a one-line change and the table can be diffed against the
@@ -100,24 +150,37 @@ translation needed.
 The insertion point is **the first stage that touches the package manager** — not
 uniformly the `package_rules` line. Two files break the pattern.
 
+**Five of the nine are in scope.** `-kasmos`, `-oracle`, `-centos` and `-suse`
+are untouched in phase 1 — do not add `ARG`s or `RUN` lines to them.
+
 | Dockerfile | `apply` goes before | Notes |
 |---|---|---|
-| `dockerfile-kasm-core` | `:68` (package_rules COPY) | base_layer `:35`, ARG DISTRO `:40` |
-| `dockerfile-kasm-core-minimal` | `:75` | base_layer `:42` |
+| `dockerfile-kasm-core` | `:68` (package_rules COPY) | base_layer `:35`, ARG DISTRO `:40`. Shared with the debian/kali rows — those no-op via the §3 table, see §0 |
+| `dockerfile-kasm-core-minimal` | `:75` | base_layer `:42`. The base the `nix-ubuntu` CI row actually builds on |
 | `dockerfile-kasm-core-ubuntu-resolute` | `:74` | base_layer `:35` |
-| `dockerfile-kasm-core-kasmos` | `:64` | base_layer `:34` |
 | `dockerfile-kasm-core-fedora` | `:38` | in `install_tools` stage `:34`; inherited by base_layer `:51` |
+| **`dockerfile-kasm-core-alpine`** | **`:45`**, not `:74` | `install_tools.sh` runs `apk add` at `:45`, *before* package_rules at `:74`. Rewriting at the package_rules line would miss every `apk` call in the tools stage. **The only irregular insertion point in scope** |
+
+<details>
+<summary><b>Deferred — do not implement</b></summary>
+
+| Dockerfile | `apply` would go before | Notes |
+|---|---|---|
+| `dockerfile-kasm-core-kasmos` | `:64` | base_layer `:34` |
 | `dockerfile-kasm-core-oracle` | `:38` | in `install_tools` `:34`; base_layer `:51` |
-| `dockerfile-kasm-core-centos` | `:39` | in `install_tools` `:35`; base_layer `:52`. CentOS 7 is EOL and **has no AK repo** — leave it unflagged |
-| **`dockerfile-kasm-core-alpine`** | **`:45`**, not `:74` | `install_tools.sh` runs `apk add` at `:45`, *before* package_rules at `:74`. Rewriting at the package_rules line would miss every `apk` call in the tools stage |
-| **`dockerfile-kasm-core-suse`** | **`:47`** | **has no `package_rules` step at all** — its first package operation is `install_tools.sh` at `:47` |
+| `dockerfile-kasm-core-centos` | `:39` | in `install_tools` `:35`; base_layer `:52`. CentOS 7 is EOL and **has no AK repo** — leave it unflagged permanently |
+| `dockerfile-kasm-core-suse` | `:47` | **has no `package_rules` step at all** — its first package operation is `install_tools.sh` at `:47` |
 
-For the five files whose `base_layer` is `FROM install_tools`, a single `apply` in
-the `install_tools` stage carries through. For the four where `base_layer` is
-`FROM $BASE_IMAGE` directly, `apply` must be in `base_layer`.
+</details>
 
-`revert` goes in every one of the nine, in its own `RUN` immediately before the
-`cleanup.sh` line (`dockerfile-kasm-core:259` and equivalents).
+Of the five in scope, `-fedora` and `-alpine` have `base_layer` as
+`FROM install_tools`, so a single `apply` in the `install_tools` stage carries
+through. The three ubuntu-family files take `base_layer` `FROM $BASE_IMAGE`
+directly, so `apply` must go in `base_layer`.
+
+`revert` goes in each of those five, in its own `RUN` immediately before the
+`cleanup.sh` line (`dockerfile-kasm-core:259` and equivalents). It stays
+unconditional (not gated on `AK_URL`) so a half-configured build self-heals.
 
 Each file also gains `ARG AK_URL=""` / `ARG AK_GENERIC=""` in the stage(s) that
 use them — remember an `ARG` is scoped per stage and must be redeclared.
@@ -127,8 +190,8 @@ use them — remember an `ARG` is scoped per stage and must be redeclared.
 | Location | Today | Change |
 |---|---|---|
 | `ci-scripts/template-vars.yaml` | `base_image:` per matrix row | prefix at render time in `template-gitlab.py`, not by editing 20+ rows |
-| all 9 dockerfiles `:10` | `FROM --platform=$BUILDPLATFORM alpine:3 AS containerinit_fetch` | promote to `ARG CI_ALPINE_IMAGE=alpine:3` — currently hardcoded |
-| all 9 dockerfiles `:22-30` | `FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS kasmgo_builder` | promote to `ARG CI_GOLANG_IMAGE=golang:1.25-alpine` |
+| the 5 in-scope dockerfiles `:10` | `FROM --platform=$BUILDPLATFORM alpine:3 AS containerinit_fetch` | promote to `ARG CI_ALPINE_IMAGE=alpine:3` — currently hardcoded. Present in all 9; phase 1 changes only the five |
+| the 5 in-scope dockerfiles `:22-30` | `FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS kasmgo_builder` | promote to `ARG CI_GOLANG_IMAGE=golang:1.25-alpine`. Same — all 9 have it, only five change |
 | `ci-scripts/scan:12` | `--db-repository public.ecr.aws/aquasecurity/trivy-db:2` (hardcoded) | make the two DB repos overridable env vars |
 | `bin/build-nix-store-volume:29` | `NIX_IMAGE_DEFAULT="docker.io/nixos/nix:2.28.4"` | **already overridable** via `--nix-image`; nothing to change, just wire the flag in CI |
 | `bin/nix-bake-closure:38` | `NIX_IMAGE="${NIX_IMAGE:-docker.io/nixos/nix:latest}"` | already env-overridable |
@@ -169,24 +232,33 @@ scanning instead of opaque blobs. That is a mirroring job, not a flag.
 
 Nothing below is blocked on code; all of it is AK-side work devops can start now.
 
-**Phase 1 — distro repos.** Fully backed by what's deployed. No provisioning
-needed for ubuntu / debian / kali / parrot / alpine / oracle / rocky / alma /
-opensuse-base / fedora-base.
+**Phase 1 — distro repos. Nothing to provision.** The ubuntu, alpine and
+fedora-base repos all exist on the instance today. This is the main dividend of
+the §0 narrowing: phase 1 is now pure code, with zero devops dependency.
 
-**Phase 2 — needs new remotes:**
+**Phase 2 — the narrowed remote list.** Only three of the original eight rows
+survive the scope cut:
 
-| Repo to create | Upstream | Format |
-|---|---|---|
-| dockerhub | `https://registry-1.docker.io` | oci |
-| ecr-public | `https://public.ecr.aws` | oci |
-| epel-8 / epel-9 | `https://dl.fedoraproject.org/pub/epel/` | rpm |
-| rpmfusion-free-el / -fedora | `https://download1.rpmfusion.org/free/el/`, `https://mirrors.rpmfusion.org/free/fedora/` | rpm |
-| packman-leap | `https://ftp.gwdg.de/pub/linux/misc/packman/suse/` | rpm |
-| obs-m17n-fonts | `https://download.opensuse.org/repositories/M17N:/fonts/16.0/` | rpm |
-| obs-printing | `https://download.opensuse.org/repositories/Printing/16.0/` | rpm |
-| saltproject | `https://repo.saltproject.io` | debian |
+| Repo to create | Upstream | Format | Needed for |
+|---|---|---|---|
+| dockerhub | `https://registry-1.docker.io` | oci | every `FROM` in the five in-scope files, plus the `alpine:3` / `golang:1.25-alpine` builders and `nixos/nix` |
+| ecr-public | `https://public.ecr.aws` | oci | trivy DB / java-DB (`ci-scripts/scan:12`) — CI-wide, not distro-specific |
+| rpmfusion-free-fedora | `https://mirrors.rpmfusion.org/free/fedora/` | rpm | `install_audio.sh:27,31` (fedora 42/43) |
 
-**Phase 3 — needs a capability answer first:** generic remote(s), per §5.
+**Dropped by the scope cut, not merely deferred:** `epel-8` / `epel-9` and
+`rpmfusion-free-el`. Every EPEL fetch in the tree is an EL8/EL9 path
+(`install_kde.sh:66,75,84,94`, `install_xfce_ui.sh:97,110,121,140`,
+`install_kasm_vnc.sh:7,10` via `oracle-epel-release-*`), and
+`download1.rpmfusion.org/free/el/` likewise (`install_audio.sh:10-23`). Fedora
+itself uses neither. The review's phrasing suggested EPEL was on a Fedora path;
+it is not.
+
+**Also deferred with their families:** `packman-leap`, `obs-m17n-fonts`,
+`obs-printing` (all opensuse) and `saltproject` (remnux, debian).
+
+**Phase 3 — needs a capability answer first:** generic remote(s), per §5. The
+scope cut barely touches this: the raw fetches are mostly distro-agnostic and
+the `container-init` `ADD` is in all nine dockerfiles regardless.
 
 **Never:** `cache.nixos.org` and Nix flake inputs (no AK format — see review §2c),
 and the `git clone` of REMnux salt-states (`extra/remnux.sh:17`).
@@ -195,20 +267,31 @@ and the `git clone` of REMnux salt-states (`extra/remnux.sh:17`).
 
 ## 7. Test plan
 
-1. **Off-path regression.** Build one image per family with no flags set; confirm
-   the dockerfile digest chain is unchanged from `develop`. This is the gate that
-   makes the flag safe to merge.
-2. **On-path, ubuntu first.** `AK_URL` only, `dockerfile-kasm-core`. Confirm
+1. **Off-path regression.** Build with no flags set and confirm the dockerfile
+   digest chain is unchanged from `develop`. Cover the five in-scope files
+   **plus at least one deferred file** (`-suse` is the strongest choice, having
+   no `package_rules` step) to prove the untouched families really are
+   untouched. This is the gate that makes the flag safe to merge.
+2. **Deferred-distro no-op.** With `AK_URL` **set**, build a debian or kali row
+   off `dockerfile-kasm-core`. The §0 table-miss path must leave sources
+   unmodified and AK's byte counters flat. This is the test that the shared
+   dockerfile didn't quietly widen the scope.
+3. **On-path, ubuntu first.** `AK_URL` only, `dockerfile-kasm-core`. Confirm
    `apt-get update` pulls from AK (check AK's `storage_used_bytes` moves) and the
    image is functionally identical.
-3. **Leak guard.** Grep the resulting image for the AK hostname — must be zero
-   hits across `/etc/apt`, `/etc/yum.repos.d`, `/etc/zypp/repos.d`,
-   `/etc/apk/repositories`. Wire this as a permanent CI job, not a one-off.
-4. **Alpine and suse specifically** — the two files whose insertion point differs.
-   A rewrite that silently lands after the first `apk add` / `zypper` call looks
-   like a pass but caches nothing; verify by AK-side byte counters, not by build
-   success.
-5. **`AK_REGISTRY` on the nix builder** — the cheapest on-path test of the OCI
+4. **Leak guard.** Grep the resulting image for the AK hostname — must be zero
+   hits across `/etc/apt`, `/etc/yum.repos.d`, `/etc/apk/repositories` (keep
+   `/etc/zypp/repos.d` in the grep even though suse is deferred; it costs
+   nothing and it will be right when suse lands). Wire this as a permanent CI
+   job, not a one-off. If AK ever requires auth, extend it to the credential
+   value too — see the credentials note in review §3.
+5. **Alpine specifically** — now the only irregular insertion point in scope. A
+   rewrite that silently lands after the first `apk add` looks like a pass but
+   caches nothing; verify by AK-side byte counters, not by build success.
+6. **Fedora metalink** — confirm `metalink=` is actually disabled and dnf is
+   hitting the baseurl. Same failure mode as alpine: a build that succeeds while
+   caching nothing.
+7. **`AK_REGISTRY` on the nix builder** — the cheapest on-path test of the OCI
    remote once it exists, since `--nix-image` needs no code change.
 
 ## 8. Open questions for the vendor / devops
