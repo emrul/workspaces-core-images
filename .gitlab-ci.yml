@@ -97,6 +97,12 @@ variables:
   # cache for the `base` stage. Deliberately NOT enabled on develop/release while
   # the instance has no HA answer — see design/artifact-keeper-flag-design.md §8.
   AK_URL: ""
+  # Which distro base failures FAIL the job. nix-base-build.sh defaults to
+  # `ubuntu` alone, so a failing alpine/fedora/resolute base is "tolerated" and
+  # the pipeline goes GREEN while printing "OK — built: …; tolerated failures: …".
+  # That masked three genuine failures in pipeline 2760206784. While AK is being
+  # validated on this branch, every base we build must be able to redden the job.
+  CRITICAL_DISTROS: "ubuntu fedora alpine resolute"
   NIX_GC: ""                # set to "1" on a scheduled pipeline → run only `gc`
   NIX_UPDATE: ""            # set to a cadence (twice-daily|weekly) on a schedule
                             # → run bin/nix-kasm-update first to refresh self-hosted
@@ -379,6 +385,7 @@ base:
         -e BASE_BUILT_SHA="$CI_COMMIT_SHA" \
         -e NIXPKGS_REV="${NIXPKGS_REV_RESOLVED:-}" \
         -e AK_URL="${AK_URL:-}" \
+        -e CRITICAL_DISTROS="${CRITICAL_DISTROS:-}" \
         -e NIX_BASE_SRC_UBUNTU="${NIX_BASE_SRC_UBUNTU:-}" \
         -e RF_REGISTRY="${RF_REGISTRY:-}" \
         -e RF_ROOT_URL="${RF_ROOT_URL:-}" \
