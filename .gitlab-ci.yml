@@ -72,7 +72,7 @@ variables:
   # inline calls did not move with it.
   NIX_CLI: "docker"
   # Disk budget (enforced by dind-build.sh's pre-flight gate + end-of-build reclaim
-  # + nix-gc.sh). Tune to the runner's provisioned disk — see docs/ci_cd_flow.md.
+  # + nix-gc.sh). Tune to the runner's provisioned disk — see design/ci_cd_flow.md.
   # OPS SIZING: provision the store at
   #     total >= NIX_STAGE_CAP_G + DISK_MIN_GB + ~60G (base images + containerd + margin)
   # A cold full catalog build GROWS ~150G (observed); DISK_MIN_GB must exceed that so

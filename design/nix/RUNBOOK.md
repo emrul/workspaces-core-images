@@ -4,7 +4,7 @@ Operational guide for the Nix app-image pipeline: what runs where, how to drive
 it, and the non-obvious failure modes we've hit (so you don't re-debug them).
 For the *design* rationale see `design/nix-package-process.md`,
 `design/nix-self-hosted-packages.md`, `design/nix-dedup-gap.md`, and the
-operator-flow docs `docs/ci_cd_flow.md` / `docs/nix-ci.md`.
+operator-flow docs `design/ci_cd_flow.md` / `docs/nix-ci.md`.
 
 CI project: `labs-sandbox/kasm-nix` on gitlab.com, self-hosted **`nix-builder`**
 runner (forge box, podman-in-podman against a persistent store at

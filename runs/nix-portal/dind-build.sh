@@ -148,7 +148,7 @@ echo "[driver] free after prune: $(freeG)G"
 #   2. still short → nuke the Nix cache entirely (next build re-seeds, slow)
 #   3. still short → FAIL: the image working set alone exceeds the budget; a human
 #      must free space / grow the disk (or lower DISK_MIN_GB for a one-off).
-# This is the enforcement side of the runner disk budget — see docs/ci_cd_flow.md.
+# This is the enforcement side of the runner disk budget — see design/ci_cd_flow.md.
 DISK_MIN_GB="${DISK_MIN_GB:-120}"
 CAP_G="${NIX_STAGE_CAP_G:-150}"
 if [ "$(freeG)" -lt "${DISK_MIN_GB}" ]; then
