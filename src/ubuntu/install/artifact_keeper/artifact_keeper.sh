@@ -42,7 +42,7 @@ R="${AK_TEST_ROOT:-}"
 # Directories that may hold a rewritten source file. revert sweeps all of them
 # regardless of $DISTRO; zypp is listed for the deferred opensuse family so the
 # sweep stays correct when that lands.
-SOURCE_DIRS=("${R}/etc/apt" "${R}/etc/yum.repos.d" "${R}/etc/apk" "${R}/etc/zypp")
+SOURCE_DIRS=("${R}/etc/apt" "${R}/etc/yum.repos.d" "${R}/etc/apk" "${R}/etc/zypp" "${R}/etc/dnf")
 
 # ---------------------------------------------------------------------------
 # apply helpers
@@ -154,9 +154,48 @@ apply_alpine() {
 # falling back — the two path shapes below are verified against the instance:
 #   os       <ak>/rpm/fedora-<ver>-os/$basearch/os/
 #   updates  <ak>/rpm/fedora-<ver>-updates/$basearch/    (no trailing /os/)
+# AK ignores HTTP Range requests: a `Range: bytes=0-4095` returns 200 with the
+# WHOLE body, no Accept-Ranges, no Content-Range (upstream correctly returns 206
+# + 4096 bytes). zchunk downloads metadata as ranged chunk requests, so through AK
+# every chunk request yields the entire file. librepo's fixed buffer then rejects
+# the overflow and dnf dies with
+#
+#   Curl error (23): Failed writing received data ... [passed 4096 returned 0]
+#
+# while its progress meter reports absurd totals (71.3 GiB of "metadata"). This is
+# an AK limitation, not a Fedora one — see §8. Until AK honours Range, turn
+# zchunk off so dnf fetches the plain .zst metadata in one whole-file GET.
+#
+# Verified in fedora:42 against the live instance: with this set,
+# `dnf upgrade -y --refresh` (exactly what package_rules.sh runs) succeeds and
+# fetches zero .zck files. Note the per-repo `zchunk=` key is NOT honoured by
+# libdnf5 — it has to go in [main].
+disable_zchunk() {
+  local conf="${R}/etc/dnf/dnf.conf"
+  [ -f "${conf}" ] || { log "no ${conf}; skipping zchunk opt-out"; return 0; }
+  if grep -qE '^[[:space:]]*zchunk[[:space:]]*=' "${conf}"; then
+    log "zchunk already configured in ${conf}; leaving it alone"
+    return 0
+  fi
+  back_up "${conf}"
+  local tmp
+  tmp="$(mktemp)"
+  if grep -qE '^\[main\]' "${conf}"; then
+    # awk, not `sed a`, because GNU and BSD disagree on the append syntax.
+    awk '{ print } /^\[main\]/ && !done { print "zchunk=False"; done=1 }' "${conf}" >"${tmp}"
+  else
+    { cat "${conf}"; printf '[main]\nzchunk=False\n'; } >"${tmp}"
+  fi
+  cat -- "${tmp}" >"${conf}"
+  rm -f "${tmp}"
+  log "set zchunk=False in ${conf} (AK does not support HTTP Range)"
+}
+
 apply_fedora() {
   local ver="$1"
   local f
+
+  disable_zchunk
 
   for f in "${R}/etc/yum.repos.d/fedora.repo" "${R}/etc/yum.repos.d/fedora-updates.repo"; do
     [ -f "${f}" ] || { log "absent, skipping: ${f}"; continue; }

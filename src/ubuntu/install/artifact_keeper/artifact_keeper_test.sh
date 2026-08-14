@@ -93,6 +93,28 @@ check "os baseurl + /os/"      "${ROOT}/etc/yum.repos.d/fedora.repo" "^baseurl=$
 check "updates baseurl, no os" "${ROOT}/etc/yum.repos.d/fedora-updates.repo" "^baseurl=${AKU}/rpm/fedora-42-updates/\\\$basearch/$"
 absent "updates not given /os/" "${ROOT}/etc/yum.repos.d/fedora-updates.repo" "updates/\\\$basearch/os/"
 
+echo "== fedora: zchunk opt-out (AK has no Range support) =="
+fixture
+mkdir -p "${ROOT}/etc/dnf"
+printf '# see man dnf.conf\n\n[main]\ntsflags=nodocs\n' > "${ROOT}/etc/dnf/dnf.conf"
+AK_TEST_ROOT="$ROOT" AK_URL="$AKU" DISTRO=fedora42 bash "$AK" apply >/dev/null
+check "zchunk=False inserted"        "${ROOT}/etc/dnf/dnf.conf" "^zchunk=False$"
+check "still under [main]"           "${ROOT}/etc/dnf/dnf.conf" "^\\[main\\]"
+[ -f "${ROOT}/etc/dnf/dnf.conf.ak-orig" ] && ok "dnf.conf backed up" || bad "dnf.conf backed up"
+# order matters: the key must come AFTER the [main] header, not before it
+if [ "$(grep -n -E '^\[main\]|^zchunk=False' "${ROOT}/etc/dnf/dnf.conf" | head -1 | grep -c 'main')" = 1 ]; then
+  ok "[main] precedes zchunk key"; else bad "[main] precedes zchunk key"; fi
+AK_TEST_ROOT="$ROOT" AK_URL="$AKU" DISTRO=fedora42 bash "$AK" revert >/dev/null
+absent "dnf.conf restored (no zchunk)" "${ROOT}/etc/dnf/dnf.conf" "zchunk"
+if ls "${ROOT}"/etc/dnf/*.ak-orig >/dev/null 2>&1; then bad "dnf.conf backup removed"; else ok "dnf.conf backup removed"; fi
+
+echo "== fedora: pre-existing zchunk setting is respected =="
+fixture
+mkdir -p "${ROOT}/etc/dnf"
+printf '[main]\nzchunk=True\n' > "${ROOT}/etc/dnf/dnf.conf"
+AK_TEST_ROOT="$ROOT" AK_URL="$AKU" DISTRO=fedora42 bash "$AK" apply >/dev/null
+check "operator setting untouched" "${ROOT}/etc/dnf/dnf.conf" "^zchunk=True$"
+
 echo "== off-path: AK_URL empty must change nothing =="
 fixture
 before="$(find "${ROOT}" -type f | sort | xargs shasum -a 256 | shasum -a 256)"

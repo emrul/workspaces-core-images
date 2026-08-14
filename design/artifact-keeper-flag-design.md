@@ -393,7 +393,11 @@ and the `git clone` of REMnux salt-states (`extra/remnux.sh:17`).
    nothing and it will be right when suse lands). Wire this as a permanent CI
    job, not a one-off. If AK ever requires auth, extend it to the credential
    value too — see the credentials note in review §3.
-5. **Alpine specifically** — now the only irregular insertion point in scope. A
+5. **Alpine specifically** — the only irregular insertion point in scope. Note
+   that `unable to select packages` for `mesa-vulkan-radeon`, `libdrm-amdgpu`,
+   `libdrm-radeon` is **pre-existing and benign** — those AMD GPU packages do not
+   exist in Alpine's repos and `install_tools.sh` already warns and continues.
+   Do not read it as an AK failure (this document briefly did). A
    rewrite that silently lands after the first `apk add` looks like a pass but
    caches nothing; verify by AK-side byte counters, not by build success.
 6. **Fedora metalink** — confirm `metalink=` is actually disabled and dnf is
@@ -479,6 +483,30 @@ Probed against the live instance 2026-08-14. Q1–Q3 are now settled.
      but the mistyped repo will not get OCI-aware handling.
    - A genuinely unknown format is rejected properly (`400 Invalid format`), so
      the `oci`→`generic` behaviour is specific, not a general silent-coercion.
+5. **Does AK support HTTP Range requests? — NO, and it breaks Fedora.**
+   Proven 2026-08-14. `Range: bytes=0-4095` on a `.zck`:
+
+   | | response |
+   |---|---|
+   | upstream (`archives.fedoraproject.org`) | `206`, 4096 bytes, `Accept-Ranges: bytes`, `Content-Range: bytes 0-4095/3406982` |
+   | AK | `200`, **3406982 bytes** (the whole file), no `Accept-Ranges`, no `Content-Range` |
+
+   zchunk fetches metadata as ranged chunk requests, so through AK every chunk
+   request returns the entire file. librepo's fixed buffer rejects the overflow
+   and dnf dies with `Curl error (23): Failed writing received data … [passed
+   4096 returned 0]`, while its progress meter reports impossible totals
+   (**71.3 GiB** of "metadata" in 9s). AK's stored copy is fine — byte-identical
+   to upstream, correct `\0ZCK1` magic, sha256 matching repomd — so this is a
+   transport limitation, not corruption.
+
+   **Ask the vendor for Range support** (RFC 7233); it is a baseline expectation
+   for a caching proxy and this will bite anything doing resumable or partial
+   fetches, not just dnf. Meanwhile `artifact_keeper.sh` sets `zchunk=False` in
+   `/etc/dnf/dnf.conf` `[main]`, which makes `dnf upgrade -y --refresh` succeed
+   with zero `.zck` fetches (verified in `fedora:42` against the live instance).
+   Note the per-repo `zchunk=` key is **not** honoured by libdnf5 — it must go in
+   `[main]`, and it is backed up and reverted like the repo files.
+
 4. What is the HA / uptime expectation for this instance? Once builds route
    through it, it is a CI dependency; the review flags it as a new SPOF. **Still
    unanswered — needs a human, not an API call.**
