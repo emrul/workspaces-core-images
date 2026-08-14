@@ -12,7 +12,7 @@ must remain "off" and the off-path must be byte-identical to today's build.
 
 ## 0. Scope — Ubuntu and Fedora first, Alpine next
 
-**Phase 1 covers only the three families we ship Nix bases for.** Everything
+**Phase 1 covers only the families we ship Nix bases for.** Everything
 else below is retained as analysis but is explicitly **deferred** — do not
 implement it.
 
@@ -65,12 +65,15 @@ Three variables, all empty-by-default. Empty ⇒ every code path below is a no-o
 |---|---|---|
 | `AK_URL` | base build (docker build arg) | rewrite distro package sources to AK. e.g. `https://artifact.huan.oci.dev.remotebrowser.net` |
 | `AK_REGISTRY` | base + nix build (CI variable / build arg) | prefix for OCI pulls. e.g. `artifact.huan.oci.dev.remotebrowser.net/dockerhub` |
-| `AK_GENERIC` | base build (docker build arg) | base URL for the raw-file fetches in §5. Separate from `AK_URL` because it needs a different repo and may not be supported at all (untested) |
+| `AK_GENERIC` | base build (docker build arg) | base URL for the raw-file fetches in §5. **Must be the full API route** — `https://<host>/api/v1/repositories/<key>/download` — not a `$AK_URL`-style prefix; see §5 |
 
 Rationale for three rather than one: the three back onto different AK repo types
-with independent readiness. Distro repos exist today; the OCI remote does not
-exist yet; generic-remote support is unconfirmed. One combined flag would force
-all three to land together.
+with independent readiness, and as of 2026-08-14 all three exist — distro repos
+(pre-existing), `dockerhub` / `ecr-public` (created, §6), and generic remotes
+(confirmed working, §8 Q1). Keeping them separate still matters for a reason that
+only emerged on testing: `AK_URL` is a pure prefix swap while `AK_GENERIC` needs a
+completely different URL shape, so they cannot share a rewrite helper. One
+combined flag would also force all three to land together.
 
 **Design rule:** no script may *require* AK. Every rewrite is
 `if [ -n "${AK_URL:-}" ]; then … fi`, and CI sets the variable only on an opt-in
