@@ -154,6 +154,19 @@ preflight_store_access() {
   [ "$(id -u)" -eq 0 ] && return 0
   [ -x "${root}" ] && { [ ! -d "${vols}" ] || [ -x "${vols}" ]; } && return 0
 
+  # Self-heal, if the host was provisioned for it. A docker upgrade resets the
+  # data-root mode and would otherwise block every build until a human ran chmod.
+  # The helper is root-owned, takes no arguments, and is permitted by a single
+  # scoped sudoers rule (kasm-nix-infra provision-runner.sh §5a2b) — deliberately
+  # NOT a script from this checkout, which the runner can modify.
+  perm_helper=/usr/local/sbin/kasm-nix-fix-store-perms
+  if [ -x "${perm_helper}" ] && sudo -n "${perm_helper}" 2>&1 | sed 's/^/[host-run] /' >&2; then
+    if [ -x "${root}" ] && { [ ! -d "${vols}" ] || [ -x "${vols}" ]; }; then
+      echo "[host-run] store traversal repaired by ${perm_helper##*/}; continuing" >&2
+      return 0
+    fi
+  fi
+
   cat >&2 <<EOF
 [host-run] FATAL: ${me} cannot traverse the container engine's store.
 
