@@ -180,8 +180,12 @@ preflight_store_access() {
   local user can enumerate the store. Do NOT use 0755 — that adds nothing the
   build needs.
 
-  To bypass this shim entirely and go back to podman-in-podman, set the CI
-  variable NIX_RUNNER_SHIM=dind-run.sh (the podman store is still intact).
+  Do NOT try to work around this with NIX_RUNNER_SHIM=dind-run.sh: DinD is
+  disabled and this runner is not provisioned for it. The chmod above is the fix.
+
+  Pipelines can self-heal this without root: see fix-store-perms in
+  kasm-nix-infra (a root-owned, argument-free helper the runner may call via a
+  single scoped sudoers rule).
 EOF
   return 1
 }

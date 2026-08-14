@@ -3,7 +3,7 @@
 # Report-only: findings NEVER fail the job; scanner/infra errors DO.
 # Implements design/cve-scanning.md § 7 step 3.
 #
-# Runs INSIDE the forge DinD (quay.io/podman/stable) against the persistent
+# Runs on the runner host via host-run.sh (docker) against the persistent
 # podman store where the build left localhost/nix-<app>:dev + the fat store.
 #
 # Per image (changed apps + fat store):

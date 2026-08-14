@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # nix-scan-base.sh — Trivy-scan the Nix base/core images built by the `base`
-# stage, for OS-package CVEs. Runs INSIDE the forge DinD (quay.io/podman/stable)
+# stage, for OS-package CVEs. Runs on the runner host via host-run.sh (docker)
 # against the persistent podman store where nix-base-build.sh left the local
 # `localhost/<base>:dev` images.
 #

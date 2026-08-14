@@ -7,8 +7,9 @@ For the *design* rationale see `design/nix-package-process.md`,
 operator-flow docs `design/ci_cd_flow.md` / `docs/nix-ci.md`.
 
 CI project: `labs-sandbox/kasm-nix` on gitlab.com, self-hosted **`nix-builder`**
-runner (forge box, podman-in-podman against a persistent store at
-`/srv/nix-build`). `kasm-nix` is that project's **default branch**.
+runner — an OCI instance with host docker, running build steps directly via
+`host-run.sh` against a persistent store at `/srv/nix-build` (DinD is disabled).
+`kasm-nix` is that project's **default branch**.
 
 ---
 
@@ -134,8 +135,9 @@ So the current value, in the `overlay.nix|flake.*|lib/*` arm of
 >   production value** — nothing to change.
 
 Whole-catalog is never right for an overlay change: it was the old behaviour and
-is what filled the forge build disk (every overlay edit rebuilt all ~50 apps +
-republished the fat store, then starved the next pipeline's checkout).
+is what filled the build disk on the retired forge host (every overlay edit
+rebuilt all ~50 apps + republished the fat store, then starved the next
+pipeline's checkout).
 
 **Keep it from drifting:**
 - **App side is derivable** — `grep -oE 'kasm-overlay#[a-z0-9_-]+' bin/nix-profiles.toml`.

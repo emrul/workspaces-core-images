@@ -1,11 +1,16 @@
 # ==========================================================================
-# Kasm Nix app-image catalog — build & publish pipeline (forge DinD model)
+# Kasm Nix app-image catalog — build & publish pipeline
 # ==========================================================================
-# Runs on the self-hosted `nix-builder` runner (forge box, containerd+nerdctl,
-# no host docker/podman engine) and drives the nix-portal podman-in-podman
-# harness. All heavy work happens inside quay.io/podman/stable against the
-# PERSISTENT podman store at $DIND_ROOT/containers — that warm store (Nix dedup
-# + podman layer cache) is the caching strategy, so reruns fetch almost nothing.
+# Runs on the self-hosted `nix-builder` project runner — an OCI instance
+# ("Nix builder OCI", us-ashburn-1) with docker ON THE HOST. Build steps run
+# directly there via ci-scripts/host-run.sh; there is no podman-in-podman.
+# All heavy work runs against the PERSISTENT docker store under $DIND_ROOT —
+# that warm store (Nix dedup + layer cache) is the caching strategy, so reruns
+# fetch almost nothing.
+#
+# HISTORY: this pipeline was originally built for a "forge box" that had only
+# containerd+nerdctl, hence the DinD harness and the $DIND_* variable names.
+# That host is gone and DinD is DISABLED — do not reach for it as a fallback.
 #
 #   prepare — change-gating: compute NIX_PROFILES from the commit diff
 #   base    — (manual) build core-minimal + nix-ubuntu into the store
@@ -62,8 +67,10 @@ variables:
   # 122-minute build into a red pipeline, and images landing in podman's store
   # where a co-located Kasm cannot see them.
   #
-  # Set NIX_RUNNER_SHIM=dind-run.sh to fall back — needed on any runner WITHOUT a
-  # host container engine (the forge box was one).
+  # NOT a live fallback: DinD is DISABLED. dind-run.sh remains in-tree as the
+  # argument-shape reference host-run.sh was written against, but the current
+  # runner has host docker and is not provisioned for podman-in-podman, so
+  # switching to it will not work. Fix the host instead.
   NIX_RUNNER_SHIM: "host-run.sh"
   # The engine the jobs drive. Must match the shim: host-run.sh runs on the host
   # (docker there), dind-run.sh runs inside quay.io/podman/stable (podman). A
