@@ -362,9 +362,31 @@ and the `git clone` of REMnux salt-states (`extra/remnux.sh:17`).
    off `dockerfile-kasm-core`. The §0 table-miss path must leave sources
    unmodified and AK's byte counters flat. This is the test that the shared
    dockerfile didn't quietly widen the scope.
-3. **On-path, ubuntu first.** `AK_URL` only, `dockerfile-kasm-core`. Confirm
+3. **On-path, ubuntu — use `resolute`, not `ubuntu`.** `AK_URL` only. Confirm
    `apt-get update` pulls from AK (check AK's `storage_used_bytes` moves) and the
    image is functionally identical.
+
+   **Exercise the ubuntu rewrite table via `BASE_DISTROS=resolute`.** Both rows
+   build `DISTRO=ubuntu` and therefore share one rewrite table, but their source
+   images differ in a way that decides where the test can run
+   (`ci-scripts/nix-base-src.sh:base_src_image`):
+
+   | `BASE_DISTROS` | source image | credentials |
+   |---|---|---|
+   | `ubuntu` | `quay.io/rfcurated/rfubu:24.04-rfcurated` | **RapidFort, private** — needs `RF_ROOT_URL` / `RF_ACCESS_ID` / `RF_SECRET_ACCESS_KEY`, which are *protected* CI variables and are therefore **not injected on an unprotected branch** |
+   | `resolute` | `ubuntu:26.04` | none — public |
+   | `fedora` | `fedora:42` | none |
+   | `alpine` | `alpine:3.21` | none |
+
+   So on an opt-in feature branch, `resolute` is the only way to exercise the
+   ubuntu table at all, and it does so on a real shipping base rather than a
+   substituted source image. `NIX_BASE_SRC_UBUNTU=ubuntu:24.04` also falls back
+   off RapidFort, but tests a base we do not ship. RapidFort applies **only** to
+   the `ubuntu` nix base (which underpins the single-app catalogue); the
+   `template-vars.yaml` core matrix never touches it.
+
+   Recommended one-pass invocation: `BASE_DISTROS="alpine fedora resolute"` —
+   all three rewrite tables, no credentials required.
 4. **Leak guard.** Grep the resulting image for the AK hostname — must be zero
    hits across `/etc/apt`, `/etc/yum.repos.d`, `/etc/apk/repositories` (keep
    `/etc/zypp/repos.d` in the grep even though suse is deferred; it costs
@@ -379,6 +401,29 @@ and the `git clone` of REMnux salt-states (`extra/remnux.sh:17`).
    caching nothing.
 7. **`AK_REGISTRY` on the nix builder** — the cheapest on-path test of the OCI
    remote once it exists, since `--nix-image` needs no code change.
+
+### Runner prerequisite (hit on the first attempt, 2026-08-14)
+
+The `base` stage cannot run until the runner host's docker data-root is
+traversable by `gitlab-runner`. Pipeline 2760116239 failed in `base-check` after
+3s — before any dockerfile was touched — with:
+
+```
+[host-run] FATAL: gitlab-runner cannot traverse the container engine's store.
+  what        : /srv/nix-build/docker
+  current mode: drwx--x--- root:root      (0710; needs 0711)
+```
+
+This is independent of Artifact Keeper and blocks *every* nix base build on that
+runner, not just an AK-enabled one. Two ways past it:
+
+- **Fix the host** (needs sudo on the forge box):
+  `sudo chmod 0711 /srv/nix-build/docker /srv/nix-build/docker/volumes`, and
+  durably via `provision-runner.sh` in `kasm-nix-infra` so a rebuilt host keeps
+  it. `provision-runner.sh --verify` asserts it.
+- **Bypass the shim:** set `NIX_RUNNER_SHIM=dind-run.sh` to go back to
+  podman-in-podman; the podman store is still intact. `AK_URL` reaches the build
+  either way — both shims honour `-e KEY=VAL`.
 
 ## 8. Open questions for the vendor / devops
 
