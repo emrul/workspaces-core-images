@@ -10,7 +10,7 @@ must remain "off" and the off-path must be byte-identical to today's build.
 
 ---
 
-## 0. Scope — Ubuntu, Alpine and Fedora only
+## 0. Scope — Ubuntu and Fedora first, Alpine next
 
 **Phase 1 covers only the three families we ship Nix bases for.** Everything
 else below is retained as analysis but is explicitly **deferred** — do not
@@ -18,8 +18,16 @@ implement it.
 
 | | Families | Core dockerfiles |
 |---|---|---|
-| **In scope** | ubuntu (incl. resolute), alpine, fedora | `dockerfile-kasm-core`, `-minimal`, `-ubuntu-resolute`, `-alpine`, `-fedora` |
+| **Phase 1** | ubuntu (incl. resolute), fedora | `dockerfile-kasm-core`, `-minimal`, `-ubuntu-resolute`, `-fedora` |
+| **Phase 1b** | alpine | `-alpine` |
 | **Deferred** | debian, kasmos, kali, parrot, oracle, centos, rocky, alma, rhel9, opensuse | `-kasmos`, `-oracle`, `-centos`, `-suse` |
+
+**Why alpine is split out rather than deferred.** Ubuntu and fedora ship first by
+decision, not by constraint: alpine's AK repo exists and is verified working
+end-to-end (§6), so it is a sequencing choice and alpine can be pulled forward at
+any time for the cost of one dockerfile edit. Note that alpine is also the only
+irregular insertion point in scope (§4), so shipping it separately from the two
+regular families is a reasonable de-risking split on its own merits.
 
 Rationale: AK only earns its keep underneath something we build and ship on a
 cadence. The Nix bases are `dockerfile-nix-ubuntu`, `-nix-ubuntu-resolute`,
@@ -118,7 +126,7 @@ below for whoever picks up phase 2; they must not appear in the shipped table.
 | Family | Files | Rewrite |
 |---|---|---|
 | ubuntu (incl. resolute) | `/etc/apt/sources.list`, `/etc/apt/sources.list.d/*.sources` (deb822 on noble+) | `archive.ubuntu.com/ubuntu` → `$AK_URL/debian/ubuntu-archive`; `security.ubuntu.com/ubuntu` → `$AK_URL/debian/ubuntu-security`; `ports.ubuntu.com/ubuntu-ports` → `$AK_URL/debian/ubuntu-ports` |
-| alpine | `/etc/apk/repositories` | `dl-cdn.alpinelinux.org/alpine` → `$AK_URL/alpine/alpine`. ⚠️ **No backing repo or format exists on the instance — see §6. Do not wire this up yet** |
+| alpine | `/etc/apk/repositories` | `dl-cdn.alpinelinux.org/alpine` → `$AK_URL/alpine/alpine` — verified working end-to-end, see §6 |
 | fedora | `/etc/yum.repos.d/fedora*.repo` | metalink → baseurl `$AK_URL/rpm/fedora-<ver>-os` and `-updates`. **Must disable `metalink=`** — dnf prefers it and will bypass the rewrite |
 
 <details>
@@ -208,23 +216,40 @@ variable.
 
 ---
 
-## 5. Raw-file fetches (`AK_GENERIC`) — lowest confidence
+## 5. Raw-file fetches (`AK_GENERIC`) — capability now confirmed
 
 The ~50 fetches from `kasmweb-build-artifacts.s3.amazonaws.com`, plus
 `github.com/emrul/container-init` releases, VirtualGL releases, `kasm-ci.s3…/kasm.svg`
-and the trivy tarball. Two open problems:
+and the trivy tarball.
 
-1. **Unconfirmed capability.** `generic` is an enabled format on the instance,
-   but whether a generic repo accepts `repo_type: "remote"` with an arbitrary
-   `upstream_url` cannot be determined read-only. One write test settles it.
-2. **`ADD` can't authenticate.** `container-init` is fetched with Dockerfile
-   `ADD` (`:13-14` in all 9). If the AK generic repo needs credentials, those
-   lines must become `RUN curl` with a CI-injected header.
+**Both original blockers are cleared** (tested 2026-08-14, §8 Q1):
 
-If generic-remote turns out not to exist, the fallback is better anyway for the
-Kasm artifacts specifically: they are real `.deb`/`.rpm`/`.apk` files, so publish
-them into AK **hosted** Debian/RPM/Alpine repos and get package metadata and
-scanning instead of opaque blobs. That is a mirroring job, not a flag.
+1. ~~Unconfirmed capability.~~ A `generic` + `repo_type: "remote"` repo with an
+   arbitrary `upstream_url` works and returns bytes sha256-identical to upstream.
+2. ~~`ADD` can't authenticate.~~ The download route serves **anonymously** when
+   the repo has `allow_anonymous_access: true`, so the `ADD` lines at `:13-14`
+   can stay as they are. No `RUN curl` conversion needed.
+
+**The one real complication is the URL shape.** Unlike the distro formats, a
+generic repo is *not* reachable at `/generic/<key>/<path>` — that 404s. The
+working route is:
+
+```
+$AK_URL/api/v1/repositories/<key>/download/<upstream-path-verbatim>
+```
+
+So `AK_GENERIC` must be set to the whole
+`https://<host>/api/v1/repositories/<key>/download` base, and it cannot share the
+prefix-swap helper used for `AK_URL`. This is the concrete reason §1 keeps the
+two variables separate — the split turned out to be justified for a different
+reason than originally guessed.
+
+Deciding between remote-proxy and hosted-mirror is now a genuine choice rather
+than a fallback. Proxying works today and needs no publishing pipeline; but the
+Kasm artifacts are real `.deb`/`.rpm`/`.apk` files, so publishing them into AK
+**hosted** Debian/RPM/Alpine repos would get package metadata and scanning
+instead of opaque blobs. The `staging` repo type noted in §8 may be the intended
+mechanism. Proxy first, revisit hosted when the mirroring job is worth building.
 
 ---
 
@@ -232,37 +257,41 @@ scanning instead of opaque blobs. That is a mirroring job, not a flag.
 
 Nothing below is blocked on code; all of it is AK-side work devops can start now.
 
-**Phase 1 — distro repos. Two of the three families are backed; alpine is not.**
-Verified against the live instance 2026-08-14 (45 repos, full listing walked via
-`/api/v1/repositories?page=N`):
+**Phase 1 — distro repos. Nothing to provision: all three families are backed
+and verified end-to-end** against the live instance on 2026-08-14. Each row
+below was fetched through AK, not merely observed in the repo list:
 
-| Family | Repos needed | Status |
+| Family | Repos | Proof |
 |---|---|---|
-| ubuntu | `ubuntu-archive`, `ubuntu-security`, `ubuntu-ports` | **all exist** (`debian`/`remote`) |
-| fedora | `fedora-42-os`, `fedora-42-updates`, `fedora-43-os`, `fedora-43-updates` | **all exist** (`rpm`/`remote`) |
-| alpine | `alpine` | **does not exist — and neither does the format** |
+| ubuntu | `ubuntu-archive`, `ubuntu-security`, `ubuntu-ports` (`debian`/`remote`) | `GET /debian/ubuntu-archive/dists/noble/Release` → 200, 254968 B |
+| fedora | `fedora-42-os`, `-42-updates`, `fedora-43-os`, `-43-updates` (`rpm`/`remote`) | `GET /rpm/fedora-43-os/x86_64/os/repodata/repomd.xml` → 200, 5966 B |
+| alpine | `alpine` (`alpine`/`remote` → `dl-cdn.alpinelinux.org/alpine/`) | `GET /alpine/alpine/v3.22/main/x86_64/APKINDEX.tar.gz` → 200, 500344 B — **sha256-identical to upstream**; `7zip-24.09-r0.apk` likewise (915773 B) |
 
-**Alpine is blocked, and this is the correction that matters most.** There is no
-`alpine` or `apk` format among the 13 the instance reports, and no alpine repo
-among the 45. Review §5's claim that "working `alpine` and `vscode` repos exist
-on this instance" does not hold as of 2026-08-14 — neither repo is present.
-Either they were removed after the 2026-08-09 survey or the original reading was
-wrong; either way, do not plan against them.
+§3's `$AK_URL/alpine/alpine` mapping is correct exactly as written.
 
-Consequences:
+> **Trap that cost us a wrong conclusion — read this before enumerating repos.**
+> `GET /api/v1/repositories` is **permission-filtered, and silently so**. The
+> `svc-nix-build` service account sees 49 repos; an admin session sees 53. The
+> four it hides are precisely those whose format is not one of the 13 that
+> `/api/v1/formats` reports: `alpine`, plus `eric-vs-code-test` (`vscode`),
+> `eric-tf-test` (`terraform`) and `eric-ansible-test` (`ansible`).
+>
+> A non-admin enumeration therefore shows **no alpine repo**, which reads as
+> "alpine is unsupported" — a conclusion this document briefly recorded and
+> which was wrong. The repo has existed since 2026-07-20. A direct
+> `GET /api/v1/repositories/alpine` returns 200 even for the service account;
+> only the *listing* drops it. Enumerate with an admin credential, or query keys
+> directly. Review §5's note that working `alpine` and `vscode` repos exist
+> outside the format list was right all along.
 
-- Phase 1 delivers **ubuntu and fedora only**. That is still worth shipping, and
-  it needs no provisioning whatsoever — but it is two families, not three.
-- Alpine needs one of: (a) a new AK format, which is vendor work on an unknown
-  timeline, or (b) a `generic` remote proxying `dl-cdn.alpinelinux.org/alpine`,
-  which depends entirely on §8 Q1.
-- **This promotes Q1 from a §5 nice-to-have to a phase-1 blocker.** It was
-  scoped as "lowest confidence, only affects raw file fetches". It now also
-  gates a third of the narrowed family set. Answer it first.
-- The §3 alpine row is therefore **aspirational** — its `$AK_URL/alpine/alpine`
-  target does not resolve today. Leave the table entry, but do not wire alpine
-  into a dockerfile until a backing repo exists, or `apk` will hard-fail against
-  a 404 rather than falling back.
+**Phase 2 — created and verified 2026-08-14** (see §8 Q1/Q3 for the format
+caveat):
+
+| Repo | Upstream | Format | Proof |
+|---|---|---|---|
+| `dockerhub` | `https://registry-1.docker.io` | `docker` | `GET /v2/dockerhub/library/alpine/manifests/3` → 200, real OCI image index |
+| `ecr-public` | `https://public.ecr.aws` | `docker` | `GET /v2/ecr-public/aquasecurity/trivy-db/manifests/2` → 200 |
+| `rpmfusion-free-fedora` | `https://mirrors.rpmfusion.org/free/fedora/` | `rpm` | `GET /rpm/rpmfusion-free-fedora/rpmfusion-free-release-42.noarch.rpm` → 200, 11571 B |
 
 **Phase 2 — the narrowed remote list.** Only three of the original eight rows
 survive the scope cut:
@@ -324,37 +353,76 @@ and the `git clone` of REMnux salt-states (`extra/remnux.sh:17`).
 
 ## 8. Open questions for the vendor / devops
 
-Status as of 2026-08-14, probed with the `svc-nix-build` service account.
+Probed against the live instance 2026-08-14. Q1–Q3 are now settled.
 
 1. **Does a `generic` repo support `repo_type: "remote"` with an arbitrary
-   upstream? — STILL OPEN, and now urgent.** `POST /api/v1/repositories` returns
-   `403 FORBIDDEN` ("Insufficient permissions to create repositories") for
-   `svc-nix-build`, which reports `is_admin: false` with an empty
-   `/api/v1/permissions` list. Needs a genuinely admin-scoped credential. Per §6
-   this now gates alpine, not just §5's raw fetches — **answer this first**.
-2. **Does `/v2/` work as a containerd `hosts.toml` mirror? — STILL OPEN, and the
-   structural evidence is discouraging.** The registry surface is live and
-   advertises `WWW-Authenticate: Bearer realm=".../v2/token"`, but the confirmed
-   path layout is `/v2/<repo-key>/<image>/...`. containerd asks a mirror for
-   `/v2/library/alpine/manifests/<ref>` with **no repo-key segment**; that path
-   404s here. Unless AK grows a default- or virtual-repo concept that maps a
-   bare upstream image name onto a repo, `hosts.toml` mirroring cannot work and
-   §4's image-reference rewrites do **not** collapse. Re-test once a `dockerhub`
-   OCI remote exists — that is the only way to settle it.
-3. **`/api/v1/formats` — ANSWERED.** It reports 13 handlers, every one
-   `handler_type: "Core"` with `plugin_id: null`, so it is plausibly the
-   *core-handler* set rather than the enabled set. The real mismatch is not
-   alpine/vscode (neither repo exists — see §6): it is that `eric-docker-test`
-   runs format key **`docker`** while the endpoint advertises **`oci`**. Treat
-   the endpoint as indicative only and confirm a format by creating a repo.
+   upstream? — YES, confirmed by fetch.** A generic remote pointed at
+   `kasmweb-build-artifacts.s3.amazonaws.com` returned
+   `calculator_2.0.3-1_amd64.deb` **sha256-identical to upstream** (92400 B).
+   Two findings that change §5:
+   - **It serves anonymously.** No `Authorization` header, 200. So the
+     Dockerfile `ADD` problem (`:13-14`, all 9 files) is **not** a blocker as
+     long as the repo carries `allow_anonymous_access: true` — those lines do
+     **not** need converting to `RUN curl`.
+   - **But the download path is an API route, not a clean prefix:**
+     `/api/v1/repositories/<key>/download/<upstream-path>`. `/generic/<key>/…`
+     404s to the SPA. So §3's "pure prefix swap" holds for the *distro* formats
+     (`/debian/<key>/…`, `/rpm/<key>/…`, `/alpine/<key>/…`) but **not** for
+     generic. `AK_GENERIC` must therefore be the full
+     `…/api/v1/repositories/<key>/download` base, and it cannot share a rewrite
+     helper with `AK_URL`. Note also `.../files/...` 404s and
+     `.../artifacts/...` returns `NOT_FOUND` — only `download` works.
+2. **Does `/v2/` work as a containerd `hosts.toml` mirror? — NO. Settled with a
+   real `dockerhub` remote in place.** AK requires the repo key *inside* the
+   `/v2/` path: `/v2/dockerhub/library/alpine/manifests/3` → 200 (real OCI
+   index), while every form containerd can actually emit 404s:
+
+   | Path | Result |
+   |---|---|
+   | `/v2/library/alpine/manifests/3` (`server = "https://ak"`) | 404 |
+   | `/dockerhub/v2/library/alpine/manifests/3` (`server = "https://ak/dockerhub"`) | 404 |
+   | `/oci/dockerhub/v2/library/alpine/manifests/3` | 404 |
+
+   containerd appends `/v2/<image>/…` to the mirror host and has nowhere to put
+   a repo key. **So §4's image-reference rewrite table stands and is required** —
+   it does not collapse into a `provision-runner.sh` change. Revisit only if AK
+   adds a default- or virtual-repo concept.
+3. **`/api/v1/formats` — ANSWERED, and it is doubly misleading.** It reports 13
+   handlers, all `handler_type: "Core"` with `plugin_id: null` — i.e. the
+   *core-handler* set, not the enabled set. Plugin formats (`alpine`, `vscode`,
+   `terraform`, `ansible`) work fine but never appear. Compounding it, the repo
+   *listing* hides plugin-format repos from non-admin callers (see the §6 trap).
+   Practical rules:
+   - **Use `format: "docker"` for OCI remotes, not `"oci"`.** Sending `"oci"` —
+     which *is* in the reported list — yields a repo silently stored as
+     `generic`. Sending `"docker"` stores `docker`. Both still proxy via `/v2/`,
+     but the mistyped repo will not get OCI-aware handling.
+   - A genuinely unknown format is rejected properly (`400 Invalid format`), so
+     the `oci`→`generic` behaviour is specific, not a general silent-coercion.
 4. What is the HA / uptime expectation for this instance? Once builds route
    through it, it is a CI dependency; the review flags it as a new SPOF. **Still
    unanswered — needs a human, not an API call.**
 
 ### Instance facts worth banking (verified 2026-08-14)
 
-- **45 repos**, not the 46 in review §5. Breakdown: 34 `rpm/remote`,
-  7 `debian/remote`, 3 `*/local` test repos, 1 `debian/staging`.
+- **Repo count depends on who asks:** 53 as admin, 49 as `svc-nix-build`. Review
+  §5's "46 repos" was a non-admin count taken before the phase-2 additions.
+- **`svc-nix-build` cannot create repositories.** `POST /api/v1/repositories`
+  → `403 FORBIDDEN`; the account reports `is_admin: false` with an empty
+  `/api/v1/permissions`. An identical body succeeds as admin, so this is a
+  permissions boundary, not a malformed request. Provisioning needs the admin
+  login; the build path does not.
+- **`PATCH` on `upstream_url` returns 200 but does not persist.** A PATCH
+  repointing `rpmfusion-free-fedora` echoed a 200 while
+  `GET /api/v1/repositories/rpmfusion-free-fedora` still reported the original
+  upstream. Mechanism undiagnosed — treat repo edits as unreliable and prefer
+  delete-and-recreate until someone confirms which fields are mutable.
+- **Transient upstream 502s happen; do not read them as capability limits.** One
+  fetch failed with `502 … "error sending request"` and three identical retries
+  then returned 200. An earlier draft of this doc concluded from that single 502
+  that AK cannot follow upstream redirects — **that conclusion was wrong** and
+  has been removed. `mirrors.rpmfusion.org` 302-redirects to a mirror and AK
+  handles it. Retry before diagnosing.
 - **`staging` is a third `repo_type`** beyond `local`/`remote` (`ubuntu-staging`),
   undocumented in either doc and possibly relevant to §5's mirror-and-publish
   fallback.
@@ -370,7 +438,10 @@ Status as of 2026-08-14, probed with the `svc-nix-build` service account.
   (`expires_in: 900`). Do not treat `/v2/` as access-controlled on this instance.
 - **No OpenAPI/Swagger spec** is served (`/openapi.json`, `/api/v1/openapi.json`,
   `/swagger.json`, `/api/v1/docs` all 404). The repo-create body has to be
-  modelled from a `GET` on an existing repo.
-- **Repo listing is paginated** at 20/page and the envelope is
-  `{items, pagination}` — a naive `GET /api/v1/repositories` silently shows only
-  the first 20, which is a plausible source of the 46-vs-45 discrepancy.
+  modelled from a `GET` on an existing repo. Accepted create fields: `key`,
+  `name`, `format`, `repo_type`, `upstream_url`, `description`, `is_public`,
+  `allow_anonymous_access`.
+- **Repo listing is paginated** at 20/page behind an `{items, pagination}`
+  envelope — a naive `GET /api/v1/repositories` silently shows only the first 20.
+- **Admin login:** `POST /api/v1/auth/login` with `{username, password}` returns
+  `access_token` / `refresh_token` and a `must_change_password` flag.
