@@ -417,10 +417,16 @@ traversable by `gitlab-runner`. Pipeline 2760116239 failed in `base-check` after
 This is independent of Artifact Keeper and blocks *every* nix base build on that
 runner, not just an AK-enabled one. Two ways past it:
 
-- **Fix the host** (needs sudo on the forge box):
+- **Fix the host** (needs sudo on the runner):
   `sudo chmod 0711 /srv/nix-build/docker /srv/nix-build/docker/volumes`, and
-  durably via `provision-runner.sh` in `kasm-nix-infra` so a rebuilt host keeps
-  it. `provision-runner.sh --verify` asserts it.
+  durably via `provision-runner.sh` in `kasm-nix-infra` so a re-provisioned
+  runner keeps it. `provision-runner.sh --verify` asserts it.
+
+  The host is the **`Nix builder OCI (us-ashburn-1)`** project runner (id
+  54652676, tag `nix-builder`), confirmed from the job record. Note that
+  `.gitlab-ci.yml`'s own header still describes a "forge box" / "forge DinD
+  model" — that is stale and actively misleading when diagnosing a runner
+  failure. Trust the job's runner field, not the comments.
 - **Bypass the shim:** set `NIX_RUNNER_SHIM=dind-run.sh` to go back to
   podman-in-podman; the podman store is still intact. `AK_URL` reaches the build
   either way — both shims honour `-e KEY=VAL`.
