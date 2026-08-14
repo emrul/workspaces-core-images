@@ -118,7 +118,7 @@ below for whoever picks up phase 2; they must not appear in the shipped table.
 | Family | Files | Rewrite |
 |---|---|---|
 | ubuntu (incl. resolute) | `/etc/apt/sources.list`, `/etc/apt/sources.list.d/*.sources` (deb822 on noble+) | `archive.ubuntu.com/ubuntu` → `$AK_URL/debian/ubuntu-archive`; `security.ubuntu.com/ubuntu` → `$AK_URL/debian/ubuntu-security`; `ports.ubuntu.com/ubuntu-ports` → `$AK_URL/debian/ubuntu-ports` |
-| alpine | `/etc/apk/repositories` | `dl-cdn.alpinelinux.org/alpine` → `$AK_URL/alpine/alpine` |
+| alpine | `/etc/apk/repositories` | `dl-cdn.alpinelinux.org/alpine` → `$AK_URL/alpine/alpine`. ⚠️ **No backing repo or format exists on the instance — see §6. Do not wire this up yet** |
 | fedora | `/etc/yum.repos.d/fedora*.repo` | metalink → baseurl `$AK_URL/rpm/fedora-<ver>-os` and `-updates`. **Must disable `metalink=`** — dnf prefers it and will bypass the rewrite |
 
 <details>
@@ -232,9 +232,37 @@ scanning instead of opaque blobs. That is a mirroring job, not a flag.
 
 Nothing below is blocked on code; all of it is AK-side work devops can start now.
 
-**Phase 1 — distro repos. Nothing to provision.** The ubuntu, alpine and
-fedora-base repos all exist on the instance today. This is the main dividend of
-the §0 narrowing: phase 1 is now pure code, with zero devops dependency.
+**Phase 1 — distro repos. Two of the three families are backed; alpine is not.**
+Verified against the live instance 2026-08-14 (45 repos, full listing walked via
+`/api/v1/repositories?page=N`):
+
+| Family | Repos needed | Status |
+|---|---|---|
+| ubuntu | `ubuntu-archive`, `ubuntu-security`, `ubuntu-ports` | **all exist** (`debian`/`remote`) |
+| fedora | `fedora-42-os`, `fedora-42-updates`, `fedora-43-os`, `fedora-43-updates` | **all exist** (`rpm`/`remote`) |
+| alpine | `alpine` | **does not exist — and neither does the format** |
+
+**Alpine is blocked, and this is the correction that matters most.** There is no
+`alpine` or `apk` format among the 13 the instance reports, and no alpine repo
+among the 45. Review §5's claim that "working `alpine` and `vscode` repos exist
+on this instance" does not hold as of 2026-08-14 — neither repo is present.
+Either they were removed after the 2026-08-09 survey or the original reading was
+wrong; either way, do not plan against them.
+
+Consequences:
+
+- Phase 1 delivers **ubuntu and fedora only**. That is still worth shipping, and
+  it needs no provisioning whatsoever — but it is two families, not three.
+- Alpine needs one of: (a) a new AK format, which is vendor work on an unknown
+  timeline, or (b) a `generic` remote proxying `dl-cdn.alpinelinux.org/alpine`,
+  which depends entirely on §8 Q1.
+- **This promotes Q1 from a §5 nice-to-have to a phase-1 blocker.** It was
+  scoped as "lowest confidence, only affects raw file fetches". It now also
+  gates a third of the narrowed family set. Answer it first.
+- The §3 alpine row is therefore **aspirational** — its `$AK_URL/alpine/alpine`
+  target does not resolve today. Leave the table entry, but do not wire alpine
+  into a dockerfile until a backing repo exists, or `apk` will hard-fail against
+  a 404 rather than falling back.
 
 **Phase 2 — the narrowed remote list.** Only three of the original eight rows
 survive the scope cut:
@@ -296,11 +324,53 @@ and the `git clone` of REMnux salt-states (`extra/remnux.sh:17`).
 
 ## 8. Open questions for the vendor / devops
 
-1. Does a `generic` repo support `repo_type: "remote"` with an arbitrary upstream?
-2. Does `/v2/` work as a containerd `hosts.toml` mirror? If yes, §4's image-reference
-   rewrites collapse into one runner-side config change in
-   `infra/scripts/provision-runner.sh` and most of that table disappears.
-3. `/api/v1/formats` lists 13 formats but working `alpine` and `vscode` repos
-   exist outside that list — what is that endpoint actually reporting?
+Status as of 2026-08-14, probed with the `svc-nix-build` service account.
+
+1. **Does a `generic` repo support `repo_type: "remote"` with an arbitrary
+   upstream? — STILL OPEN, and now urgent.** `POST /api/v1/repositories` returns
+   `403 FORBIDDEN` ("Insufficient permissions to create repositories") for
+   `svc-nix-build`, which reports `is_admin: false` with an empty
+   `/api/v1/permissions` list. Needs a genuinely admin-scoped credential. Per §6
+   this now gates alpine, not just §5's raw fetches — **answer this first**.
+2. **Does `/v2/` work as a containerd `hosts.toml` mirror? — STILL OPEN, and the
+   structural evidence is discouraging.** The registry surface is live and
+   advertises `WWW-Authenticate: Bearer realm=".../v2/token"`, but the confirmed
+   path layout is `/v2/<repo-key>/<image>/...`. containerd asks a mirror for
+   `/v2/library/alpine/manifests/<ref>` with **no repo-key segment**; that path
+   404s here. Unless AK grows a default- or virtual-repo concept that maps a
+   bare upstream image name onto a repo, `hosts.toml` mirroring cannot work and
+   §4's image-reference rewrites do **not** collapse. Re-test once a `dockerhub`
+   OCI remote exists — that is the only way to settle it.
+3. **`/api/v1/formats` — ANSWERED.** It reports 13 handlers, every one
+   `handler_type: "Core"` with `plugin_id: null`, so it is plausibly the
+   *core-handler* set rather than the enabled set. The real mismatch is not
+   alpine/vscode (neither repo exists — see §6): it is that `eric-docker-test`
+   runs format key **`docker`** while the endpoint advertises **`oci`**. Treat
+   the endpoint as indicative only and confirm a format by creating a repo.
 4. What is the HA / uptime expectation for this instance? Once builds route
-   through it, it is a CI dependency; the review flags it as a new SPOF.
+   through it, it is a CI dependency; the review flags it as a new SPOF. **Still
+   unanswered — needs a human, not an API call.**
+
+### Instance facts worth banking (verified 2026-08-14)
+
+- **45 repos**, not the 46 in review §5. Breakdown: 34 `rpm/remote`,
+  7 `debian/remote`, 3 `*/local` test repos, 1 `debian/staging`.
+- **`staging` is a third `repo_type`** beyond `local`/`remote` (`ubuntu-staging`),
+  undocumented in either doc and possibly relevant to §5's mirror-and-publish
+  fallback.
+- **EPEL is EL-only, confirmed instance-side.** The only EPEL repos are
+  `oraclelinux-8-epel` / `oraclelinux-9-epel`, i.e. Oracle's bundled EPEL. No
+  Fedora EPEL exists, matching the §6 finding that every EPEL path in the tree
+  is EL8/EL9.
+- **`fedora-42-*` points at `archives.fedoraproject.org`** (the archive host)
+  while `fedora-43-*` uses `dl.fedoraproject.org`. Fedora 42 is already archived
+  upstream; expect it to behave differently from 43 under cache revalidation.
+- **The `/v2/` bearer flow is a placeholder.** `GET /v2/token` returns the
+  literal string `"anonymous"` as both `token` and `access_token`
+  (`expires_in: 900`). Do not treat `/v2/` as access-controlled on this instance.
+- **No OpenAPI/Swagger spec** is served (`/openapi.json`, `/api/v1/openapi.json`,
+  `/swagger.json`, `/api/v1/docs` all 404). The repo-create body has to be
+  modelled from a `GET` on an existing repo.
+- **Repo listing is paginated** at 20/page and the envelope is
+  `{items, pagination}` — a naive `GET /api/v1/repositories` silently shows only
+  the first 20, which is a plausible source of the 46-vs-45 discrepancy.
