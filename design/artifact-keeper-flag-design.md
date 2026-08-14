@@ -10,7 +10,7 @@ must remain "off" and the off-path must be byte-identical to today's build.
 
 ---
 
-## 0. Scope — Ubuntu and Fedora first, Alpine next
+## 0. Scope — Ubuntu, Alpine and Fedora
 
 **Phase 1 covers only the families we ship Nix bases for.** Everything
 else below is retained as analysis but is explicitly **deferred** — do not
@@ -18,16 +18,13 @@ implement it.
 
 | | Families | Core dockerfiles |
 |---|---|---|
-| **Phase 1** | ubuntu (incl. resolute), fedora | `dockerfile-kasm-core`, `-minimal`, `-ubuntu-resolute`, `-fedora` |
-| **Phase 1b** | alpine | `-alpine` |
+| **Phase 1** | ubuntu (incl. resolute), alpine, fedora | `dockerfile-kasm-core`, `-minimal`, `-ubuntu-resolute`, `-alpine`, `-fedora` |
 | **Deferred** | debian, kasmos, kali, parrot, oracle, centos, rocky, alma, rhel9, opensuse | `-kasmos`, `-oracle`, `-centos`, `-suse` |
 
-**Why alpine is split out rather than deferred.** Ubuntu and fedora ship first by
-decision, not by constraint: alpine's AK repo exists and is verified working
-end-to-end (§6), so it is a sequencing choice and alpine can be pulled forward at
-any time for the cost of one dockerfile edit. Note that alpine is also the only
-irregular insertion point in scope (§4), so shipping it separately from the two
-regular families is a reasonable de-risking split on its own merits.
+All three families are backed and verified end-to-end against the live instance
+(§6), so phase 1 ships them together. Alpine is the only irregular insertion
+point in the set (§4) — that is a per-file care point, not a reason to sequence
+it separately.
 
 Rationale: AK only earns its keep underneath something we build and ship on a
 cadence. The Nix bases are `dockerfile-nix-ubuntu`, `-nix-ubuntu-resolute`,
@@ -213,9 +210,38 @@ The Nix side is nearly free — the three entry points are already parameterised
 ### CI plumbing
 
 `ci-scripts/build.sh` already takes `EXTRA_BUILD_ARGS` as positional `$7`
-(word-split deliberately, `:12`). The flag rides in there — **no signature
-change**. `gitlab-ci.template` gains the conditional that populates it from a CI
-variable.
+(`:12`, expanded unquoted at `:19` with an explicit `shellcheck disable=SC2086`
+because the word-splitting is deliberate). The flag rides in there — **no
+signature change to `build.sh`**.
+
+**One correction to the obvious approach.** `$7` is currently supplied as
+`"{{ IMAGE.extraBuildArgs | default('') }}"` (`gitlab-ci.template:66` and `:99`),
+which is a *Jinja render-time* value read from `template-vars.yaml`. A CI
+variable is a *job-runtime* env var, so it cannot populate `extraBuildArgs`. Do
+not try to thread it through the YAML. Append at runtime instead:
+
+```jinja
+- bash ci-scripts/build.sh … "{{ IMAGE.dockerfile }}" "{{ IMAGE.extraBuildArgs | default('') }} ${AK_BUILD_ARGS}"
+```
+
+with `AK_BUILD_ARGS` assembled once in the existing `before_script` in
+`ci-scripts/gitlab-ci-core.yml:25`:
+
+```sh
+export AK_BUILD_ARGS=""
+[ -n "${AK_URL:-}" ]     && AK_BUILD_ARGS="--build-arg AK_URL=${AK_URL}"
+[ -n "${AK_GENERIC:-}" ] && AK_BUILD_ARGS="${AK_BUILD_ARGS} --build-arg AK_GENERIC=${AK_GENERIC}"
+```
+
+Unset ⇒ `AK_BUILD_ARGS` is empty ⇒ `$7` gains only a trailing space, which the
+word-split discards. The off-path stays byte-identical, which is what test-plan
+step 1 gates on.
+
+`AK_REGISTRY` is the exception: it rewrites `IMAGE.base`, which really is
+render-time, so it belongs in `template-gitlab.py` as a prefix applied while
+generating the child pipeline. That still reads the CI variable fine — the
+template is re-rendered every pipeline — but it means flipping `AK_REGISTRY`
+changes the *generated config*, not just a build arg.
 
 ---
 
