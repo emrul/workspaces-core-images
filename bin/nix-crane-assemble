@@ -75,29 +75,49 @@ app_label() { [[ -f "${APPLABELS_TSV}" ]] && awk -F'\t' -v p="$1" -v c="$2" '$1=
 # for every one of them, so the catalogue claimed every workspace costs nothing
 # to install. This label is where that number now comes from.
 #
-# It is exact and free here: crane uses each appended tar AS the layer, and an
-# image's .Size is the sum of its UNCOMPRESSED layer sizes, so
-#   size = (base image .Size) + (bytes of every -f tar)
-# — one stat() per already-staged tar. Crucially that is known BEFORE the single
-# `crane mutate` below, so the label rides along with the rest of the provenance
-# instead of needing a second mutate + multi-GB re-pull to measure first.
+# The layers we append are free to measure: crane uses each appended tar AS the
+# layer, so the tar's byte count IS that layer's uncompressed size. One stat()
+# each, known BEFORE the single `crane mutate` below, so the label rides along
+# with the rest of the provenance rather than needing a second mutate and a
+# multi-GB re-pull to measure first.
+#
+# The BASE term is the trap. Do NOT reach for `image inspect --format {{.Size}}`:
+# under podman that is the sum of the COMPRESSED layer sizes, not the uncompressed
+# total. Verified against the registry manifest for the first build that shipped
+# this label (pipeline 2782199084): angelfish reported .Size=2187740110 while the
+# manifest's summed layer sizes were 2187727884 — a 12 KB gap, exactly the config
+# blob. Mixing that into the sum understated every per-app image by the base's
+# whole compression saving, and taking it as the answer outright understated the
+# fat store 2.49x (20.6 GB reported for a 51.3 GB image). docker's .Size IS the
+# uncompressed total, which is what makes the mistake so easy to make.
+#
+# So the base is measured by streaming its flattened rootfs out of the staging
+# registry once per build (`crane export | wc -c`) — a definition that needs no
+# per-CLI caveat. It costs one pass over ~1-2 GB from localhost, not per app.
 #
 # --oci-empty-base images (the fat store) have no base layer, hence base="".
 #
-# Any unknown input (missing base size, unstattable tar) returns non-zero and the
+# Any unknown input (unmeasurable base, unstattable tar) returns non-zero and the
 # caller omits the label entirely rather than stamping a wrong number — crane
 # rejects empty values anyway, matching how every other label here is guarded.
 #
-# ci-scripts/nix-publish.sh cross-checks this against the local image's own .Size
-# and prefers .Size when they disagree. The label's real job is the images this
-# run did NOT rebuild (CHANGED_ONLY / NIX_PROFILES-scoped runs), where there is
-# no local image to inspect and it can be read off the registry with no pull.
+# ci-scripts/nix-publish.sh trusts this label and uses .Size only as a lower
+# bound, since an uncompressed figure can never be smaller than a compressed one.
+# Measured after each base is pushed to the staging registry; declared here so
+# set -u cannot trip on them when a base block is skipped.
+BASE_UNCOMP=""; RBASE_UNCOMP=""
 file_bytes() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo x; }
-image_bytes() { # $1=base image ref ("" = empty base); $2… = the crane append args
+# Flattened uncompressed rootfs of a ref already pushed to the staging registry.
+base_uncompressed() { # $1=ref → bytes, or empty
+  local n
+  n="$("${CRANE}" export --insecure "$1" - 2>/dev/null | wc -c | tr -d ' ')"
+  [[ "${n}" =~ ^[0-9]+$ ]] && [[ "${n}" -gt 0 ]] && printf '%s' "${n}"
+}
+image_bytes() { # $1=base uncompressed BYTES ("" = empty base); $2… = crane append args
   local total=0 n
   if [[ -n "$1" ]]; then
-    total="$("${CONTAINER_CLI}" image inspect --format '{{.Size}}' "$1" 2>/dev/null || true)"
-    [[ "${total}" =~ ^[0-9]+$ ]] || return 1
+    [[ "$1" =~ ^[0-9]+$ ]] || return 1
+    total="$1"
   fi
   shift
   while [[ $# -gt 0 ]]; do
@@ -330,10 +350,10 @@ assemble_app() {
     [[ -n "${OSBASE_NAME}" ]]   && mut+=( --label "org.opencontainers.image.base.name=${OSBASE_NAME}" )
     [[ -n "${OSBASE_DIGEST}" ]] && mut+=( --label "org.opencontainers.image.base.digest=${OSBASE_DIGEST}" )
     [[ -n "${OSBASE_FLAVOR}" ]] && mut+=( --label "dev.kasm.base.flavor=${OSBASE_FLAVOR}" )
-    # Uncompressed size = the app base + this app's own layers. APP_BASE_IMAGE (not
-    # base_ref) is the one in the local image store, so it is what .Size can read.
+    # Uncompressed size = the app base's flattened rootfs (measured once, before
+    # the assembly loop) + this app's own layer tars.
     local app_bytes
-    if app_bytes="$(image_bytes "${APP_BASE_IMAGE}" "${a_args[@]}")"; then
+    if app_bytes="$(image_bytes "${BASE_UNCOMP}" "${a_args[@]}")"; then
       mut+=( --label "dev.kasm.image.uncompressed-bytes=${app_bytes}" )
     else
       printf 'WARN uncompressed-size label omitted (unmeasurable base or layer)\n'
@@ -372,6 +392,13 @@ if [[ "${#apps[@]}" -gt 0 ]]; then
   base_ref="${REG_LOCAL}/nixbase:${APP_TAG}"
   "${CONTAINER_CLI}" tag "${APP_BASE_IMAGE}" "${base_ref}"
   "${CONTAINER_CLI}" push ${TLS_FLAG} "${base_ref}" >/dev/null
+  # Once per build, not per app — every per-app image shares this base.
+  BASE_UNCOMP="$(base_uncompressed "${base_ref}")"
+  if [[ -n "${BASE_UNCOMP}" ]]; then
+    log "app base uncompressed: ${BASE_UNCOMP} bytes (~$(( BASE_UNCOMP / 1000000 )) MB)"
+  else
+    log "WARN could not measure app base uncompressed size — per-app size labels will be omitted"
+  fi
   mk_symlink_tar
 
   _np="$( { command -v nproc >/dev/null 2>&1 && nproc; } 2>/dev/null || echo 4 )"
@@ -430,6 +457,12 @@ if [[ -n "${RESOLUTE_APPS}" ]] && resolute_ready; then
   log "resolute base: ${RESOLUTE_BASE_IMAGE} (from ${RBASE_NAME:-unknown}, flavor ${RBASE_FLAVOR:-unknown})"
   "${CONTAINER_CLI}" tag "${RESOLUTE_BASE_IMAGE}" "${rbase_ref}"
   "${CONTAINER_CLI}" push ${TLS_FLAG} "${rbase_ref}" >/dev/null
+  # Resolute has its own base, so it needs its own measurement — reusing
+  # BASE_UNCOMP would attribute the single-app Noble base's size to a desktop.
+  RBASE_UNCOMP="$(base_uncompressed "${rbase_ref}")"
+  [[ -n "${RBASE_UNCOMP}" ]] \
+    && log "resolute base uncompressed: ${RBASE_UNCOMP} bytes (~$(( RBASE_UNCOMP / 1000000 )) MB)" \
+    || log "resolute: WARN could not measure base uncompressed size — size labels will be omitted"
   for p in ${RESOLUTE_APPS}; do
     [[ -f "${STAGING}/Dockerfile.${p}" ]] || { log "resolute: no Dockerfile.${p} (build with --emit-app-images and --profile ${p}) — skipping"; continue; }
     id="${p}"
@@ -466,7 +499,7 @@ if [[ -n "${RESOLUTE_APPS}" ]] && resolute_ready; then
     # Resolute desktops are published as ordinary workspaces (tracelabs →
     # tracelabs-osint), so they need the size label too — measured against THEIR
     # own base, not the single-app one.
-    if r_bytes="$(image_bytes "${RESOLUTE_BASE_IMAGE}" "${r_args[@]}")"; then
+    if r_bytes="$(image_bytes "${RBASE_UNCOMP}" "${r_args[@]}")"; then
       r_mut+=( --label "dev.kasm.image.uncompressed-bytes=${r_bytes}" )
     else
       log "resolute ${p}: WARN uncompressed-size label omitted (unmeasurable base or layer)"

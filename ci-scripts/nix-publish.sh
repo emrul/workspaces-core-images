@@ -261,38 +261,44 @@ classify() { # $1=prevSP $2=newSP → new|updated|unchanged
 # (e.g. the edge --password-store fix baked into the base, 2026-07-17).
 # ── uncompressed size ────────────────────────────────────────────────────────
 # What the registry advertises per workspace (it published 0 for everything until
-# this landed). An image's .Size IS the sum of its uncompressed layer sizes, so
-# for anything built this run the runtime can just be asked. bin/nix-crane-assemble
-# also stamps the same number as a label, computed from the staged layer tars.
+# this landed). The number comes from the dev.kasm.image.uncompressed-bytes label
+# that bin/nix-crane-assemble stamps, summed from the uncompressed layer tars it
+# assembled the image out of. The label travels with the artifact, so it also
+# answers for images this run never rebuilt — readable off the registry, no pull.
 #
-# Both are kept because they answer different questions: .Size is ground truth for
-# a local image, the label travels with the artifact and is readable off the
-# registry with no layer pull — which is how a workspace this run never rebuilt
-# can still report a size. When both exist they are cross-checked, so a bad sum in
-# the assembler surfaces as a warning instead of a wrong number on the site.
+# DO NOT substitute `image inspect --format {{.Size}}`. Under podman that is the
+# sum of the COMPRESSED layer sizes: on the first build that shipped this label
+# (pipeline 2782199084) angelfish's .Size was 2187740110 against a manifest layer
+# sum of 2187727884 — a 12 KB gap, exactly the config blob. Preferring it there
+# published compressed figures in a field named uncompressed, understating images
+# by 1.6-2.5x (the fat store: 20.6 GB recorded for a 51.3 GB image). docker's
+# .Size IS the uncompressed total, which is exactly why this looks safe and isn't.
+#
+# .Size is still useful as a LOWER BOUND — an uncompressed figure can never be
+# smaller than a compressed one under either CLI — so it catches a bad sum in the
+# assembler without being trusted as the answer.
 LBL_SIZE="dev.kasm.image.uncompressed-bytes"
 local_size() { "${DOCKER}" image inspect --format '{{.Size}}' "$1" 2>/dev/null || true; }
 resolve_size() { # $1=local image ("" if none) $2=remote ref → bytes, or empty
-  local loc="" lbl="" d
+  local loc="" lbl=""
   if [[ -n "$1" ]]; then
-    loc="$(local_size "$1")"
     lbl="$(local_label "$1" "${LBL_SIZE}")"
+    loc="$(local_size "$1")"
   fi
-  if [[ "${loc}" =~ ^[0-9]+$ ]]; then
-    if [[ "${lbl}" =~ ^[0-9]+$ ]]; then
-      # A KB-scale gap is expected — podman counts the config blob in .Size and
-      # docker does not — so only flag a divergence big enough to be a real
-      # arithmetic error, not a units-of-metadata difference.
-      d=$(( loc > lbl ? loc - lbl : lbl - loc ))
-      [[ "${d}" -gt 1048576 ]] && \
-        echo "[nix-publish] WARN $1: ${LBL_SIZE}=${lbl} disagrees with .Size=${loc} by ${d} bytes — recording .Size" >&2
+  # Not stamped locally (or no local image at all) → the published image's label.
+  [[ "${lbl}" =~ ^[0-9]+$ ]] || lbl="$(remote_label "$2" "${LBL_SIZE}")"
+  if [[ "${lbl}" =~ ^[0-9]+$ ]]; then
+    if [[ "${loc}" =~ ^[0-9]+$ ]] && [[ "${lbl}" -lt "${loc}" ]]; then
+      echo "[nix-publish] WARN $1: ${LBL_SIZE}=${lbl} is BELOW .Size=${loc} — an uncompressed" \
+           "size cannot be smaller than a compressed one; the assembler's sum is wrong" >&2
     fi
-    printf '%s' "${loc}"; return 0
+    printf '%s' "${lbl}"; return 0
   fi
-  [[ "${lbl}" =~ ^[0-9]+$ ]] && { printf '%s' "${lbl}"; return 0; }
-  # No usable local answer: ask the published image for its own label.
-  lbl="$(remote_label "$2" "${LBL_SIZE}")"
-  [[ "${lbl}" =~ ^[0-9]+$ ]] && printf '%s' "${lbl}"
+  # No label anywhere. Deliberately NOT falling back to .Size: under podman that
+  # would silently publish a compressed number as an uncompressed one.
+  [[ -n "$1" ]] && \
+    echo "[nix-publish] WARN $1: no ${LBL_SIZE} label — recording no size (refusing to" \
+         "substitute .Size, which is compressed under podman)" >&2
   return 0
 }
 
