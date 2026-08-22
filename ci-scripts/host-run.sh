@@ -154,6 +154,19 @@ preflight_store_access() {
   [ "$(id -u)" -eq 0 ] && return 0
   [ -x "${root}" ] && { [ ! -d "${vols}" ] || [ -x "${vols}" ]; } && return 0
 
+  # Self-heal, if the host was provisioned for it. A docker upgrade resets the
+  # data-root mode and would otherwise block every build until a human ran chmod.
+  # The helper is root-owned, takes no arguments, and is permitted by a single
+  # scoped sudoers rule (kasm-nix-infra provision-runner.sh §5a2b) — deliberately
+  # NOT a script from this checkout, which the runner can modify.
+  perm_helper=/usr/local/sbin/kasm-nix-fix-store-perms
+  if [ -x "${perm_helper}" ] && sudo -n "${perm_helper}" 2>&1 | sed 's/^/[host-run] /' >&2; then
+    if [ -x "${root}" ] && { [ ! -d "${vols}" ] || [ -x "${vols}" ]; }; then
+      echo "[host-run] store traversal repaired by ${perm_helper##*/}; continuing" >&2
+      return 0
+    fi
+  fi
+
   cat >&2 <<EOF
 [host-run] FATAL: ${me} cannot traverse the container engine's store.
 
@@ -180,8 +193,12 @@ preflight_store_access() {
   local user can enumerate the store. Do NOT use 0755 — that adds nothing the
   build needs.
 
-  To bypass this shim entirely and go back to podman-in-podman, set the CI
-  variable NIX_RUNNER_SHIM=dind-run.sh (the podman store is still intact).
+  Do NOT try to work around this with NIX_RUNNER_SHIM=dind-run.sh: DinD is
+  disabled and this runner is not provisioned for it. The chmod above is the fix.
+
+  Pipelines can self-heal this without root: see fix-store-perms in
+  kasm-nix-infra (a root-owned, argument-free helper the runner may call via a
+  single scoped sudoers rule).
 EOF
   return 1
 }

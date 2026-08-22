@@ -18,6 +18,12 @@
 #                   it. Build proceeds in two passes: parallel, then serial retry.
 #   BASE_BUILT_SHA  commit sha, stamped as kasm.base.builtsha (the app-build
 #                   freshness guard in dind-build.sh reads it).
+#   BASE_NO_CACHE   set to 1 to build the cores with --no-cache. Needed to prove
+#                   anything about a step the layer cache would otherwise skip.
+#   AK_URL          Artifact Keeper base URL. Set => distro package sources are
+#                   rewritten to the cache for the core build and restored before
+#                   the image is squashed. Unset/empty => no-op. See
+#                   design/artifact-keeper-flag-design.md.
 set -euo pipefail
 
 # Repo root. /work is where the DinD harness bind-mounts it; on a host that runs
@@ -44,6 +50,28 @@ cd "${KASM_REPO}"
 
 PAR="${BUILD_PARALLEL:-3}"
 WANT="${BASE_DISTROS:-ubuntu fedora alpine resolute}"
+
+# Opt-in cold build. The core dockerfiles cache aggressively, so a rerun can
+# report success while never executing the artifact_keeper apply/revert layers at
+# all (observed: 270 CACHED steps, base done in 114s, zero [artifact_keeper] lines
+# — a green run that validated nothing about AK). Set BASE_NO_CACHE=1 to force the
+# core build to actually run those steps.
+nocache_args=()
+if [ -n "${BASE_NO_CACHE:-}" ]; then
+  nocache_args=(--no-cache)
+  echo "[base] BASE_NO_CACHE set — core builds will NOT use the layer cache"
+fi
+
+# Artifact Keeper passthrough. Opt-in: with AK_URL unset the array is empty and
+# the core build line below is byte-identical to before, which is what makes the
+# off-path regression test meaningful. Same empty-array idiom as core_extra.
+# Routing apk/apt/dnf through the cache should also take pressure off the mirror
+# contention described in the BASE_BUILD_ATTEMPTS note above.
+ak_args=()
+if [ -n "${AK_URL:-}" ]; then
+  ak_args=(--build-arg "AK_URL=${AK_URL}")
+  echo "[base] Artifact Keeper passthrough ENABLED via ${AK_URL}"
+fi
 
 # Authenticate once, up front, before any parallel pull can race on it.
 registry_auth_setup || exit 1
@@ -97,7 +125,44 @@ EOF
   # `set +e` (the retry subshell) — otherwise a core-build failure would fall
   # through to the nix build and be masked as success.
   "${CONTAINER_CLI}" build --build-arg BASE_IMAGE="${src}" --build-arg DISTRO="${distarg}" \
-    --build-arg BG_IMG="${bg}" "${core_extra[@]}" -f "${coredf}" -t "${coretag}" . || return 1
+    --build-arg BG_IMG="${bg}" "${core_extra[@]}" "${ak_args[@]}" "${nocache_args[@]}" \
+    -f "${coredf}" -t "${coretag}" . || return 1
+
+  # Assert the tag is actually USABLE, not merely reported as built. A build can
+  # print "naming to <tag> done" and "unpacking to <tag> done" and still leave
+  # nothing resolvable — that is exactly what a co-located Kasm agent with
+  # prune_images_mode=Aggressive did here, deleting single-tagged bases seconds
+  # after they were tagged (fixed in kasm-nix-infra §4b). Without this check the
+  # symptom surfaced two stages later as "failed to resolve source metadata",
+  # pointing nowhere near the cause.
+  "${CONTAINER_CLI}" image inspect "${coretag}" >/dev/null 2>&1 || {
+    echo "[base:${d}] FATAL: ${coretag} built but is not resolvable — something removed it. Check the Kasm agent's prune_images_mode." >&2
+    return 1
+  }
+
+  # Leak guard. The core is squashed via `COPY --from=base_layer / /`, so a
+  # rewritten sources file would ship internal infra inside kasmweb/core-*. The
+  # in-image revert already checks this, but verifying against the BUILT artifact
+  # is what actually protects the publish — and it is one grep.
+  if [ -n "${AK_URL:-}" ]; then
+    ak_host="${AK_URL#*://}"; ak_host="${ak_host%%/*}"
+    # MUST fail closed. The first version piped `docker run` into `grep -q .`, so a
+    # run that could not start (image missing) produced no output, grep returned 1,
+    # and the guard reported "passed" without having inspected anything — which is
+    # exactly what happened in pipeline 2760452605 and hid the missing core images.
+    # `|| true` inside the container keeps grep's no-match exit 1 from looking like
+    # a run failure, so a non-zero status here means the RUN itself failed.
+    if ! ak_hits="$("${CONTAINER_CLI}" run --rm --entrypoint="" "${coretag}" \
+         sh -c "grep -rl -- '${ak_host}' /etc/apt /etc/yum.repos.d /etc/apk /etc/zypp 2>/dev/null || true")"; then
+      echo "[base:${d}] FATAL: leak guard could not inspect ${coretag} — image missing or run failed. Refusing to treat that as a pass." >&2
+      return 1
+    fi
+    if [ -n "${ak_hits}" ]; then
+      echo "[base:${d}] FATAL: ${ak_host} still referenced in ${coretag}: ${ak_hits}" >&2
+      return 1
+    fi
+    echo "[base:${d}] leak guard passed: no ${ak_host} reference in ${coretag}"
+  fi
   echo "[base:${d}] building ${nixtag}"
   # Stamp: builtsha (freshness guard), the source image ref/digest, and the
   # nixpkgs rev this base's store closure was built from. The last one exists

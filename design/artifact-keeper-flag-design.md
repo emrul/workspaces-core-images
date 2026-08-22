@@ -362,16 +362,42 @@ and the `git clone` of REMnux salt-states (`extra/remnux.sh:17`).
    off `dockerfile-kasm-core`. The §0 table-miss path must leave sources
    unmodified and AK's byte counters flat. This is the test that the shared
    dockerfile didn't quietly widen the scope.
-3. **On-path, ubuntu first.** `AK_URL` only, `dockerfile-kasm-core`. Confirm
+3. **On-path, ubuntu — use `resolute`, not `ubuntu`.** `AK_URL` only. Confirm
    `apt-get update` pulls from AK (check AK's `storage_used_bytes` moves) and the
    image is functionally identical.
+
+   **Exercise the ubuntu rewrite table via `BASE_DISTROS=resolute`.** Both rows
+   build `DISTRO=ubuntu` and therefore share one rewrite table, but their source
+   images differ in a way that decides where the test can run
+   (`ci-scripts/nix-base-src.sh:base_src_image`):
+
+   | `BASE_DISTROS` | source image | credentials |
+   |---|---|---|
+   | `ubuntu` | `quay.io/rfcurated/rfubu:24.04-rfcurated` | **RapidFort, private** — needs `RF_ROOT_URL` / `RF_ACCESS_ID` / `RF_SECRET_ACCESS_KEY`, which are *protected* CI variables and are therefore **not injected on an unprotected branch** |
+   | `resolute` | `ubuntu:26.04` | none — public |
+   | `fedora` | `fedora:42` | none |
+   | `alpine` | `alpine:3.21` | none |
+
+   So on an opt-in feature branch, `resolute` is the only way to exercise the
+   ubuntu table at all, and it does so on a real shipping base rather than a
+   substituted source image. `NIX_BASE_SRC_UBUNTU=ubuntu:24.04` also falls back
+   off RapidFort, but tests a base we do not ship. RapidFort applies **only** to
+   the `ubuntu` nix base (which underpins the single-app catalogue); the
+   `template-vars.yaml` core matrix never touches it.
+
+   Recommended one-pass invocation: `BASE_DISTROS="alpine fedora resolute"` —
+   all three rewrite tables, no credentials required.
 4. **Leak guard.** Grep the resulting image for the AK hostname — must be zero
    hits across `/etc/apt`, `/etc/yum.repos.d`, `/etc/apk/repositories` (keep
    `/etc/zypp/repos.d` in the grep even though suse is deferred; it costs
    nothing and it will be right when suse lands). Wire this as a permanent CI
    job, not a one-off. If AK ever requires auth, extend it to the credential
    value too — see the credentials note in review §3.
-5. **Alpine specifically** — now the only irregular insertion point in scope. A
+5. **Alpine specifically** — the only irregular insertion point in scope. Note
+   that `unable to select packages` for `mesa-vulkan-radeon`, `libdrm-amdgpu`,
+   `libdrm-radeon` is **pre-existing and benign** — those AMD GPU packages do not
+   exist in Alpine's repos and `install_tools.sh` already warns and continues.
+   Do not read it as an AK failure (this document briefly did). A
    rewrite that silently lands after the first `apk add` looks like a pass but
    caches nothing; verify by AK-side byte counters, not by build success.
 6. **Fedora metalink** — confirm `metalink=` is actually disabled and dnf is
@@ -379,6 +405,35 @@ and the `git clone` of REMnux salt-states (`extra/remnux.sh:17`).
    caching nothing.
 7. **`AK_REGISTRY` on the nix builder** — the cheapest on-path test of the OCI
    remote once it exists, since `--nix-image` needs no code change.
+
+### Runner prerequisite (hit on the first attempt, 2026-08-14)
+
+The `base` stage cannot run until the runner host's docker data-root is
+traversable by `gitlab-runner`. Pipeline 2760116239 failed in `base-check` after
+3s — before any dockerfile was touched — with:
+
+```
+[host-run] FATAL: gitlab-runner cannot traverse the container engine's store.
+  what        : /srv/nix-build/docker
+  current mode: drwx--x--- root:root      (0710; needs 0711)
+```
+
+This is independent of Artifact Keeper and blocks *every* nix base build on that
+runner, not just an AK-enabled one. Two ways past it:
+
+- **Fix the host** (needs sudo on the runner):
+  `sudo chmod 0711 /srv/nix-build/docker /srv/nix-build/docker/volumes`, and
+  durably via `provision-runner.sh` in `kasm-nix-infra` so a re-provisioned
+  runner keeps it. `provision-runner.sh --verify` asserts it.
+
+  The host is the **`Nix builder OCI (us-ashburn-1)`** project runner (id
+  54652676, tag `nix-builder`), confirmed from the job record. Note that
+  `.gitlab-ci.yml`'s own header still describes a "forge box" / "forge DinD
+  model" — that is stale and actively misleading when diagnosing a runner
+  failure. Trust the job's runner field, not the comments.
+- **Bypass the shim:** set `NIX_RUNNER_SHIM=dind-run.sh` to go back to
+  podman-in-podman; the podman store is still intact. `AK_URL` reaches the build
+  either way — both shims honour `-e KEY=VAL`.
 
 ## 8. Open questions for the vendor / devops
 
@@ -428,6 +483,30 @@ Probed against the live instance 2026-08-14. Q1–Q3 are now settled.
      but the mistyped repo will not get OCI-aware handling.
    - A genuinely unknown format is rejected properly (`400 Invalid format`), so
      the `oci`→`generic` behaviour is specific, not a general silent-coercion.
+5. **Does AK support HTTP Range requests? — NO, and it breaks Fedora.**
+   Proven 2026-08-14. `Range: bytes=0-4095` on a `.zck`:
+
+   | | response |
+   |---|---|
+   | upstream (`archives.fedoraproject.org`) | `206`, 4096 bytes, `Accept-Ranges: bytes`, `Content-Range: bytes 0-4095/3406982` |
+   | AK | `200`, **3406982 bytes** (the whole file), no `Accept-Ranges`, no `Content-Range` |
+
+   zchunk fetches metadata as ranged chunk requests, so through AK every chunk
+   request returns the entire file. librepo's fixed buffer rejects the overflow
+   and dnf dies with `Curl error (23): Failed writing received data … [passed
+   4096 returned 0]`, while its progress meter reports impossible totals
+   (**71.3 GiB** of "metadata" in 9s). AK's stored copy is fine — byte-identical
+   to upstream, correct `\0ZCK1` magic, sha256 matching repomd — so this is a
+   transport limitation, not corruption.
+
+   **Ask the vendor for Range support** (RFC 7233); it is a baseline expectation
+   for a caching proxy and this will bite anything doing resumable or partial
+   fetches, not just dnf. Meanwhile `artifact_keeper.sh` sets `zchunk=False` in
+   `/etc/dnf/dnf.conf` `[main]`, which makes `dnf upgrade -y --refresh` succeed
+   with zero `.zck` fetches (verified in `fedora:42` against the live instance).
+   Note the per-repo `zchunk=` key is **not** honoured by libdnf5 — it must go in
+   `[main]`, and it is backed up and reverted like the repo files.
+
 4. What is the HA / uptime expectation for this instance? Once builds route
    through it, it is a CI dependency; the review flags it as a new SPOF. **Still
    unanswered — needs a human, not an API call.**

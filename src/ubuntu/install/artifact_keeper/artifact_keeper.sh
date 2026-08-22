@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+# artifact_keeper.sh — point this build's distro package sources at an Artifact
+# Keeper pull-through cache, then put them back before the image is squashed.
+#
+#   apply   back up each source file to <file>.ak-orig, then rewrite upstream -> AK
+#   revert  restore every <file>.ak-orig found, then delete the backups
+#
+# Opt-in: with AK_URL empty, `apply` is a no-op and the build is byte-identical
+# to one where this script does not exist.
+#
+# `revert` is deliberately NOT gated on AK_URL. Every core dockerfile ends with
+#
+#     FROM scratch
+#     COPY --from=base_layer / /
+#
+# so a rewritten /etc/apt/sources.list.d/* would be squashed into the published
+# image and point kasmweb/core-* at internal dev infra. cleanup.sh does not
+# restore package sources. revert must therefore run unconditionally, so that a
+# half-configured build (AK_URL set for `apply`, lost by the time we reach the
+# end) still self-heals.
+#
+# Scope is phase 1: ubuntu (incl. resolute, which builds with DISTRO=ubuntu),
+# alpine, fedora. Any other $DISTRO falls through as a no-op by design — see
+# design/artifact-keeper-flag-design.md §0. Adding a family is one case branch.
+set -euo pipefail
+IFS=$'\n\t'
+
+ACTION="${1:-}"
+AK_URL="${AK_URL:-}"
+AK_URL="${AK_URL%/}"   # tolerate a trailing slash from the CI variable
+DISTRO="${DISTRO:-}"
+
+# Timestamped and prefixed so these lines are greppable in a CI job log.
+log() { printf '%s [artifact_keeper] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
+die() { log "FATAL: $*" >&2; exit 1; }
+
+# AK_TEST_ROOT prefixes every path so the rewrite tables can be exercised
+# against fixture files outside a container (see artifact_keeper_test.sh). Empty
+# in every real build, which is the only configuration that ships.
+R="${AK_TEST_ROOT:-}"
+
+# Directories that may hold a rewritten source file. revert sweeps all of them
+# regardless of $DISTRO; zypp is listed for the deferred opensuse family so the
+# sweep stays correct when that lands.
+SOURCE_DIRS=("${R}/etc/apt" "${R}/etc/yum.repos.d" "${R}/etc/apk" "${R}/etc/zypp" "${R}/etc/dnf")
+
+# ---------------------------------------------------------------------------
+# apply helpers
+# ---------------------------------------------------------------------------
+
+# back_up <file> — copy to <file>.ak-orig unless a backup already exists.
+# Idempotent: a second apply must not overwrite the pristine copy with an
+# already-rewritten one.
+back_up() {
+  local f="$1"
+  [ -f "${f}" ] || return 0
+  if [ -f "${f}.ak-orig" ]; then
+    log "backup already present, not re-taking: ${f}.ak-orig"
+  else
+    cp -p -- "${f}" "${f}.ak-orig"
+  fi
+}
+
+# rewrite <file> <sed-expr>... — back up, then apply each expression in place.
+#
+# Deliberately not `sed -i`: GNU takes a bare -i, BSD/macOS reads the next
+# argument as a backup suffix, and being runnable on a dev machine is what makes
+# artifact_keeper_test.sh possible. Writing back through `cat >` keeps the
+# original inode, mode and owner, which matters for files under /etc.
+rewrite() {
+  local f="$1"; shift
+  [ -f "${f}" ] || return 0
+  back_up "${f}"
+  local args=()
+  local e
+  for e in "$@"; do args+=(-e "${e}"); done
+  local tmp
+  tmp="$(mktemp)"
+  # shellcheck disable=SC2064 — expand $tmp now, not at trap time
+  trap "rm -f '${tmp}'" RETURN
+  # -E (ERE) so `https?` works on both GNU and BSD sed; GNU-only `\?` in a BRE
+  # silently matches nothing rather than erroring, which is the worst failure mode
+  # here — the build would succeed while caching nothing.
+  sed -E "${args[@]}" -- "${f}" >"${tmp}"
+  cat -- "${tmp}" >"${f}"
+  log "rewrote ${f}"
+}
+
+# Matches http:// or https:// so a source pinned to either scheme is caught.
+# ERE syntax — see the sed -E note in rewrite().
+S='https?://'
+
+# Ubuntu's stock sources are all http://, so the base image ships NO CA bundle —
+# verified on ubuntu:26.04, where /etc/ssl/certs is empty and the
+# ca-certificates package is not installed. Rewriting those sources to an https
+# AK URL introduces a trust dependency the image cannot satisfy, and apt dies with
+#
+#   SSL connection failed: certificate verify failed [IP: <ak>]
+#
+# The fix is ordering, not scheme: install ca-certificates FIRST, while the
+# sources still point at upstream http, then rewrite. Costs one small upstream
+# fetch before the cache starts paying off.
+#
+# Only ubuntu needs this. alpine:3.21 and fedora:42 both reach AK over https out
+# of the box (verified by fetch inside each image), so neither pays this cost.
+ensure_ca_bundle() {
+  local bundle="${R}/etc/ssl/certs/ca-certificates.crt"
+  if [ -s "${bundle}" ]; then
+    log "CA bundle already present; no pre-install needed"
+    return 0
+  fi
+  if [ -n "${R}" ]; then
+    log "AK_TEST_ROOT set — skipping ca-certificates install (test mode)"
+    return 0
+  fi
+  log "no CA bundle: installing ca-certificates over upstream http before rewriting"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq || die "apt-get update failed before the AK rewrite"
+  apt-get install -y --no-install-recommends ca-certificates \
+    || die "could not install ca-certificates; an https AK URL cannot be trusted"
+  [ -s "${bundle}" ] || die "ca-certificates installed but ${bundle} is still missing"
+  log "CA bundle installed ($(grep -c 'BEGIN CERT' "${bundle}") certs)"
+}
+
+apply_ubuntu() {
+  ensure_ca_bundle
+  local expr=(
+    "s|${S}archive\.ubuntu\.com/ubuntu|${AK_URL}/debian/ubuntu-archive|g"
+    "s|${S}security\.ubuntu\.com/ubuntu|${AK_URL}/debian/ubuntu-security|g"
+    "s|${S}ports\.ubuntu\.com/ubuntu-ports|${AK_URL}/debian/ubuntu-ports|g"
+  )
+  local f
+  # deb822 (.sources) is the noble+ default; .list still exists on jammy and in
+  # third-party drop-ins. Both carry the URL as plain text, so one sed covers them.
+  for f in "${R}"/etc/apt/sources.list \
+           "${R}"/etc/apt/sources.list.d/*.sources \
+           "${R}"/etc/apt/sources.list.d/*.list; do
+    rewrite "${f}" "${expr[@]}"
+  done
+}
+
+apply_alpine() {
+  # /etc/apk/repositories is one URL per line, version path included
+  # (v3.22/main), so a host-and-root swap preserves the rest verbatim.
+  rewrite "${R}/etc/apk/repositories" \
+    "s|${S}dl-cdn\.alpinelinux\.org/alpine|${AK_URL}/alpine/alpine|g"
+}
+
+# apply_fedora <version>
+#
+# dnf prefers metalink= over baseurl= and will silently bypass a rewrite that
+# only adds a baseurl, so metalink (and any mirrorlist) must be commented out.
+# That makes this the one family where a wrong URL hard-fails instead of
+# falling back — the two path shapes below are verified against the instance:
+#   os       <ak>/rpm/fedora-<ver>-os/$basearch/os/
+#   updates  <ak>/rpm/fedora-<ver>-updates/$basearch/    (no trailing /os/)
+# AK ignores HTTP Range requests: a `Range: bytes=0-4095` returns 200 with the
+# WHOLE body, no Accept-Ranges, no Content-Range (upstream correctly returns 206
+# + 4096 bytes). zchunk downloads metadata as ranged chunk requests, so through AK
+# every chunk request yields the entire file. librepo's fixed buffer then rejects
+# the overflow and dnf dies with
+#
+#   Curl error (23): Failed writing received data ... [passed 4096 returned 0]
+#
+# while its progress meter reports absurd totals (71.3 GiB of "metadata"). This is
+# an AK limitation, not a Fedora one — see §8. Until AK honours Range, turn
+# zchunk off so dnf fetches the plain .zst metadata in one whole-file GET.
+#
+# Verified in fedora:42 against the live instance: with this set,
+# `dnf upgrade -y --refresh` (exactly what package_rules.sh runs) succeeds and
+# fetches zero .zck files. Note the per-repo `zchunk=` key is NOT honoured by
+# libdnf5 — it has to go in [main].
+disable_zchunk() {
+  local conf="${R}/etc/dnf/dnf.conf"
+  [ -f "${conf}" ] || { log "no ${conf}; skipping zchunk opt-out"; return 0; }
+  if grep -qE '^[[:space:]]*zchunk[[:space:]]*=' "${conf}"; then
+    log "zchunk already configured in ${conf}; leaving it alone"
+    return 0
+  fi
+  back_up "${conf}"
+  local tmp
+  tmp="$(mktemp)"
+  if grep -qE '^\[main\]' "${conf}"; then
+    # awk, not `sed a`, because GNU and BSD disagree on the append syntax.
+    awk '{ print } /^\[main\]/ && !done { print "zchunk=False"; done=1 }' "${conf}" >"${tmp}"
+  else
+    { cat "${conf}"; printf '[main]\nzchunk=False\n'; } >"${tmp}"
+  fi
+  cat -- "${tmp}" >"${conf}"
+  rm -f "${tmp}"
+  log "set zchunk=False in ${conf} (AK does not support HTTP Range)"
+}
+
+apply_fedora() {
+  local ver="$1"
+  local f
+
+  disable_zchunk
+
+  for f in "${R}/etc/yum.repos.d/fedora.repo" "${R}/etc/yum.repos.d/fedora-updates.repo"; do
+    [ -f "${f}" ] || { log "absent, skipping: ${f}"; continue; }
+    local suffix path
+    case "${f}" in
+      *updates*) suffix="updates"; path="\$basearch/" ;;
+      *)         suffix="os";      path="\$basearch/os/" ;;
+    esac
+    rewrite "${f}" \
+      "s|^metalink=|#ak-disabled-metalink=|" \
+      "s|^mirrorlist=|#ak-disabled-mirrorlist=|" \
+      "s|^#?baseurl=.*|baseurl=${AK_URL}/rpm/fedora-${ver}-${suffix}/${path}|"
+  done
+}
+
+do_apply() {
+  if [ -z "${AK_URL}" ]; then
+    log "AK_URL empty — passthrough disabled, leaving package sources untouched"
+    return 0
+  fi
+  [ -n "${DISTRO}" ] || die "DISTRO is unset; cannot choose a rewrite table"
+  log "applying passthrough for DISTRO=${DISTRO} via ${AK_URL}"
+
+  case "${DISTRO}" in
+    ubuntu)    apply_ubuntu ;;
+    alpine)    apply_alpine ;;
+    fedora42)  apply_fedora 42 ;;
+    fedora43)  apply_fedora 43 ;;
+    *)
+      # Deliberate no-op: dockerfile-kasm-core is shared with the deferred
+      # debian/kali/parrot matrix rows, which must build exactly as before.
+      log "DISTRO=${DISTRO} is not in phase 1 — no rewrite table, nothing to do"
+      return 0
+      ;;
+  esac
+  log "apply complete"
+}
+
+do_revert() {
+  local restored=0 d f orig
+  for d in "${SOURCE_DIRS[@]}"; do
+    [ -d "${d}" ] || continue
+    # -print0/read -d '' so a path with whitespace cannot split. No `-exec` so
+    # the count stays accurate.
+    while IFS= read -r -d '' orig; do
+      f="${orig%.ak-orig}"
+      mv -f -- "${orig}" "${f}"
+      log "restored ${f}"
+      restored=$((restored + 1))
+    done < <(find "${d}" -type f -name '*.ak-orig' -print0 2>/dev/null)
+  done
+
+  if [ "${restored}" -eq 0 ]; then
+    log "no .ak-orig backups found — nothing to restore (expected when AK is off)"
+  else
+    log "revert complete: ${restored} file(s) restored"
+  fi
+
+  # Belt and braces: the leak guard in CI greps the image for the AK hostname,
+  # but failing here is cheaper than failing there, and far cheaper than
+  # shipping it.
+  if [ -n "${AK_URL}" ]; then
+    local host="${AK_URL#*://}"; host="${host%%/*}"
+    if grep -rqs -- "${host}" "${SOURCE_DIRS[@]}" 2>/dev/null; then
+      die "AK hostname ${host} still present in package sources after revert"
+    fi
+    log "verified: no reference to ${host} remains in package sources"
+  fi
+}
+
+case "${ACTION}" in
+  apply)  do_apply ;;
+  revert) do_revert ;;
+  *) echo "usage: ${0##*/} apply|revert" >&2; exit 64 ;;
+esac
