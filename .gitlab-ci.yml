@@ -570,6 +570,17 @@ publish:
           echo "===== nix-build-report.md ====="; cat /artifacts/nix-build-report.md 2>/dev/null || true
           exit "$rc"
         '
+    # Hand this job's id to refresh-registry so the registry build can fetch THIS
+    # run's nix-build-report.json (the per-image uncompressedBytes the workspace
+    # entries advertise) by job id — the same precise handle security-page uses,
+    # for the same reason: /jobs/artifacts/<ref>/raw only sees a ref's latest
+    # successful pipeline, and this job is ruled out of update/no-op pipelines.
+    #
+    # Deliberately the LAST step: the block above exits non-zero on a failed
+    # publish and `exit 0`s early on a __none__ no-op, so neither writes this
+    # file. An absent PUBLISH_JOB_ID is the signal that there is nothing new to
+    # advertise, and the registry then keeps the sizes it is already serving.
+    - echo "PUBLISH_JOB_ID=$CI_JOB_ID" > publish.env
   artifacts:
     when: always
     expire_in: 90 days
@@ -578,6 +589,7 @@ publish:
     reports:
       junit:
         - publish-junit.xml
+      dotenv: publish.env
     paths:
       - nix-build-report.json
       - nix-build-report.md
@@ -832,6 +844,11 @@ refresh-registry:
   needs:
     - job: security-page
       artifacts: true
+    # For PUBLISH_JOB_ID (dotenv) → the report carrying each image's
+    # uncompressedBytes. security-page already needs publish, so this adds no new
+    # ordering constraint — only the variable.
+    - job: publish
+      artifacts: true
   rules:
     - if: '$NIX_GC == "1"'
       when: never
@@ -840,9 +857,11 @@ refresh-registry:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   # Distinct names on purpose: a `variables:` entry that references ITSELF expands
   # to empty, so security-page exports SECURITY_PAGE_JOB_ID and we forward it as
-  # the SECURITY_JOB_ID the registry build reads.
+  # the SECURITY_JOB_ID the registry build reads. SIZES_JOB_ID is the same trick
+  # for publish's PUBLISH_JOB_ID.
   variables:
     SECURITY_JOB_ID: "$SECURITY_PAGE_JOB_ID"
+    SIZES_JOB_ID: "$PUBLISH_JOB_ID"
   # Surface a failed republish here (strategy: depend mirrors the downstream
   # status) without letting a Pages-side flake fail an otherwise good image
   # pipeline — the images are published either way.

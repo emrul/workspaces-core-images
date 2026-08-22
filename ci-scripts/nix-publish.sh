@@ -259,6 +259,43 @@ classify() { # $1=prevSP $2=newSP → new|updated|unchanged
 # (built-at, revision) and ENV do NOT. Comparing them against the published
 # image catches every content change the store-path label alone would miss
 # (e.g. the edge --password-store fix baked into the base, 2026-07-17).
+# ── uncompressed size ────────────────────────────────────────────────────────
+# What the registry advertises per workspace (it published 0 for everything until
+# this landed). An image's .Size IS the sum of its uncompressed layer sizes, so
+# for anything built this run the runtime can just be asked. bin/nix-crane-assemble
+# also stamps the same number as a label, computed from the staged layer tars.
+#
+# Both are kept because they answer different questions: .Size is ground truth for
+# a local image, the label travels with the artifact and is readable off the
+# registry with no layer pull — which is how a workspace this run never rebuilt
+# can still report a size. When both exist they are cross-checked, so a bad sum in
+# the assembler surfaces as a warning instead of a wrong number on the site.
+LBL_SIZE="dev.kasm.image.uncompressed-bytes"
+local_size() { "${DOCKER}" image inspect --format '{{.Size}}' "$1" 2>/dev/null || true; }
+resolve_size() { # $1=local image ("" if none) $2=remote ref → bytes, or empty
+  local loc="" lbl="" d
+  if [[ -n "$1" ]]; then
+    loc="$(local_size "$1")"
+    lbl="$(local_label "$1" "${LBL_SIZE}")"
+  fi
+  if [[ "${loc}" =~ ^[0-9]+$ ]]; then
+    if [[ "${lbl}" =~ ^[0-9]+$ ]]; then
+      # A KB-scale gap is expected — podman counts the config blob in .Size and
+      # docker does not — so only flag a divergence big enough to be a real
+      # arithmetic error, not a units-of-metadata difference.
+      d=$(( loc > lbl ? loc - lbl : lbl - loc ))
+      [[ "${d}" -gt 1048576 ]] && \
+        echo "[nix-publish] WARN $1: ${LBL_SIZE}=${lbl} disagrees with .Size=${loc} by ${d} bytes — recording .Size" >&2
+    fi
+    printf '%s' "${loc}"; return 0
+  fi
+  [[ "${lbl}" =~ ^[0-9]+$ ]] && { printf '%s' "${lbl}"; return 0; }
+  # No usable local answer: ask the published image for its own label.
+  lbl="$(remote_label "$2" "${LBL_SIZE}")"
+  [[ "${lbl}" =~ ^[0-9]+$ ]] && printf '%s' "${lbl}"
+  return 0
+}
+
 local_diffids()  { "${DOCKER}" image inspect --format '{{json .RootFS.Layers}}' "$1" 2>/dev/null | tr -d ' ' || true; }
 remote_diffids() { # config blob carries rootfs.diff_ids; needs skopeo+jq
   command -v skopeo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
@@ -277,9 +314,9 @@ content_state() { # $1=local-img $2=remote-ref
 }
 
 # record <profile> <kasm> <dest> <status> <action> <rev> <ver> <newSP> <prevSP> \
-#        [candCfg] [manifestDigest] [remoteCfg] [equivBasis]
-# (printf pads missing trailing args with empty fields — rows are always 13 cols)
-record() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >> "${RESULTS}"; }
+#        [candCfg] [manifestDigest] [remoteCfg] [equivBasis] [uncompressedBytes]
+# (printf pads missing trailing args with empty fields — rows are always 14 cols)
+record() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >> "${RESULTS}"; }
 
 _pkg_install() { # $1 = package; best-effort across the common managers
   { command -v microdnf >/dev/null 2>&1 && microdnf install -y "$1" >/dev/null 2>&1; } \
@@ -316,12 +353,17 @@ gen_md() {
     echo "- scope: \`${NIX_PROFILES:-<all>}\`  · base-affected: \`${NIX_BASE_AFFECTED:-?}\`"
     echo "- build: ${dur:-?}s · disk consumed ${dc:-?} G"
     echo
-    echo "| Image | Status | Version | Action |"
-    echo "|-------|--------|---------|--------|"
+    echo "| Image | Status | Version | Action | Uncompressed |"
+    echo "|-------|--------|---------|--------|--------------|"
     # awk (not `read`): TSV fields can be empty, and read's whitespace IFS would
     # collapse an empty column and shift the rest (e.g. version→store-path).
-    # Cols: 1 profile 2 kasm 3 dest 4 status 5 action 6 rev 7 version 8 newSP 9 prevSP
-    awk -F'\t' 'NF{v=($7==""?"–":$7); printf "| `%s` | %s | %s | %s |\n", $2, $4, v, $5}' "${RESULTS}"
+    # Cols: 1 profile 2 kasm 3 dest 4 status 5 action 6 rev 7 version 8 newSP
+    #       9 prevSP … 14 uncompressedBytes
+    # MB with the same /1e6 divisor the registry publishes, so this table and the
+    # site agree; en-dash where this run had no trustworthy number.
+    awk -F'\t' 'NF{v=($7==""?"–":$7);
+                   s=($14==""?"–":sprintf("%d MB", int($14/1000000)));
+                   printf "| `%s` | %s | %s | %s | %s |\n", $2, $4, v, $5, s}' "${RESULTS}"
     if [[ -s "${REPORT_DIR}/closure-diffs.tsv" ]]; then
       echo; echo "## Changed closures (vs previous build)"
       # Cols: 1 app 2 status 3 prevSP 4 newSP 5 detail ("; "-joined)
@@ -351,6 +393,7 @@ gen_json() {
               rev:.[5], version:.[6], storePath:.[7], prevStorePath:.[8],
               candidateConfigDigest:(.[9] // ""), manifestDigest:(.[10] // ""),
               remoteConfigDigest:(.[11] // ""), equivalenceBasis:(.[12] // ""),
+              uncompressedBytes:((.[13] // "") | if . == "" then null else tonumber end),
               changedPackages: ($D[.[0]].detail // null)})) as $imgs |
      {run:{gitSha:$gitSha, baseRef:($L.base.ref//null), baseRev:($L.base.rev//null),
            scope:$scope, baseAffected:$baseAffected,
@@ -435,7 +478,7 @@ note_failure() { # $1=profile $2=reason
 # Mutates the globals pushed/failed; every other var is local.
 publish_one() {
   local img="$1" profile="$2"
-  local kn dest new_sp new_rev new_ver cand_cfg prev_sp status_ cstate action
+  local kn dest new_sp new_rev new_ver cand_cfg prev_sp status_ cstate action usz
   kn="$(kasm_name_for "${profile}")"
   dest="${REGISTRY_NS}/${kn}:${KASM_TAG}"
   # Provenance from THIS build's local image (labels stamped by nix-crane-assemble).
@@ -443,10 +486,11 @@ publish_one() {
   new_rev="$(local_label "${img}" dev.kasm.nix.rev)"
   new_ver="$(local_label "${img}" org.opencontainers.image.version)"
   cand_cfg="$(local_config_digest "${img}")"
+  usz="$(resolve_size "${img}" "${dest}")"
   if ! in_filter "${profile}"; then
     echo "[nix-publish] ${profile}: skip (not in NIX_PROFILES)"
     record "${profile}" "${kn}" "${dest}" skipped skipped "${new_rev}" "${new_ver}" "${new_sp}" "" \
-           "${cand_cfg}" "" "" ""
+           "${cand_cfg}" "" "" "" "${usz}"
     return 0
   fi
   # Compare against the currently-published image BEFORE we overwrite it.
@@ -465,7 +509,7 @@ publish_one() {
     # rootfs is identical) — record the REMOTE digests so consumers can
     # promote the candidate scan row to it under the stated equivalence.
     record "${profile}" "${kn}" "${dest}" unchanged skipped "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}" \
-           "${cand_cfg}" "$(remote_manifest_digest "${dest}")" "$(remote_config_digest "${dest}")" "rootfs.diff_ids"
+           "${cand_cfg}" "$(remote_manifest_digest "${dest}")" "$(remote_config_digest "${dest}")" "rootfs.diff_ids" "${usz}"
     return 0
   fi
   # Layers differ but store-path matched ⇒ a wiring/base-layer change; surface
@@ -475,12 +519,15 @@ publish_one() {
   if run "${DOCKER}" tag "${img}" "${dest}" && push_and_digest "${dest}"; then
     pushed=$((pushed+1)); action=pushed
     record "${profile}" "${kn}" "${dest}" "${status_}" "${action}" "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}" \
-           "${cand_cfg}" "${push_dig}" "" "pushed"
+           "${cand_cfg}" "${push_dig}" "" "pushed" "${usz}"
   else
     echo "[nix-publish] WARN push failed: ${profile}" >&2; failed+=("${profile}"); action=failed; status_=failed
     note_failure "${profile}" "${push_err}"
+    # No size on a failed push: nothing new is on the registry, so the registry
+    # must keep advertising whatever it already has rather than adopt this build's
+    # number for an image nobody can pull.
     record "${profile}" "${kn}" "${dest}" "${status_}" "${action}" "${new_rev}" "${new_ver}" "${new_sp}" "${prev_sp}" \
-           "${cand_cfg}" "" "" ""
+           "${cand_cfg}" "" "" "" ""
   fi
 }
 
@@ -541,8 +588,10 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
       echo "[nix-publish] SKIP fat store: PARTIAL build (missing: ${fat_missing})" >&2
       echo "[nix-publish]   registry keeps the last-known-good nix-store:${KASM_TAG};" >&2
       echo "[nix-publish]   run a full-catalog build to republish, or FORCE_FAT_PUSH=1 to override." >&2
+      # Deliberately no size: a partial fat store is NOT what stays published, so
+      # recording this build's (smaller) number would understate the live image.
       record "nix-store" "nix-store" "${fat_dest}" partial skipped-partial \
-             "$(local_label "${fat_local}" dev.kasm.nix.base-rev)" "" "" ""
+             "$(local_label "${fat_local}" dev.kasm.nix.base-rev)" "" "" "" "" "" "" "" ""
     else
     # Classify the fat store on its base-rev: "updated" = the base nixpkgs
     # commit moved (a world-rebuild); "unchanged" = base layers still dedupe.
@@ -550,16 +599,17 @@ if [[ "${PUBLISH_FAT_STORE:-1}" == "1" ]]; then
     fprev="$(remote_label "${fat_dest}" dev.kasm.nix.base-rev)"
     fstat="$(classify "${fprev}" "${fnew}")"
     fcfg="$(local_config_digest "${fat_local}")"
-    echo "[nix-publish] fat store: ${fat_local} → ${fat_dest}  [base ${fstat}]"
+    fusz="$(resolve_size "${fat_local}" "${fat_dest}")"
+    echo "[nix-publish] fat store: ${fat_local} → ${fat_dest}  [base ${fstat}]${fusz:+  uncompressed $(( fusz / 1000000 )) MB}"
     if run "${DOCKER}" tag "${fat_local}" "${fat_dest}" && push_and_digest "${fat_dest}"; then
       pushed=$((pushed+1)); faction=pushed; fbasis="pushed"
     else
       echo "[nix-publish] WARN fat store push failed" >&2; failed+=("nix-store"); faction=failed; fstat=failed
       note_failure "nix-store" "${push_err}"
-      fbasis=""; push_dig=""
+      fbasis=""; push_dig=""; fusz=""
     fi
     record "nix-store" "nix-store" "${fat_dest}" "${fstat}" "${faction}" "${fnew}" "" "${fnew}" "${fprev}" \
-           "${fcfg}" "${push_dig}" "" "${fbasis}"
+           "${fcfg}" "${push_dig}" "" "${fbasis}" "${fusz}"
     fi
   else
     echo "[nix-publish] PUBLISH_FAT_STORE=1 but no localhost/nix-store-<arch>:dev found" >&2

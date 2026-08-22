@@ -70,6 +70,48 @@ APPLABELS_TSV="${STAGING}/applabels.tsv"
 # app_label <profile> <col 2..5> → field from applabels.tsv (empty if absent).
 app_label() { [[ -f "${APPLABELS_TSV}" ]] && awk -F'\t' -v p="$1" -v c="$2" '$1==p{print $c; exit}' "${APPLABELS_TSV}" 2>/dev/null || true; }
 
+# ── uncompressed size label (dev.kasm.image.uncompressed-bytes) ──────────────
+# The registry advertises an uncompressed size per workspace and we published 0
+# for every one of them, so the catalogue claimed every workspace costs nothing
+# to install. This label is where that number now comes from.
+#
+# It is exact and free here: crane uses each appended tar AS the layer, and an
+# image's .Size is the sum of its UNCOMPRESSED layer sizes, so
+#   size = (base image .Size) + (bytes of every -f tar)
+# — one stat() per already-staged tar. Crucially that is known BEFORE the single
+# `crane mutate` below, so the label rides along with the rest of the provenance
+# instead of needing a second mutate + multi-GB re-pull to measure first.
+#
+# --oci-empty-base images (the fat store) have no base layer, hence base="".
+#
+# Any unknown input (missing base size, unstattable tar) returns non-zero and the
+# caller omits the label entirely rather than stamping a wrong number — crane
+# rejects empty values anyway, matching how every other label here is guarded.
+#
+# ci-scripts/nix-publish.sh cross-checks this against the local image's own .Size
+# and prefers .Size when they disagree. The label's real job is the images this
+# run did NOT rebuild (CHANGED_ONLY / NIX_PROFILES-scoped runs), where there is
+# no local image to inspect and it can be read off the registry with no pull.
+file_bytes() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo x; }
+image_bytes() { # $1=base image ref ("" = empty base); $2… = the crane append args
+  local total=0 n
+  if [[ -n "$1" ]]; then
+    total="$("${CONTAINER_CLI}" image inspect --format '{{.Size}}' "$1" 2>/dev/null || true)"
+    [[ "${total}" =~ ^[0-9]+$ ]] || return 1
+  fi
+  shift
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == -f ]]; then
+      shift; [[ $# -gt 0 ]] || break
+      n="$(file_bytes "$1")"
+      [[ "${n}" =~ ^[0-9]+$ ]] && [[ "${n}" -gt 0 ]] || return 1
+      total=$(( total + n ))
+    fi
+    shift
+  done
+  printf '%s\n' "${total}"
+}
+
 log(){ printf '[crane-assemble] %s\n' "$*" >&2; }
 fail(){ printf '[crane-assemble] ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -182,6 +224,15 @@ fat_labels=( --label "dev.kasm.nix.build-arch=${ARCH}" )
 [[ -n "${PROFILE_REFS}" ]] && fat_labels+=( --label "dev.kasm.nix.profile-refs=${PROFILE_REFS}" )
 [[ -n "${BUILT_AT}" ]]     && fat_labels+=( --label "dev.kasm.nix.built-at=${BUILT_AT}" )
 [[ -n "${GIT_SHA}" ]]      && fat_labels+=( --label "org.opencontainers.image.revision=${GIT_SHA}" )
+# Empty base (--oci-empty-base above), so the tars ARE the whole image. This one
+# matters most: the fat store is the largest artifact we publish and the registry
+# entry that most needs to say so out loud.
+if fat_bytes="$(image_bytes "" "${fat_args[@]}")"; then
+  fat_labels+=( --label "dev.kasm.image.uncompressed-bytes=${fat_bytes}" )
+  log "fat store uncompressed: ${fat_bytes} bytes (~$(( fat_bytes / 1000000 )) MB)"
+else
+  log "WARN could not determine fat store uncompressed size — label omitted"
+fi
 "${CRANE}" mutate --insecure "${fat_ref}" -t "${fat_ref}" "${fat_labels[@]}"
 "${CONTAINER_CLI}" pull ${TLS_FLAG} "${fat_ref}" >/dev/null
 "${CONTAINER_CLI}" tag "${fat_ref}" "${FAT_TAG}"
@@ -279,6 +330,14 @@ assemble_app() {
     [[ -n "${OSBASE_NAME}" ]]   && mut+=( --label "org.opencontainers.image.base.name=${OSBASE_NAME}" )
     [[ -n "${OSBASE_DIGEST}" ]] && mut+=( --label "org.opencontainers.image.base.digest=${OSBASE_DIGEST}" )
     [[ -n "${OSBASE_FLAVOR}" ]] && mut+=( --label "dev.kasm.base.flavor=${OSBASE_FLAVOR}" )
+    # Uncompressed size = the app base + this app's own layers. APP_BASE_IMAGE (not
+    # base_ref) is the one in the local image store, so it is what .Size can read.
+    local app_bytes
+    if app_bytes="$(image_bytes "${APP_BASE_IMAGE}" "${a_args[@]}")"; then
+      mut+=( --label "dev.kasm.image.uncompressed-bytes=${app_bytes}" )
+    else
+      printf 'WARN uncompressed-size label omitted (unmeasurable base or layer)\n'
+    fi
     "${CRANE}" append --insecure -b "${base_ref}" "${a_args[@]}" -t "${app_ref}" \
       && "${CRANE}" mutate --insecure "${app_ref}" "${mut[@]}" -t "${app_ref}" \
       || { printf 'assemble\n' > "${RESULTS}/${p}.fail"; return 0; }
@@ -404,6 +463,14 @@ if [[ -n "${RESOLUTE_APPS}" ]] && resolute_ready; then
     [[ -n "${RBASE_NAME}" ]]   && r_mut+=( --label "org.opencontainers.image.base.name=${RBASE_NAME}" )
     [[ -n "${RBASE_DIGEST}" ]] && r_mut+=( --label "org.opencontainers.image.base.digest=${RBASE_DIGEST}" )
     [[ -n "${RBASE_FLAVOR}" ]] && r_mut+=( --label "dev.kasm.base.flavor=${RBASE_FLAVOR}" )
+    # Resolute desktops are published as ordinary workspaces (tracelabs →
+    # tracelabs-osint), so they need the size label too — measured against THEIR
+    # own base, not the single-app one.
+    if r_bytes="$(image_bytes "${RESOLUTE_BASE_IMAGE}" "${r_args[@]}")"; then
+      r_mut+=( --label "dev.kasm.image.uncompressed-bytes=${r_bytes}" )
+    else
+      log "resolute ${p}: WARN uncompressed-size label omitted (unmeasurable base or layer)"
+    fi
     "${CRANE}" append --insecure -b "${rbase_ref}" "${r_args[@]}" -t "${r_ref}" \
       && "${CRANE}" mutate --insecure "${r_ref}" "${r_mut[@]}" -t "${r_ref}" \
       || { log "resolute ${p}: crane assemble FAILED"; continue; }
