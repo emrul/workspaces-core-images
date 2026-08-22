@@ -124,15 +124,21 @@ default:
     # container so it can't keep building and holding the podman store lock.
     - sudo nerdctl rm -f "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" >/dev/null 2>&1 || true
     # Root-owned-artifact guard: a cancelled scan/publish job skips its
-    # in-container chown-back, leaving root-owned files (sboms/, grype/, …)
-    # that fail the NEXT job's `git clean` at checkout (seen: pipeline
-    # 2687485367 prepare). Runner sudo is nerdctl-scoped, so un-root the
-    # workdir via a container. Idempotent, best-effort.
-    # Only needed for the DinD path: the privileged container wrote root-owned
-    # files into the checkout. host-run.sh runs as the runner user, so there is
-    # nothing to chown — and calling it unconditionally would need nerdctl and a
-    # podman image that a host-only runner may not have.
-    - if [ "$NIX_RUNNER_SHIM" = "dind-run.sh" ]; then sudo nerdctl run --rm -v "$CI_PROJECT_DIR:/w" quay.io/podman/stable chown -R "$(id -u):$(id -g)" /w >/dev/null 2>&1 || true; fi
+    # in-container chown-back, leaving root-owned files (vulnix/, sboms/, grype/,
+    # …) that fail the NEXT job's `git clean` at checkout (seen: pipeline
+    # 2687485367 prepare, and again 2782293492 after 2782199084 was auto-
+    # cancelled on push). Runner sudo is nerdctl-scoped, so un-root the workdir
+    # via a container. Idempotent, best-effort, warns instead of going silent.
+    #
+    # NOT gated on NIX_RUNNER_SHIM any more. It used to run only for
+    # dind-run.sh, on the premise that "host-run.sh runs as the runner user, so
+    # there is nothing to chown" — but host-run.sh jobs still launch root
+    # containers that write into the checkout (scan-nix's vulnix/). With
+    # host-run.sh as the global default the guard therefore skipped itself on
+    # every cancel, which is how 2782293492 ended up unable to check out at all.
+    # A checkout failure happens BEFORE after_script, so nothing in CI can heal
+    # it afterwards; getting this right on the way out is the only chance.
+    - bash ci-scripts/unroot-workdir.sh || true
 
 stages:
   - prepare
