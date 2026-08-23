@@ -237,6 +237,25 @@ func buildXvncArgs(env map[string]string, arch string, fileExists func(string) b
 	if resolution == "" {
 		resolution = "1024x768"
 	}
+	// VNC_FIXED_RESOLUTION pins the framebuffer: the client may not resize it.
+	//
+	// KasmVNC normally lets an attaching viewer set the desktop size to its own
+	// window, which is right for a human and wrong for anything model-driven. An
+	// agent resolves coordinates against the frame it captured, and a baseline
+	// screenshot is only comparable at the size it was taken; a viewer attaching
+	// mid-run silently invalidates both. Since watching an agent work is a
+	// first-class use of these sessions -- pair navigation, demos, triage -- the
+	// observer must not be able to perturb the thing being observed.
+	//
+	// Off by default so ordinary desktop sessions keep resizing to fit.
+	// Opt-in, and deliberately NOT isEnabled(): that helper answers "enabled
+	// unless explicitly disabled" and returns true for an absent key, which
+	// would turn resize off for every session in the fleet.
+	acceptResize := "1"
+	switch strings.ToLower(env["VNC_FIXED_RESOLUTION"]) {
+	case "1", "true", "yes", "on":
+		acceptResize = "0"
+	}
 	frameRate := env["MAX_FRAME_RATE"]
 	if frameRate == "" {
 		frameRate = "24"
@@ -338,7 +357,7 @@ func buildXvncArgs(env map[string]string, arch string, fileExists func(string) b
 		"-FrameRate", "60",
 		"-SendPrimary", "0",
 		"-DLP_Log", "off",
-		"-AcceptSetDesktopSize", "1",
+		"-AcceptSetDesktopSize", acceptResize,
 		"-DynamicQualityMin", "7",
 		"-SendCutText", "1",
 		"-TreatLossless", "10",

@@ -262,3 +262,45 @@ func TestOverlayIdentityMissingFileIsNoop(t *testing.T) {
 		t.Errorf("missing snapshot must leave env untouched, got %q", env["KASM_OS_USER"])
 	}
 }
+
+func TestClientResizeAllowedByDefault(t *testing.T) {
+	// The fleet default must not change: a human session resizes to fit the
+	// browser window, and this knob is for model-driven sessions only.
+	args, _, err := buildXvncArgs(map[string]string{}, "amd64", fakeStat(), fakeHost)
+	if err != nil {
+		t.Fatalf("buildXvncArgs: %v", err)
+	}
+	if !hasFlagValue(args, "-AcceptSetDesktopSize", "1") {
+		t.Errorf("client resize should be allowed by default: %v", args)
+	}
+}
+
+func TestFixedResolutionRefusesClientResize(t *testing.T) {
+	// An agent resolves coordinates against the frame it captured and a
+	// baseline is only comparable at the size it was taken, so a viewer
+	// attaching mid-run must not be able to change the framebuffer underneath.
+	for _, v := range []string{"1", "true", "yes", "on", "ON", "True"} {
+		args, _, err := buildXvncArgs(map[string]string{"VNC_FIXED_RESOLUTION": v}, "amd64", fakeStat(), fakeHost)
+		if err != nil {
+			t.Fatalf("buildXvncArgs(%q): %v", v, err)
+		}
+		if !hasFlagValue(args, "-AcceptSetDesktopSize", "0") {
+			t.Errorf("VNC_FIXED_RESOLUTION=%q did not refuse client resize: %v", v, args)
+		}
+	}
+}
+
+func TestFixedResolutionOffKeepsResize(t *testing.T) {
+	// Explicitly-off and nonsense values must both leave the default alone --
+	// especially "0", which an operator may well set expecting it to mean
+	// "not fixed".
+	for _, v := range []string{"", "0", "false", "no", "off", "banana"} {
+		args, _, err := buildXvncArgs(map[string]string{"VNC_FIXED_RESOLUTION": v}, "amd64", fakeStat(), fakeHost)
+		if err != nil {
+			t.Fatalf("buildXvncArgs(%q): %v", v, err)
+		}
+		if !hasFlagValue(args, "-AcceptSetDesktopSize", "1") {
+			t.Errorf("VNC_FIXED_RESOLUTION=%q wrongly refused client resize: %v", v, args)
+		}
+	}
+}
