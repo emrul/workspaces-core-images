@@ -33,6 +33,7 @@ RUN command -v bwrap >/dev/null 2>&1 || apk add --no-cache bubblewrap
 # ConditionPathIsDirectory so the image still boots without /nix mounted.
 COPY src/ubuntu/install/nix/units/nix-activate.service \
      src/ubuntu/install/nix/units/nix-gpu-setup.service \
+     src/ubuntu/install/nix/units/accessibility.service \
      /etc/container-init.d/
 COPY src/ubuntu/install/nix/scripts/nix-activate \
      src/ubuntu/install/nix/scripts/nix-app \
@@ -41,9 +42,10 @@ COPY src/ubuntu/install/nix/scripts/nix-activate \
      src/ubuntu/install/nix/scripts/nix-gpu-run \
      src/ubuntu/install/nix/scripts/nix-gpu-setup \
      src/ubuntu/install/nix/scripts/nix-gpu-app-launch \
+     src/ubuntu/install/nix/scripts/accessibility-enable \
      /usr/local/bin/
 
-RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app /usr/local/bin/nix-launch /usr/local/bin/nix-bwrap-run /usr/local/bin/nix-gpu-run /usr/local/bin/nix-gpu-setup /usr/local/bin/nix-gpu-app-launch && \
+RUN chmod 0755 /usr/local/bin/nix-activate /usr/local/bin/nix-app /usr/local/bin/nix-launch /usr/local/bin/nix-bwrap-run /usr/local/bin/nix-gpu-run /usr/local/bin/nix-gpu-setup /usr/local/bin/nix-gpu-app-launch /usr/local/bin/accessibility-enable && \
     /usr/local/bin/container-init \
         --units /etc/container-init/units \
         --drop-in /etc/container-init.d \

@@ -1,0 +1,30 @@
+[Unit]
+Description=Enable AT-SPI accessibility for the session (opt-in via ACCESSIBILITY_ENABLE=1)
+# Ordering is the whole point of this unit, not a nicety. GTK and Qt read the
+# accessibility setting while they initialise; switching it on afterwards
+# leaves an already-started application unregistered with the AT-SPI registry
+# indefinitely. So this must complete before custom-startup.service launches
+# the app. Needs the session bus and the desktop, hence After=window-manager.
+#
+# Before= requires container-init >= v1.1.2. In earlier versions the directive
+# parsed, passed --strict-units, and ordered nothing.
+After=window-manager.service
+Before=custom-startup.service
+Requires=window-manager.service
+ConditionEnvironment=ACCESSIBILITY_ENABLE=1
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=${KASM_OS_USER:-kasm-user}
+Group=${KASM_OS_GROUP:-kasm-user}
+WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
+Environment=DISPLAY=:1
+# Real session-bus address + XDG_RUNTIME_DIR from kasm-setup, same handoff as
+# window-manager.service and custom-startup.service.
+EnvironmentFile=/tmp/kasm-dbus.env
+ExecStart=/usr/local/bin/accessibility-enable
+TimeoutStartSec=20s
+
+[Install]
+WantedBy=multi-user.target
