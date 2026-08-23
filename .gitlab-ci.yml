@@ -562,7 +562,7 @@ publish:
           # root-owned $DIND_ROOT/output, which the scripts cannot write and did
           # not write — so the copy silently shipped an earlier report.
           RD="${XDG_CACHE_HOME:-${HOME:-/root}/.cache}/nix-build-output"
-          for f in nix-build-report.json nix-build-report.md publish-junit.xml; do
+          for f in nix-build-report.json nix-build-report.md publish-junit.xml nix-base-sizes.json; do
             cp "$RD/$f" "/artifacts/$f" 2>/dev/null || true
           done
           # REPORT_DIR persists between pipelines on a shell-executor host, so a
@@ -600,6 +600,10 @@ publish:
       - nix-build-report.json
       - nix-build-report.md
       - publish-junit.xml
+      # Distro base/desktop uncompressed sizes (kasm-core-*). A sidecar rather
+      # than rows in nix-build-report.json, which assess treats as the
+      # publication mapping and would fail on unmapped/unattested rows.
+      - nix-base-sizes.json
   rules:
     - if: '$NIX_GC == "1"'      # GC-only schedule → don't publish
       when: never

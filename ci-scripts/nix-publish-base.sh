@@ -28,22 +28,12 @@ DRY_RUN="${DRY_RUN:-0}"
 FILTER="${NIX_BASES:-}"
 
 # ── base image map: local build tag  →  published kasm-core repo name ────────
-# One line per base. Add alpine/fedora/etc. here once their nix-base dockerfiles
-# exist (dockerfile-nix-<distro> + src/<distro>/install/nix + a nix-base-build).
-# The minimal core is the stripped base nix-<distro> builds FROM; publishing it
-# is optional (build-time dep) but useful for reuse/reproducibility.
-BASES="
-localhost/nix-ubuntu:dev|kasm-core-ubuntu
-localhost/kasm-core-ubuntu-noble-minimal:dev|kasm-core-ubuntu-minimal
-localhost/nix-fedora:dev|kasm-core-fedora
-localhost/nix-alpine:dev|kasm-core-alpine
-localhost/nix-ubuntu-resolute:dev|kasm-core-ubuntu-resolute
-"
-# fedora/alpine have no minimal core (dockerfile-kasm-core-minimal is apt-only),
-# so nix-fedora/nix-alpine build on their standard cores. Alpine is musl: apps
-# run (own glibc loader from /nix/store) but SOFTWARE-RENDER ONLY — the system
-# mesa is musl (see dockerfile-nix-alpine / nix-activate musl skip). GPU on
-# alpine is future work (glibc GL from nix/host-injection, not host musl mesa).
+# Now shared with nix-publish.sh (which measures these images' uncompressed size
+# for the registry), so the list lives in one file rather than being copied.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=ci-scripts/nix-base-map.sh
+. "${SCRIPT_DIR}/nix-base-map.sh"
+BASES="${NIX_BASES_MAP}"
 
 in_filter() { [ -z "${FILTER}" ] && return 0; local x; for x in ${FILTER}; do [ "${x}" = "$1" ] && return 0; done; return 1; }
 run() { if [ "${DRY_RUN}" = 1 ]; then echo "  DRY: $*"; else "$@"; fi; }

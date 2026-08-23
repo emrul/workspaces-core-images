@@ -302,6 +302,86 @@ resolve_size() { # $1=local image ("" if none) $2=remote ref → bytes, or empty
   return 0
 }
 
+# ── distro base/desktop sizes (kasm-core-*) ──────────────────────────────────
+# The four distro desktop workspaces (Nix Alpine/Fedora/Ubuntu-Noble/Resolute)
+# advertised 0 MB even after the app catalogue was fixed, because they are a
+# different path end to end: built by nix-base-build.sh with `podman build` from
+# the dockerfiles and pushed by nix-publish-base.sh, so they never pass through
+# nix-crane-assemble (no staged layer tars to sum) and never appear here.
+#
+# They are measured, not labelled, and reported in a SIDECAR rather than in
+# nix-build-report.json. Both are deliberate:
+#
+#   No label. Stamping one means rebuilding the base image to change its config,
+#   which changes its image ID — and nix-crane-assemble reads
+#   org.opencontainers.image.base.digest off APP_BASE_IMAGE while
+#   nix-base-check.sh compares source-image digests for staleness. Risking that
+#   provenance chain to record a number is a bad trade.
+#
+#   No report rows. assess joins scan rows against this report's publication
+#   mapping and FAILS on an unmapped row or a published occurrence with no
+#   verified attestation. Base images have neither a scan row nor an attestation
+#   here, so adding them would break the assessment envelope.
+#
+# Measured by exporting the flattened rootfs of a throwaway container. NOT
+# `.Size`: for a registry-pulled image podman reports the COMPRESSED total (see
+# the note above), and for a locally BUILT image the semantics are simply not
+# documented — so measure rather than ask. Cached per image ID, because an export
+# streams the whole rootfs and these bases change rarely.
+BASE_SIZES_JSON="${REPORT_DIR}/nix-base-sizes.json"
+image_uncompressed_local() { # $1=local image ref → bytes, or empty
+  local c n
+  c="$("${DOCKER}" create "$1" /bin/true 2>/dev/null)" || return 0
+  [[ -n "${c}" ]] || return 0
+  n="$("${DOCKER}" export "${c}" 2>/dev/null | wc -c | tr -d ' ')"
+  "${DOCKER}" rm -f "${c}" >/dev/null 2>&1 || true
+  [[ "${n}" =~ ^[0-9]+$ ]] && [[ "${n}" -gt 0 ]] && printf '%s' "${n}"
+  return 0
+}
+base_size_cached() { # $1=local image ref → bytes, or empty
+  local id cache n
+  id="$("${DOCKER}" image inspect --format '{{.Id}}' "$1" 2>/dev/null || true)"
+  [[ -n "${id}" ]] || return 0
+  cache="${REPORT_DIR}/.base-size-${id//[^A-Za-z0-9]/_}"
+  if [[ -s "${cache}" ]]; then cat "${cache}"; return 0; fi
+  n="$(image_uncompressed_local "$1")"
+  [[ -n "${n}" ]] || return 0
+  printf '%s' "${n}" > "${cache}" 2>/dev/null || true
+  printf '%s' "${n}"
+}
+# Emit {"schema":"kasm-nix-sizes/v1","images":{"<dest>":bytes}} — the same shape
+# the registry already serves, so ci/merge-sizes.js consumes it with no new
+# parsing. Absent images are simply omitted: the registry upserts, so a base we
+# cannot measure keeps whatever it already advertises.
+write_base_sizes() {
+  local map="${SCRIPT_DIR}/nix-base-map.sh" first=1 local_img repo dest n
+  [[ -f "${map}" ]] || { echo "[nix-publish] WARN ${map} missing — no base sizes reported" >&2; return 0; }
+  # shellcheck source=ci-scripts/nix-base-map.sh
+  . "${map}"
+  { printf '{\n  "schema": "kasm-nix-sizes/v1",\n  "images": {\n'
+    while IFS='|' read -r local_img repo; do
+      [[ -n "${local_img}" ]] || continue
+      "${DOCKER}" image exists "${local_img}" 2>/dev/null \
+        || "${DOCKER}" image inspect "${local_img}" >/dev/null 2>&1 \
+        || { echo "[nix-publish] base ${repo}: local image absent — size not reported" >&2; continue; }
+      n="$(base_size_cached "${local_img}")"
+      if [[ -z "${n}" ]]; then
+        echo "[nix-publish] base ${repo}: WARN could not measure ${local_img} — size not reported" >&2
+        continue
+      fi
+      dest="${REGISTRY_NS}/${repo}:${KASM_TAG}"
+      [[ "${first}" -eq 1 ]] || printf ',\n'
+      printf '    "%s": %s' "${dest}" "${n}"
+      first=0
+      echo "[nix-publish] base ${repo}: ${n} bytes (~$(( n / 1000000 )) MB)" >&2
+    done <<EOF
+${NIX_BASES_MAP}
+EOF
+    printf '\n  }\n}\n'
+  } > "${BASE_SIZES_JSON}"
+  echo "[nix-publish] wrote ${BASE_SIZES_JSON}"
+}
+
 local_diffids()  { "${DOCKER}" image inspect --format '{{json .RootFS.Layers}}' "$1" 2>/dev/null | tr -d ' ' || true; }
 remote_diffids() { # config blob carries rootfs.diff_ids; needs skopeo+jq
   command -v skopeo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
@@ -672,6 +752,8 @@ ${reason}")</failure>"$'\n'
 # Consolidated build-run report (never fails the publish result).
 generate_report || echo "[nix-publish] WARN report generation failed" >&2
 write_junit     || echo "[nix-publish] WARN junit generation failed" >&2
+# Distro base/desktop sizes for the registry (sidecar; see the note above).
+write_base_sizes || echo "[nix-publish] WARN base size sidecar failed" >&2
 
 echo "[nix-publish] done: pushed=${pushed} failed=${#failed[@]} ${failed[*]:-}"
 [[ ${#failed[@]} -eq 0 ]]
