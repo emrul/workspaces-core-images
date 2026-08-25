@@ -236,24 +236,40 @@ for d in "${STAGING}"/profile-*; do [[ -d "${d}/store" ]] || continue; n="$(base
 det_tar meta var meta && fat_args+=( -f "${BLOBS}/meta.tar" )
 fat_ref="${REG_LOCAL}/nix-store:${APP_TAG}"
 "${CRANE}" append --insecure --oci-empty-base "${fat_args[@]}" -t "${fat_ref}"
-# Stamp reproducibility/provenance labels (config-only; blobs unchanged). crane
-# rejects empty label values, so only add labels whose value is non-empty.
-fat_labels=( --label "dev.kasm.nix.build-arch=${ARCH}" )
-[[ -n "${BASE_REF}" ]]     && fat_labels+=( --label "dev.kasm.nix.base-ref=${BASE_REF}" )
-[[ -n "${BASE_REV}" ]]     && fat_labels+=( --label "dev.kasm.nix.base-rev=${BASE_REV}" )
-[[ -n "${PROFILE_REFS}" ]] && fat_labels+=( --label "dev.kasm.nix.profile-refs=${PROFILE_REFS}" )
-[[ -n "${BUILT_AT}" ]]     && fat_labels+=( --label "dev.kasm.nix.built-at=${BUILT_AT}" )
-[[ -n "${GIT_SHA}" ]]      && fat_labels+=( --label "org.opencontainers.image.revision=${GIT_SHA}" )
+# Stamp the platform + reproducibility/provenance labels (config-only; layer
+# blobs unchanged, and rootfs.diff_ids is untouched so publish's content-identical
+# skip still fires). crane rejects empty label values, so only add labels whose
+# value is non-empty.
+#
+# --set-platform is NOT optional here. `crane append --oci-empty-base` writes a
+# config with architecture:"" and os:"" — the empty base carries no platform and
+# append has no flag to set one. That stayed harmless while publish pushed a bare
+# manifest (no platform descriptor to match against), but publish now wraps every
+# image in an OCI index whose descriptor is copied FROM this config, so the empty
+# architecture became a descriptor that matches nothing:
+#   failed to pull and unpack image ".../nix-store:nix":
+#   no match for platform in manifest: not found
+# containerd platform-matches the index BEFORE fetching any blob, so the image is
+# intact but unreachable through its tag. Per-app images are appended onto a real
+# distro base and inherit linux/amd64 from it — the fat store is the only image
+# assembled from an empty base, and was the only one that failed.
+fat_mut=( --set-platform "linux/${ARCH}"
+          --label "dev.kasm.nix.build-arch=${ARCH}" )
+[[ -n "${BASE_REF}" ]]     && fat_mut+=( --label "dev.kasm.nix.base-ref=${BASE_REF}" )
+[[ -n "${BASE_REV}" ]]     && fat_mut+=( --label "dev.kasm.nix.base-rev=${BASE_REV}" )
+[[ -n "${PROFILE_REFS}" ]] && fat_mut+=( --label "dev.kasm.nix.profile-refs=${PROFILE_REFS}" )
+[[ -n "${BUILT_AT}" ]]     && fat_mut+=( --label "dev.kasm.nix.built-at=${BUILT_AT}" )
+[[ -n "${GIT_SHA}" ]]      && fat_mut+=( --label "org.opencontainers.image.revision=${GIT_SHA}" )
 # Empty base (--oci-empty-base above), so the tars ARE the whole image. This one
 # matters most: the fat store is the largest artifact we publish and the registry
 # entry that most needs to say so out loud.
 if fat_bytes="$(image_bytes "" "${fat_args[@]}")"; then
-  fat_labels+=( --label "dev.kasm.image.uncompressed-bytes=${fat_bytes}" )
+  fat_mut+=( --label "dev.kasm.image.uncompressed-bytes=${fat_bytes}" )
   log "fat store uncompressed: ${fat_bytes} bytes (~$(( fat_bytes / 1000000 )) MB)"
 else
   log "WARN could not determine fat store uncompressed size — label omitted"
 fi
-"${CRANE}" mutate --insecure "${fat_ref}" -t "${fat_ref}" "${fat_labels[@]}"
+"${CRANE}" mutate --insecure "${fat_ref}" -t "${fat_ref}" "${fat_mut[@]}"
 "${CONTAINER_CLI}" pull ${TLS_FLAG} "${fat_ref}" >/dev/null
 "${CONTAINER_CLI}" tag "${fat_ref}" "${FAT_TAG}"
 log "fat store ready: ${FAT_TAG}"

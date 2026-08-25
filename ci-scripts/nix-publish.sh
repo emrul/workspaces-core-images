@@ -155,8 +155,35 @@ push_with_retry() { # $1=description $2...=command → sets $push_err on failure
 }
 
 push_dig=""
+# An index descriptor is copied from the image CONFIG, so an image whose config
+# has no architecture publishes an index that matches no platform at all, and
+# containerd rejects it before fetching a byte:
+#   no match for platform in manifest: not found
+# The tag then points at intact-but-unpullable data, and nothing in this job
+# notices — `buildx imagetools create` and `podman manifest add` both copy the
+# empty value through without complaint, so the image ships broken and the
+# failure surfaces on a user's cluster days later. That is exactly how
+# nix-store:nix shipped (crane's --oci-empty-base leaves architecture:"").
+# Refuse BEFORE the push: an unpullable tag is strictly worse than a red job,
+# because publishing it also overwrites the last-known-good one.
+assert_platform() { # $1=local image ref → 1 if the config declares no architecture
+  # DRY_RUN never ran the `docker tag`, so there is no local image under the dest
+  # name to inspect — an empty answer there means "not tagged", not "no platform".
+  [[ "${DRY_RUN}" == 1 ]] && return 0
+  local a; a="$("${DOCKER}" image inspect --format '{{.Architecture}}' "$1" 2>/dev/null || true)"
+  if [[ -z "${a//[[:space:]]/}" ]]; then
+    echo "[nix-publish] FATAL ${1}: image config declares no architecture." >&2
+    echo "[nix-publish]   Publishing it would produce an index that matches no platform" >&2
+    echo "[nix-publish]   and cannot be pulled. Fix the assembly (crane mutate --set-platform)" >&2
+    echo "[nix-publish]   rather than shipping over the last-known-good tag." >&2
+    push_err="image config declares no architecture (would publish an unpullable index)"
+    return 1
+  fi
+  return 0
+}
 push_and_digest() { # $1=dest → sets $push_dig (index digest when available)
   push_dig=""
+  assert_platform "$1" || return 1
   if [[ "${DOCKER}" == *podman* ]]; then
     local list="${1}-idx"
     "${DOCKER}" manifest rm "${list}" >/dev/null 2>&1 || true
