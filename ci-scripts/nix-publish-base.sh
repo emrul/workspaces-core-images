@@ -38,21 +38,30 @@ BASES="${NIX_BASES_MAP}"
 in_filter() { [ -z "${FILTER}" ] && return 0; local x; for x in ${FILTER}; do [ "${x}" = "$1" ] && return 0; done; return 1; }
 run() { if [ "${DRY_RUN}" = 1 ]; then echo "  DRY: $*"; else "$@"; fi; }
 
+# Shared push hardening: retry transient drops, refuse to publish an image with
+# no architecture. This script used to have neither, which is why one dropped
+# connection on a 283 MB blob reddened pipeline 2790459309 while nix-publish.sh
+# pushed 37 images through the same conditions. See nix-push-lib.sh.
+PUSH_LOG_PREFIX="[nix-publish-base]"
+# shellcheck source=ci-scripts/nix-push-lib.sh
+. "${SCRIPT_DIR}/nix-push-lib.sh"
+
 echo "[nix-publish-base] target: ${REGISTRY_NS}/<kasm-core-*>:${KASM_TAG}"
 # Publish an image INDEX rather than a bare manifest, so the platform is
 # visible to clients that select before pulling (see nix-publish.sh for the
 # full reasoning). One linux/amd64 descriptor today; arm64 is one more
 # `manifest add` when it exists.
 push_index() { # $1=dest
+  assert_platform "$1" || return 1
   if [[ "${DOCKER}" == *podman* ]]; then
     local list="${1}-idx"
     "${DOCKER}" manifest rm "${list}" >/dev/null 2>&1 || true
     run "${DOCKER}" manifest create "${list}" || return 1
     run "${DOCKER}" manifest add "${list}" "containers-storage:${1}" || return 1
-    run "${DOCKER}" manifest push --all "${list}" "docker://${1}" || return 1
+    push_with_retry "push ${1}" "${DOCKER}" manifest push --all "${list}" "docker://${1}" || return 1
     "${DOCKER}" manifest rm "${list}" >/dev/null 2>&1 || true
   else
-    run "${DOCKER}" push "$1" || return 1
+    push_with_retry "push ${1}" "${DOCKER}" push "$1" || return 1
     if command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then
       run docker buildx imagetools create -t "$1" "$1" || return 1
     else
@@ -75,7 +84,10 @@ while IFS='|' read -r local_img repo; do
   if run "${DOCKER}" tag "${local_img}" "${dest}" && push_index "${dest}"; then
     pushed=$((pushed+1))
   else
-    echo "[nix-publish-base] WARN push failed: ${repo}" >&2; failed+=("${repo}")
+    # Surface the registry's own error, not just the repo name — the 2026-08-25
+    # failure needed a trace dig to learn it was a dropped connection.
+    echo "[nix-publish-base] WARN push failed: ${repo}${push_err:+ — ${push_err}}" >&2
+    failed+=("${repo}")
   fi
 done <<EOF
 ${BASES}
