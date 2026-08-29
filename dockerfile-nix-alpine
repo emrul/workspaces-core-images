@@ -34,6 +34,7 @@ RUN command -v bwrap >/dev/null 2>&1 || apk add --no-cache bubblewrap
 COPY src/ubuntu/install/nix/units/nix-activate.service \
      src/ubuntu/install/nix/units/nix-gpu-setup.service \
      src/ubuntu/install/nix/units/accessibility.service \
+     src/ubuntu/install/nix/units/kasm-session-agent.service \
      /etc/container-init.d/
 COPY src/ubuntu/install/nix/scripts/nix-activate \
      src/ubuntu/install/nix/scripts/nix-app \

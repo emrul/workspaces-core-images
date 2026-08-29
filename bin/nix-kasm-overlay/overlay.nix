@@ -99,6 +99,16 @@ in
     pin = loadPin "gamepad" ./pkgs/gamepad;
   };
 
+  # Kind B (repackage artifact): kasm-session-agent's MCP/CDP drive-session
+  # binary. A base component like its neighbours above, not a catalog app --
+  # baked into [base] (bin/nix-profiles.toml), present in every session,
+  # inert until KASM_AGENT_SESSION_TOKEN is set. See package.nix's own doc
+  # comment and kasm-session-agent's docs/mcp-baked-in-delivery.md.
+  kasm-session-agent = import ./pkgs/kasm-session-agent/package.nix {
+    inherit prev;
+    pin = loadPin "kasm-session-agent" ./pkgs/kasm-session-agent;
+  };
+
   # Kind B (from scratch): Trace Labs OSINT tools absent from nixpkgs. Each is a
   # `{ prev }:` derivation pinned to an upstream tag. TraceLabs-unique (excluded
   # from the fat store); no committed pin.json — the tag is pinned in-package.

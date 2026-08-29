@@ -27,3 +27,17 @@ kind      = "source"
 discover  = "manual"
 cadence   = "manual"
 platforms = ["amd64", "arm64"]
+
+# kasm-session-agent is also a Kasm SERVICE, not an app-catalog entry: the
+# MCP/CDP drive-session binary, baked into [base] (bin/nix-profiles.toml),
+# not selectable per-session. "binary" because the fetched artifact is a
+# prebuilt release, not something built from source inside this overlay's
+# own sandbox (gitlab.com/kasm-technologies/labs-sandbox/kasm-session-agent
+# is a private project; see pkgs/kasm-session-agent/package.nix's doc
+# comment for why). No automated discoverer yet -- bump pin.json by hand
+# against a tagged kasm-session-agent release until one exists.
+[apps.kasm-session-agent]
+kind      = "binary"
+discover  = "manual"
+cadence   = "manual"
+platforms = ["amd64", "arm64"]
