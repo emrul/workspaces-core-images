@@ -9,7 +9,10 @@ Type=simple
 User=${KASM_OS_USER:-kasm-user}
 Group=${KASM_OS_GROUP:-kasm-user}
 WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
-ExecStart=/dockerstartup/upload_server/kasm_upload_server --ssl --auth-token ${KASM_UPLOAD_AUTH:-kasm_user:default} --upload-dir ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/Uploads
+# --auth-token MUST default to `kasm_user:${VNC_PW}` — Kasm's nginx injects
+# `kasm_user:$VNC_PW` when proxying /uploads/, so any other value 403s.
+# See audio-in.service.
+ExecStart=/dockerstartup/upload_server/kasm_upload_server --ssl --auth-token ${KASM_UPLOAD_AUTH:-kasm_user:${VNC_PW}} --upload-dir ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/Uploads
 Restart=on-failure
 RestartSec=500ms
 StartLimitBurst=5

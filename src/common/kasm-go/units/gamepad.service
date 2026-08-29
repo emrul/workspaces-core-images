@@ -12,5 +12,7 @@ Type=simple
 User=${KASM_OS_USER:-kasm-user}
 Group=${KASM_OS_GROUP:-kasm-user}
 WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
-ExecStart=/dockerstartup/gamepad/kasm_gamepad_server --ssl --port 14903 --auth-token ${KASM_GAMEPAD_AUTH:-kasm_user:default} --cert ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.vnc/self.pem --certkey ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.vnc/self.pem
+# --auth-token MUST default to `kasm_user:${VNC_PW}` — Kasm's nginx injects
+# `kasm_user:$VNC_PW` when proxying the gamepad websocket. See audio-in.service.
+ExecStart=/dockerstartup/gamepad/kasm_gamepad_server --ssl --port 14903 --auth-token ${KASM_GAMEPAD_AUTH:-kasm_user:${VNC_PW}} --cert ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.vnc/self.pem --certkey ${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.vnc/self.pem
 Restart=no
