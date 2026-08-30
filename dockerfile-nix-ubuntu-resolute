@@ -18,6 +18,11 @@
 # (/nix/store/<hash>) is resolved at exec by the farm nix-compose builds first
 # (nix-compose.service is ordered Before these service units).
 ARG BASE_IMAGE="localhost/kasm-core-ubuntu-resolute:dev"
+# Pulled directly, not via the nix profile kasm-session-runtime.service used
+# to reference -- see that unit file's own comment for why.
+ARG RUNTIME_VERSION="v0.2.0-rc.3"
+FROM registry.gitlab.com/kasm-technologies/labs-sandbox/kasm-session-runtime:${RUNTIME_VERSION} AS kasm-session-runtime-bin
+
 FROM $BASE_IMAGE
 
 ARG DISTRO=ubuntu
@@ -48,6 +53,7 @@ COPY src/ubuntu/install/nix/units/nix-compose.service \
      src/ubuntu/install/nix/units/accessibility.service \
      src/ubuntu/install/nix/units/kasm-session-runtime.service \
      /etc/container-init.d/
+COPY --from=kasm-session-runtime-bin /kasm-session-runtime /usr/local/bin/kasm-session-runtime
 COPY src/ubuntu/install/nix/scripts/nix-compose \
      src/ubuntu/install/nix/scripts/nix-activate \
      src/ubuntu/install/nix/scripts/nix-app \

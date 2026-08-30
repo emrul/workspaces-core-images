@@ -28,7 +28,16 @@ WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
 # not worth introducing here.
 Environment=KASM_RUNTIME_OUT=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.local/state/kasm-session-runtime/mcp-out
 Environment=DISPLAY=:1
-ExecStart=/nix/var/nix/profiles/_base/bin/kasm-session-runtime mcp
+# /usr/local/bin, not the nix _base profile the package.nix comment describes:
+# that profile only exists once bin/build-nix-store-volume's OCI image is
+# mounted read-only at /nix at deployment time, which not every Kasm
+# deployment this was tested against does. dockerfile-nix-*'s own COPY
+# --from=kasm-session-runtime-bin puts the binary at this fixed path
+# instead, bypassing nix entirely for this one package -- same fix
+# stock_image_mods (kasm-session-runtime's own repo) already made for
+# stock, non-nix images. Re-nix this once every deployment topology
+# reliably mounts the store volume.
+ExecStart=/usr/local/bin/kasm-session-runtime mcp
 Restart=no
 TimeoutStartSec=10s
 

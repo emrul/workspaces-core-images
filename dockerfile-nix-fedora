@@ -20,6 +20,11 @@
 # See design/nix-package-process.md and dockerfile-nix-ubuntu.
 
 ARG BASE_IMAGE="localhost/kasm-core-fedora:dev"
+# Pulled directly, not via the nix profile kasm-session-runtime.service used
+# to reference -- see that unit file's own comment for why.
+ARG RUNTIME_VERSION="v0.2.0-rc.3"
+FROM registry.gitlab.com/kasm-technologies/labs-sandbox/kasm-session-runtime:${RUNTIME_VERSION} AS kasm-session-runtime-bin
+
 FROM $BASE_IMAGE
 
 ARG DISTRO=fedora42
@@ -39,6 +44,7 @@ COPY src/ubuntu/install/nix/units/nix-activate.service \
      src/ubuntu/install/nix/units/accessibility.service \
      src/ubuntu/install/nix/units/kasm-session-runtime.service \
      /etc/container-init.d/
+COPY --from=kasm-session-runtime-bin /kasm-session-runtime /usr/local/bin/kasm-session-runtime
 COPY src/ubuntu/install/nix/scripts/nix-activate \
      src/ubuntu/install/nix/scripts/nix-app \
      src/ubuntu/install/nix/scripts/nix-launch \
