@@ -1,7 +1,7 @@
 [Unit]
-Description=kasm-session-agent MCP/CDP drive session (opt-in via KASM_AGENT_SESSION_TOKEN)
+Description=kasm-session-runtime MCP/CDP drive session (opt-in via KASM_RUNTIME_SESSION_TOKEN)
 # Ordering is a nicety here, not a correctness requirement, unlike
-# accessibility.service's Before=custom-startup.service: kasm-session-agent
+# accessibility.service's Before=custom-startup.service: kasm-session-runtime
 # mcp already polls for the X11 socket itself (its own bounded
 # mcpBootTimeout, ~30s) rather than assuming the display is up the moment it
 # starts. After=window-manager.service just avoids a burst of early
@@ -10,7 +10,7 @@ Description=kasm-session-agent MCP/CDP drive session (opt-in via KASM_AGENT_SESS
 # Requires= (a window-manager restart should not also bounce a live MCP
 # session for no reason connected to it).
 After=window-manager.service
-ConditionEnvironment=KASM_AGENT_SESSION_TOKEN
+ConditionEnvironment=KASM_RUNTIME_SESSION_TOKEN
 
 [Service]
 Type=simple
@@ -20,15 +20,15 @@ WorkingDirectory=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}
 # Per-session output directory, not this binary's own /testbench/out default
 # (a testbench/CI-harness artifact that does not exist, and is not writable
 # by a non-root user, in an ordinary Kasm session). Overridable by whatever
-# the caller passes as KASM_AGENT_OUT via request_kasm's environment map --
+# the caller passes as KASM_RUNTIME_OUT via request_kasm's environment map --
 # unit-level Environment= only supplies a value the process's own inherited
 # environment doesn't already set to something else. Same
 # ${VAR:-default} form as WorkingDirectory= above, not a systemd specifier
 # (%h etc.) -- untested against this container-init's own unit parser, so
 # not worth introducing here.
-Environment=KASM_AGENT_OUT=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.local/state/kasm-session-agent/mcp-out
+Environment=KASM_RUNTIME_OUT=${KASM_OS_HOME:-/home/${KASM_OS_USER:-kasm-user}}/.local/state/kasm-session-runtime/mcp-out
 Environment=DISPLAY=:1
-ExecStart=/nix/var/nix/profiles/_base/bin/kasm-session-agent mcp
+ExecStart=/nix/var/nix/profiles/_base/bin/kasm-session-runtime mcp
 Restart=no
 TimeoutStartSec=10s
 

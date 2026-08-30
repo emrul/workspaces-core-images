@@ -1,9 +1,0 @@
-{
-  "commit_id": "c097c7e816751e6f1866d5c0f948654fbdff2ff0",
-  "branch": "v0.2.0-rc.2",
-  "hashes": {
-    "x86_64-linux": "sha256-/XShM1o6up+658V06QTP7ue6SsUk2c6QWkPVUEvUtp0=",
-    "aarch64-linux": "sha256-3ZHs0Sscid4uOWDLTOjlDcf/ojMxH7yOkTlXmvkoBtI="
-  },
-  "_note": "Pinned against kasm-session-agent's v0.2.0-rc.2 tag (a pre-release verification tag, not a stable release -- stable releases are still hard-disabled in that repo's .gitlab-ci.yml pending review). Hashes computed by downloading both published objects directly (curl) and taking sha256-<base64 of the raw SHA-256 digest> -- the same value nix's own fixed-output derivation check computes for a fetchurl, verified against a live, publicly-readable object (kasm-labs-sandbox.s3.eu-north-1.amazonaws.com), not fabricated or copied from a fakeHash mismatch message. Re-pin against a real release the same way once the stable-tag gate is lifted: download both kasm-session-agent-linux-<amd64|arm64>.<tag>.<short-commit> objects, sha256 + base64 each, update commit_id/branch/hashes here."
-}

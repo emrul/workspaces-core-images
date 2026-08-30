@@ -116,7 +116,7 @@ against the direction of the security-model work and the Tetragon detection laye
 ## 3. Where it *is* a strong fit: the session agent
 
 The one place SandLock's design centre matches ours exactly is
-[`kasm-session-agent`](../../kasm-nix/) — an in-session agent taking model-driven
+[`kasm-session-runtime`](../../kasm-nix/) — an in-session agent taking model-driven
 actions inside a workspace. That is literally SandLock's headline use case, and the
 threat it addresses (prompt injection → exfiltration or local damage) is real for us:
 

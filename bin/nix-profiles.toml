@@ -45,19 +45,19 @@ pkgs = [
     "nixpkgs#alsa-lib",
     "nixpkgs#nspr",
     "nixpkgs#nss",
-    # kasm-session-agent's MCP/CDP drive-session binary -- a self-hosted
+    # kasm-session-runtime's MCP/CDP drive-session binary -- a self-hosted
     # overlay package (path:), not nixpkgs#, same as chrome/kasmvnc/etc.
     # elsewhere in this file. Present in every image via [base]
     # deliberately, not a selectable per-app profile: inert until
-    # KASM_AGENT_SESSION_TOKEN is set (docs in that repo's
+    # KASM_RUNTIME_SESSION_TOKEN is set (docs in that repo's
     # docs/mcp-baked-in-delivery.md; the container-init unit that starts
-    # it is src/ubuntu/install/nix/units/kasm-session-agent.service).
+    # it is src/ubuntu/install/nix/units/kasm-session-runtime.service).
     # Landing in [base] gives it the stable path
-    # /nix/var/nix/profiles/_base/bin/kasm-session-agent that unit's
+    # /nix/var/nix/profiles/_base/bin/kasm-session-runtime that unit's
     # ExecStart= references -- the same profile every other [base] entry
     # installs into (bin/build-nix-store-volume: `nix-store -qR
     # "${KASM_PROFILE_DIR}/_base"`), not a new one invented for this.
-    "path:/config/kasm-overlay#kasm-session-agent",
+    "path:/config/kasm-overlay#kasm-session-runtime",
 ]
 
 # GPU support profile. Built into /nix/var/nix/profiles/_gpu and folded into

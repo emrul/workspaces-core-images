@@ -1,11 +1,11 @@
-# kasm-session-agent — the D4 MCP/CDP drive-session binary
-# (gitlab.com/kasm-technologies/labs-sandbox/kasm-session-agent), baked into
+# kasm-session-runtime — the D4 MCP/CDP drive-session binary
+# (gitlab.com/kasm-technologies/labs-sandbox/kasm-session-runtime), baked into
 # every base image (not a per-app catalog entry — see [base] in
 # bin/nix-profiles.toml) so a session can serve MCP-over-HTTPS and, when
 # KASM_ENABLE_CDP is also set, raw CDP passthrough, the moment
-# KASM_AGENT_SESSION_TOKEN is set on it. No build or upload step at
+# KASM_RUNTIME_SESSION_TOKEN is set on it. No build or upload step at
 # session-request time; see that repo's docs/mcp-baked-in-delivery.md for
-# the full design and src/ubuntu/install/nix/units/kasm-session-agent.service
+# the full design and src/ubuntu/install/nix/units/kasm-session-runtime.service
 # for the container-init unit that actually starts it.
 #
 # Kind B (repackage artifact), same shape as pkgs/recorder and
@@ -26,7 +26,7 @@
 # recorder/audio_input/profile_sync fetch from -- do not assume the two are
 # interchangeable if this ever needs updating. Published by that repo's own
 # CI (.gitlab-ci.yml's publish-s3 job, using GitLab OIDC federation to
-# assume a role scoped to this one bucket's kasm_session_agent/ prefix --
+# assume a role scoped to this one bucket's kasm_session_runtime/ prefix --
 # scripts/setup-aws-oidc.sh -- additive to its existing GitLab generic-
 # package publish, not a replacement for it).
 { prev, pin }:
@@ -39,22 +39,22 @@ let
   system = prev.stdenv.hostPlatform.system;
   arch =
     archMap.${system}
-      or (throw "kasm-session-agent: unsupported system ${system} (supported: ${builtins.concatStringsSep ", " (builtins.attrNames archMap)})");
+      or (throw "kasm-session-runtime: unsupported system ${system} (supported: ${builtins.concatStringsSep ", " (builtins.attrNames archMap)})");
   hash =
     pin.hashes.${system}
-      or (throw "kasm-session-agent: pin.json has no hash for ${system} -- see pkgs/kasm-session-agent/pin.json");
+      or (throw "kasm-session-runtime: pin.json has no hash for ${system} -- see pkgs/kasm-session-runtime/pin.json");
   short = builtins.substring 0 6 pin.commit_id;
   src = fetchurl {
     # Regional endpoint, not the global kasmweb-build-artifacts-style
     # .s3.amazonaws.com form: kasm-labs-sandbox lives in eu-north-1, and an
     # explicit regional endpoint avoids relying on S3's cross-region
     # redirect behaviour inside a hermetic fetch.
-    url = "https://kasm-labs-sandbox.s3.eu-north-1.amazonaws.com/kasm_session_agent/${pin.commit_id}/kasm-session-agent-linux-${arch}.${pin.branch}.${short}";
+    url = "https://kasm-labs-sandbox.s3.eu-north-1.amazonaws.com/kasm_session_runtime/${pin.commit_id}/kasm-session-runtime-linux-${arch}.${pin.branch}.${short}";
     inherit hash;
   };
 in
 stdenvNoCC.mkDerivation {
-  pname = "kasm-session-agent";
+  pname = "kasm-session-runtime";
   version = "${pin.branch}-${short}";
   inherit src;
 
@@ -71,12 +71,12 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     mkdir -p $out/bin
-    install -m0755 ${src} $out/bin/kasm-session-agent
+    install -m0755 ${src} $out/bin/kasm-session-runtime
     runHook postInstall
   '';
 
   meta = {
-    description = "kasm-session-agent's MCP/CDP drive-session binary (D4), baked into every nix base image";
+    description = "kasm-session-runtime's MCP/CDP drive-session binary (D4), baked into every nix base image";
     platforms = [ "x86_64-linux" "aarch64-linux" ];
   };
 }
