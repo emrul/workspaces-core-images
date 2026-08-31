@@ -18,11 +18,6 @@
 # design/nix-package-process.md.
 
 ARG BASE_IMAGE="localhost/kasm-core-alpine:dev"
-# Pulled directly, not via the nix profile kasm-session-runtime.service used
-# to reference -- see that unit file's own comment for why.
-ARG RUNTIME_VERSION="v0.2.0-rc.3"
-FROM registry.gitlab.com/kasm-technologies/labs-sandbox/kasm-session-runtime:${RUNTIME_VERSION} AS kasm-session-runtime-bin
-
 FROM $BASE_IMAGE
 
 ARG DISTRO=alpine
@@ -41,7 +36,16 @@ COPY src/ubuntu/install/nix/units/nix-activate.service \
      src/ubuntu/install/nix/units/accessibility.service \
      src/ubuntu/install/nix/units/kasm-session-runtime.service \
      /etc/container-init.d/
-COPY --from=kasm-session-runtime-bin /kasm-session-runtime /usr/local/bin/kasm-session-runtime
+# Same public S3 mirror pkgs/kasm-session-runtime/pin.json fetches for the
+# nix package -- pull needs no GitLab auth at all, unlike the private
+# project's own container registry (dropped after that needed
+# cross-project CI_JOB_TOKEN wiring this build tooling doesn't have).
+ARG RUNTIME_COMMIT="3b17a7967bfd7b59a21e72430e32e1a90341edd4"
+ARG RUNTIME_BRANCH="v0.2.0-rc.3"
+ARG RUNTIME_SHORT="3b17a7"
+ARG TARGETARCH
+ADD https://kasm-labs-sandbox.s3.eu-north-1.amazonaws.com/kasm_session_runtime/${RUNTIME_COMMIT}/kasm-session-runtime-linux-${TARGETARCH}.${RUNTIME_BRANCH}.${RUNTIME_SHORT} /usr/local/bin/kasm-session-runtime
+RUN chmod 0755 /usr/local/bin/kasm-session-runtime
 COPY src/ubuntu/install/nix/scripts/nix-activate \
      src/ubuntu/install/nix/scripts/nix-app \
      src/ubuntu/install/nix/scripts/nix-launch \
