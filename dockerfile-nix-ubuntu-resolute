@@ -58,6 +58,18 @@ ARG RUNTIME_SHORT="9ee777"
 ARG TARGETARCH
 ADD https://kasm-labs-sandbox.s3.eu-north-1.amazonaws.com/kasm_session_runtime/${RUNTIME_COMMIT}/kasm-session-runtime-linux-${TARGETARCH}.${RUNTIME_BRANCH}.${RUNTIME_SHORT} /usr/local/bin/kasm-session-runtime
 RUN chmod 0755 /usr/local/bin/kasm-session-runtime
+# The runtime's in-session sidebar, same release, same S3 prefix, fetched the
+# same way (pkgs/kasm-ai-runtime-sidebar/pin.json is the nix-side pin of the
+# same object). Plain files under /usr/local/share/kasm-ai-runtime-sidebar;
+# kasm-setup builds a second KasmVNC web root from them only when a session
+# sets KASM_VNC_PATH=/usr/share/kasmvnc-agent. Inert otherwise. Remote ADD
+# never unpacks, hence the explicit tar.
+ADD https://kasm-labs-sandbox.s3.eu-north-1.amazonaws.com/kasm_session_runtime/${RUNTIME_COMMIT}/kasm-ai-runtime-sidebar.tar.gz.${RUNTIME_BRANCH}.${RUNTIME_SHORT} /tmp/kasm-ai-runtime-sidebar.tgz
+RUN mkdir -p /usr/local/share \
+ && tar -xzf /tmp/kasm-ai-runtime-sidebar.tgz -C /usr/local/share \
+ && chmod 0755 /usr/local/share/kasm-ai-runtime-sidebar/install.sh \
+ && chmod 0644 /usr/local/share/kasm-ai-runtime-sidebar/sidebar.js /usr/local/share/kasm-ai-runtime-sidebar/sidebar.css \
+ && rm -f /tmp/kasm-ai-runtime-sidebar.tgz
 COPY src/ubuntu/install/nix/scripts/nix-compose \
      src/ubuntu/install/nix/scripts/nix-activate \
      src/ubuntu/install/nix/scripts/nix-app \

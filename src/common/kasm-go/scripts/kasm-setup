@@ -93,22 +93,28 @@ ln -sfn "$KASM_OS_HOME/Downloads" "$KASM_OS_HOME/Desktop/Downloads" 2>/dev/null 
 chown -h "$KASM_OS_USER:$KASM_OS_GROUP" "$KASM_OS_HOME/Desktop/Uploads" "$KASM_OS_HOME/Desktop/Downloads" 2>/dev/null || true
 
 # 2b) Agent sidebar web root, on request only. kasm-session-runtime's
-# in-session sidebar ships in [base] as plain files
-# (/nix/var/nix/profiles/_base/share/kasm-ai-runtime-sidebar, the
-# kasm-ai-runtime-sidebar overlay package). A session that wants the
-# sidebar sets KASM_VNC_PATH=/usr/share/kasmvnc-agent; only then is that
-# second web root built here -- a copy of the stock KasmVNC www plus the
-# sidebar assets and one <script> line in vnc.html -- for kasm-xvnc to
-# serve via Xvnc's -httpd. Sessions without the variable never see it:
-# the stock root at /usr/share/kasmvnc/www is not touched. If the package
-# is absent or install.sh fails, nothing is created and kasm-xvnc falls
-# back to the stock root (it checks the directory exists before using
-# it), so the worst case is the ordinary viewer, never a blank one.
-# Writable copy, not a store path, because 2c below rewrites the
-# Downloads symlink under whichever root is active (same reason the
+# in-session sidebar ships as plain files at
+# /usr/local/share/kasm-ai-runtime-sidebar (the dockerfile-nix-* ADD, same
+# S3 object the kasm-ai-runtime-sidebar overlay package pins; that package
+# also lands in the store via [base], which is the fallback location). A
+# session that wants the sidebar sets KASM_VNC_PATH=/usr/share/kasmvnc-agent;
+# only then is that second web root built here -- a copy of the stock
+# KasmVNC www plus the sidebar assets and one <script> line in vnc.html --
+# for kasm-xvnc to serve via Xvnc's -httpd. Sessions without the variable
+# never see it: the stock root at /usr/share/kasmvnc/www is not touched.
+# If the files are absent or install.sh fails, nothing is created and
+# kasm-xvnc falls back to the stock root (it checks the directory exists
+# before using it), so the worst case is the ordinary viewer, never a
+# blank one. Writable copy, not a store path, because 2c below rewrites
+# the Downloads symlink under whichever root is active (same reason the
 # stock www is a copy in the resolute image).
 if [ "${KASM_VNC_PATH:-}" = "/usr/share/kasmvnc-agent" ] && [ ! -d /usr/share/kasmvnc-agent/www ]; then
-    sb=/nix/var/nix/profiles/_base/share/kasm-ai-runtime-sidebar
+    sb=/usr/local/share/kasm-ai-runtime-sidebar
+    if [ ! -x "$sb/install.sh" ]; then
+        for d in /nix/store/*-kasm-ai-runtime-sidebar-*/share/kasm-ai-runtime-sidebar; do
+            [ -x "$d/install.sh" ] && { sb="$d"; break; }
+        done
+    fi
     if [ -x "$sb/install.sh" ] && [ -d /usr/share/kasmvnc/www ]; then
         if "$sb/install.sh" /usr/share/kasmvnc/www /usr/share/kasmvnc-agent/www "$sb"; then
             chown -R 0:0 /usr/share/kasmvnc-agent
@@ -121,7 +127,7 @@ if [ "${KASM_VNC_PATH:-}" = "/usr/share/kasmvnc-agent" ] && [ ! -d /usr/share/ka
             rm -rf /usr/share/kasmvnc-agent/www
         fi
     else
-        echo "kasm-setup: KASM_VNC_PATH=/usr/share/kasmvnc-agent requested but $sb is not in the base profile -- kasm-xvnc will serve the stock viewer" >&2
+        echo "kasm-setup: KASM_VNC_PATH=/usr/share/kasmvnc-agent requested but no kasm-ai-runtime-sidebar install.sh under /usr/local/share or the nix store -- kasm-xvnc will serve the stock viewer" >&2
     fi
 fi
 

@@ -7,7 +7,12 @@
 #
 #   - This package only puts files in the store: sidebar.js, sidebar.css and
 #     install.sh under $out/share/kasm-ai-runtime-sidebar. Nothing references
-#     them by default. The stock KasmVNC web root is not touched.
+#     them by default. The stock KasmVNC web root is not touched. Like the
+#     runtime, the copy the container actually uses is the dockerfile-nix-*
+#     ADD of the same object (/usr/local/share/kasm-ai-runtime-sidebar); the
+#     [base] profile is closure/pin bookkeeping, not a runtime path (there is
+#     no _base profile link in a running session), and kasm-setup only falls
+#     back to the store path if the ADD is missing.
 #   - A session opts in with KASM_VNC_PATH=/usr/share/kasmvnc-agent in its
 #     environment. kasm-setup (src/common/kasm-go/scripts/kasm-setup, step 2b)
 #     then materialises that second web root at boot -- a copy of the stock

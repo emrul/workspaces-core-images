@@ -59,10 +59,11 @@ pkgs = [
     # "${KASM_PROFILE_DIR}/_base"`), not a new one invented for this.
     "path:/config/kasm-overlay#kasm-session-runtime",
     # kasm-ai-runtime-sidebar: the runtime's in-session sidebar. Files in the
-    # store only (/nix/var/nix/profiles/_base/share/kasm-ai-runtime-sidebar);
+    # store only; the runtime-visible copy is the dockerfile-nix-* ADD at
+    # /usr/local/share/kasm-ai-runtime-sidebar (same object, same pin), and
     # kasm-setup step 2b turns them into a second KasmVNC web root at boot
-    # only when the session sets KASM_VNC_PATH=/usr/share/kasmvnc-agent, and
-    # kasm-xvnc falls back to the stock viewer if that root is missing. So:
+    # only when the session sets KASM_VNC_PATH=/usr/share/kasmvnc-agent, with
+    # kasm-xvnc falling back to the stock viewer if that root is missing. So:
     # present everywhere, inert unless asked for -- same stance as the
     # runtime above. Pinned to the same kasm-session-runtime tag
     # (pkgs/kasm-ai-runtime-sidebar/pin.json).
