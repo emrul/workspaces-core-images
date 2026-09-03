@@ -41,3 +41,14 @@ kind      = "binary"
 discover  = "manual"
 cadence   = "manual"
 platforms = ["amd64", "arm64"]
+
+# kasm-ai-runtime-sidebar: the runtime's in-session sidebar (web assets for a
+# second KasmVNC web root, materialised by kasm-setup only when a session sets
+# KASM_VNC_PATH=/usr/share/kasmvnc-agent). Same release and S3 prefix as
+# kasm-session-runtime -- bump the two pin.json files together, by hand,
+# against the same tag. Architecture-independent tarball.
+[apps.kasm-ai-runtime-sidebar]
+kind      = "binary"
+discover  = "manual"
+cadence   = "manual"
+platforms = ["amd64", "arm64"]

@@ -304,3 +304,32 @@ func TestFixedResolutionOffKeepsResize(t *testing.T) {
 		}
 	}
 }
+
+// KASM_VNC_PATH pointing at a root with no www/ must not reach Xvnc: KasmVNC
+// resolves -httpd once at startup and serves nothing afterwards when that
+// fails (a blank viewer behind the Kasm proxy). Fall back to the stock root
+// when it exists; keep the requested path when both are present, and when
+// neither is (a unit-test or downstream image with no stock www at all).
+func TestBuildXvncArgsFallsBackWhenTheRequestedWebRootIsMissing(t *testing.T) {
+	cases := []struct {
+		name    string
+		present []string
+		want    string
+	}{
+		{"requested root present", []string{"/usr/share/kasmvnc-agent/www", "/usr/share/kasmvnc/www"}, "/usr/share/kasmvnc-agent/www"},
+		{"requested root missing, stock present", []string{"/usr/share/kasmvnc/www"}, "/usr/share/kasmvnc/www"},
+		{"neither present", nil, "/usr/share/kasmvnc-agent/www"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := map[string]string{"KASM_VNC_PATH": "/usr/share/kasmvnc-agent"}
+			args, _, err := buildXvncArgs(env, "amd64", fakeStat(tc.present...), fakeHost)
+			if err != nil {
+				t.Fatalf("buildXvncArgs: %v", err)
+			}
+			if !hasFlagValue(args, "-httpd", tc.want) {
+				t.Errorf("-httpd = %v, want %s", args, tc.want)
+			}
+		})
+	}
+}

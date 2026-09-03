@@ -268,9 +268,22 @@ func buildXvncArgs(env map[string]string, arch string, fileExists func(string) b
 	if wsPort == "" {
 		wsPort = "6901"
 	}
+	// KASM_VNC_PATH selects the web root Xvnc serves (-httpd <path>/www). A
+	// session may point it at an alternate root -- the agent sidebar's
+	// /usr/share/kasmvnc-agent, which kasm-setup materialises on request --
+	// so a path whose www does not exist must fall back to the stock root
+	// rather than be handed to Xvnc: KasmVNC resolves -httpd once at startup
+	// (realpath) and, when that fails, answers every HTTP request with
+	// nothing, which the Kasm proxy reports as 502 and the user sees as a
+	// blank viewer. Logged, not silent, so the fallback is visible in the
+	// container log.
+	const defaultKasmvncPath = "/usr/share/kasmvnc"
 	kasmvncPath := env["KASM_VNC_PATH"]
 	if kasmvncPath == "" {
-		kasmvncPath = "/usr/share/kasmvnc"
+		kasmvncPath = defaultKasmvncPath
+	} else if !fileExists(kasmvncPath+"/www") && fileExists(defaultKasmvncPath+"/www") {
+		fmt.Fprintf(os.Stderr, "kasm-xvnc: KASM_VNC_PATH=%s has no www/ directory -- serving the stock viewer from %s instead\n", kasmvncPath, defaultKasmvncPath)
+		kasmvncPath = defaultKasmvncPath
 	}
 	drinode := env["DRINODE"]
 	if drinode == "" {

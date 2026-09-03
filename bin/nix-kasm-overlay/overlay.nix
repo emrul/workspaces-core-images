@@ -109,6 +109,16 @@ in
     pin = loadPin "kasm-session-runtime" ./pkgs/kasm-session-runtime;
   };
 
+  # Kind B (repackage artifact): the runtime's in-session sidebar -- web assets
+  # for a second KasmVNC web root that kasm-setup materialises only when a
+  # session sets KASM_VNC_PATH=/usr/share/kasmvnc-agent. Same release, same S3
+  # prefix, pinned together with kasm-session-runtime. Files in the store
+  # only; inert otherwise. See package.nix's doc comment.
+  kasm-ai-runtime-sidebar = import ./pkgs/kasm-ai-runtime-sidebar/package.nix {
+    inherit prev;
+    pin = loadPin "kasm-ai-runtime-sidebar" ./pkgs/kasm-ai-runtime-sidebar;
+  };
+
   # Kind B (from scratch): Trace Labs OSINT tools absent from nixpkgs. Each is a
   # `{ prev }:` derivation pinned to an upstream tag. TraceLabs-unique (excluded
   # from the fat store); no committed pin.json — the tag is pinned in-package.

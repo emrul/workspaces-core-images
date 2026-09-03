@@ -58,6 +58,15 @@ pkgs = [
     # installs into (bin/build-nix-store-volume: `nix-store -qR
     # "${KASM_PROFILE_DIR}/_base"`), not a new one invented for this.
     "path:/config/kasm-overlay#kasm-session-runtime",
+    # kasm-ai-runtime-sidebar: the runtime's in-session sidebar. Files in the
+    # store only (/nix/var/nix/profiles/_base/share/kasm-ai-runtime-sidebar);
+    # kasm-setup step 2b turns them into a second KasmVNC web root at boot
+    # only when the session sets KASM_VNC_PATH=/usr/share/kasmvnc-agent, and
+    # kasm-xvnc falls back to the stock viewer if that root is missing. So:
+    # present everywhere, inert unless asked for -- same stance as the
+    # runtime above. Pinned to the same kasm-session-runtime tag
+    # (pkgs/kasm-ai-runtime-sidebar/pin.json).
+    "path:/config/kasm-overlay#kasm-ai-runtime-sidebar",
 ]
 
 # GPU support profile. Built into /nix/var/nix/profiles/_gpu and folded into

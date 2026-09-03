@@ -1,9 +1,9 @@
 {
-  "commit_id": "3b17a7967bfd7b59a21e72430e32e1a90341edd4",
-  "branch": "v0.2.0-rc.3",
+  "commit_id": "9ee77721c967eefb89cfc29b9c621f24ab788697",
+  "branch": "v0.2.0-rc.6",
   "hashes": {
-    "x86_64-linux": "sha256-f8/WY/Rjw6xgWU2eHn+OdNroYbcQ8pZVZr/6sY2huZ0=",
-    "aarch64-linux": "sha256-oFD5jaq1xzalggElrLWRNZsBHaFaPQGX/fiZx/w9WA8="
+    "x86_64-linux": "sha256-kFJK9pvdCEgi1wwMMdZPbvTS8rwES2wiv+uuyBY2EZk=",
+    "aarch64-linux": "sha256-y9W7VU8ExwvNia0BCeNzUdcbP0AJrcvfXyCht5aRG3c="
   },
-  "_note": "Pinned against kasm-session-runtime's v0.2.0-rc.3 tag (a pre-release verification tag, not a stable release -- stable releases are still hard-disabled in that repo's .gitlab-ci.yml pending review). This tag is the rename to kasm-session-runtime (from kasm-session-agent) and the sdk/ package split -- binary name, module path, and every KASM_AGENT_* env var changed; nothing consumed the old names yet, so this re-pin carries no compat shim. Hashes computed by downloading both published objects directly (curl) and taking sha256-<base64 of the raw SHA-256 digest> -- the same value nix's own fixed-output derivation check computes for a fetchurl, verified against a live, publicly-readable object (kasm-labs-sandbox.s3.eu-north-1.amazonaws.com), not fabricated or copied from a fakeHash mismatch message. Re-pin against a real release the same way once the stable-tag gate is lifted: download both kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short-commit> objects, sha256 + base64 each, update commit_id/branch/hashes here."
+  "_note": "Pinned against kasm-session-runtime's v0.2.0-rc.6 tag (pre-release). This tag adds the in-session sidebar (pkgs/kasm-ai-runtime-sidebar, pinned to the same commit -- bump both together), the runtime's observe endpoints (/events, /artifacts) and short element handles for cdp_list_interactive. Hashes computed by downloading both published objects (curl) and taking sha256-<base64 of the raw SHA-256 digest>, the same value nix's fixed-output check computes for a fetchurl. Re-pin the same way: download kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short> and kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>, hash, update."
 }

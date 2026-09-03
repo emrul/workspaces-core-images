@@ -111,6 +111,13 @@ while IFS= read -r f; do
     bin/nix-kasm-overlay/pkgs/audio_input/*|bin/nix-kasm-overlay/pkgs/recorder/*|\
     bin/nix-kasm-overlay/pkgs/webcam/*|bin/nix-kasm-overlay/pkgs/gamepad/*)
       BASES_AFFECTED="${BASES_AFFECTED} resolute" ;;
+    # kasm-session-runtime and its sidebar live in [base] (bin/nix-profiles.toml)
+    # of EVERY nix base, not just resolute, so a pin bump is a base change for
+    # all of them -- and every app profile stacks on a base. Without this arm a
+    # pin-only bump fell through to the generic pkgs case below as a
+    # nonexistent app profile and rebuilt nothing.
+    bin/nix-kasm-overlay/pkgs/kasm-session-runtime/*|bin/nix-kasm-overlay/pkgs/kasm-ai-runtime-sidebar/*)
+      all=1; BASE_AFFECTED=1; BASES_AFFECTED="${BASES_AFFECTED} ubuntu fedora alpine resolute" ;;
     # TraceLabs OSINT overlay tools (design §4) are NOT standalone profiles —
     # they're members of the `tracelabs` desktop profile. A pkg change must
     # rebuild tracelabs, not a same-named profile that doesn't exist. Matched
