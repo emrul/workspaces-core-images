@@ -1,9 +1,9 @@
 {
-  "commit_id": "04000966cb84a2932c3737a5d86946b43e898048",
-  "branch": "v0.2.0-rc.7",
+  "commit_id": "bb4af75550e3d2d338e9eec80a2f16bdb0f27570",
+  "branch": "v0.2.0-rc.10",
   "hashes": {
-    "x86_64-linux": "sha256-FGcGE0JlrfJPt4M5oBhqrfIhwSRg9dEnbA1jS5IuweU=",
-    "aarch64-linux": "sha256-dvreNcnIPFk1ga2DJ3Y2rWKc73f74kBnSj5jzmC5wXs="
+    "x86_64-linux": "sha256-qGA9ykHt1wgZV3nruEVzds9p9AsskqidzMwP1OdIVLc=",
+    "aarch64-linux": "sha256-ksUOoQxNGJuyvjwv+WtAM4I+nIk3DfCbip/u2hAAsLI="
   },
-  "_note": "Pinned against kasm-session-runtime's v0.2.0-rc.7 tag (pre-release). This tag makes dom.* attach CDP on demand (the baked mcp service used to dial once before the browser was up) and adds the in-session sidebar (pkgs/kasm-ai-runtime-sidebar, pinned to the same commit -- bump both together), the runtime's observe endpoints (/events, /artifacts) and short element handles for cdp_list_interactive. Hashes computed by downloading both published objects (curl) and taking sha256-<base64 of the raw SHA-256 digest>, the same value nix's fixed-output check computes for a fetchurl. Re-pin the same way: download kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short> and kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>, hash, update."
+  "_note": "Pinned against kasm-session-runtime's v0.2.0-rc.10 tag (pre-release). This tag ships D12: declarative post: conditions on steps and declared tools, plan: (a compiled, model-free replay with the goal as fallback), compile-plan, per-step duration_ms/model_ms/phase timings, the tab URL on every transcript row, and recovery from a model endpoint's context-exceeded reply. The sidebar (pkgs/kasm-ai-runtime-sidebar) is pinned to the same commit -- bump both together. Hashes computed by downloading both published objects (curl) and taking sha256-<base64 of the raw SHA-256 digest>, the same value nix's fixed-output check computes for a fetchurl. Re-pin the same way: download kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short> and kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>, hash, update."
 }
