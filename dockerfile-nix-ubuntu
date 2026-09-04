@@ -47,9 +47,9 @@ COPY src/ubuntu/install/nix/units/nix-activate.service \
 # nix package -- pull needs no GitLab auth at all, unlike the private
 # project's own container registry (dropped after that needed
 # cross-project CI_JOB_TOKEN wiring this build tooling doesn't have).
-ARG RUNTIME_COMMIT="bb4af75550e3d2d338e9eec80a2f16bdb0f27570"
-ARG RUNTIME_BRANCH="v0.2.0-rc.10"
-ARG RUNTIME_SHORT="bb4af7"
+ARG RUNTIME_COMMIT="14242a0b5eff167f5ad905484a2298cf2363d135"
+ARG RUNTIME_BRANCH="v0.2.0-rc.12"
+ARG RUNTIME_SHORT="14242a"
 ARG TARGETARCH
 ADD https://kasm-labs-sandbox.s3.eu-north-1.amazonaws.com/kasm_session_runtime/${RUNTIME_COMMIT}/kasm-session-runtime-linux-${TARGETARCH}.${RUNTIME_BRANCH}.${RUNTIME_SHORT} /usr/local/bin/kasm-session-runtime
 RUN chmod 0755 /usr/local/bin/kasm-session-runtime
