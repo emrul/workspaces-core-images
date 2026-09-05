@@ -1,9 +1,9 @@
 {
-  "commit_id": "14242a0b5eff167f5ad905484a2298cf2363d135",
-  "branch": "v0.2.0-rc.12",
+  "commit_id": "89ab40afac663ef93e0b814f344f06131d57005d",
+  "branch": "v0.2.0-rc.13",
   "hashes": {
-    "x86_64-linux": "sha256-VZzYOcPvfGjnLVub4ZoqnMVb+uZ9fB+Cnwc4C3SdwcQ=",
-    "aarch64-linux": "sha256-8+5q2themiQXqX+KWjr9BVwwPRw2zsUnPm/xdJ3fn6M="
+    "x86_64-linux": "sha256-oRxrpdoSmrteI+hC64FAvoLWsiCsvJQBplqYiFGFAcY=",
+    "aarch64-linux": "sha256-H5Nq8GH64n11MOznkMrUiWDbBrjrMfDaGW1DgR0sNok="
   },
-  "_note": "Pinned against kasm-session-runtime's v0.2.0-rc.12 tag (pre-release). This tag ships launch.on_missing_window: continue (wine-assess's launch-failure request): an APP_WAIT deadline with no window becomes the agentic loop's first observation instead of the run's verdict, with the end-of-run window/process check still owning the verdict; Session.Launch's stdout/stderr now reach ~/.xsession-errors so rules can match a launched app's own errors. rc.11 was cut and failed its tag pipeline at fmt; rc.12 is the same code gofumpt'd. The sidebar (pkgs/kasm-ai-runtime-sidebar) is pinned to the same commit -- bump both together. Hashes computed by downloading both published objects (curl) and taking sha256-<base64 of the raw SHA-256 digest>, the same value nix's fixed-output check computes for a fetchurl. Re-pin the same way: download kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short> and kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>, hash, update."
+  "_note": "Pinned against kasm-session-runtime's v0.2.0-rc.13 tag (pre-release). This tag ships runner.escalation_pause_s (wine-assess's escalation-pause request): an operator bound on the C2 escalation pause, in KASM_RUNTIME_CONFIG_FILE or as KASM_RUNTIME_RUNNER_ESCALATION_PAUSE_S. Absent keeps today's behaviour (the pause runs to the wait budget); 0 records the escalation and finishes; N sleeps min(N, time until WaitBudget). For unattended runs, where nobody is coming to take the session, so an escalate no longer holds a session slot for the whole remaining deadline. Verdict/outcome, Escalation.PausedS and the Before/After snapshots are unchanged. The sidebar (pkgs/kasm-ai-runtime-sidebar) is pinned to the same commit -- bump both together. Hashes computed by downloading both published objects (curl) and taking sha256-<base64 of the raw SHA-256 digest>, the same value nix's fixed-output check computes for a fetchurl. Re-pin the same way: download kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short> and kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>, hash, update."
 }
