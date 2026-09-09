@@ -1,8 +1,8 @@
 {
-  "version": "152.0.7977.82",
+  "version": "153.0.8010.36",
   "hashes": {
-    "x86_64-linux": "sha256-TSXkoCjHinrpEGg1UcLyNHksxVlefj40k59Zk0KtpEY="
+    "x86_64-linux": "sha256-m7ROMwMcLyhXzza0NDBRoS+TBY5LeB48djE9+H9sjTI="
   },
   "release_notes": "https://chromereleases.googleblog.com/",
-  "updated": "2026-09-03"
+  "updated": "2026-09-09"
 }
