@@ -24,6 +24,19 @@ if [ -z "${KASM_OS_HOME:-}" ]; then
     fi
 fi
 
+# Same allowlist as kasm-setup (which normally validates before calling
+# us); repeated here because KASM_OS_HOME lands in a sed replacement
+# below, where | or & would be sed syntax rather than path characters.
+bad_identity() {
+    echo "kasm-os-user-rename: refusing $1: must match $2" >&2
+    exit 1
+}
+case $KASM_OS_USER in ''|[!A-Za-z_]*|*[!A-Za-z0-9._-]*) bad_identity KASM_OS_USER '[A-Za-z_][A-Za-z0-9._-]*' ;; esac
+case $KASM_OS_GROUP in ''|[!A-Za-z_]*|*[!A-Za-z0-9._-]*) bad_identity KASM_OS_GROUP '[A-Za-z_][A-Za-z0-9._-]*' ;; esac
+case $KASM_OS_UID in ''|*[!0-9]*) bad_identity KASM_OS_UID '[0-9]+' ;; esac
+case $KASM_OS_GID in ''|*[!0-9]*) bad_identity KASM_OS_GID '[0-9]+' ;; esac
+case $KASM_OS_HOME in ''|[!/]*|*[!A-Za-z0-9._/-]*) bad_identity KASM_OS_HOME '/[A-Za-z0-9._/-]*' ;; esac
+
 case "${DISTRO:-}" in
     alpine)
         # busybox path: delete + re-create.

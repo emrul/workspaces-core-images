@@ -25,6 +25,23 @@ if [ -z "${KASM_OS_HOME:-}" ]; then
     fi
 fi
 
+# 0) Identity allowlist. These values are container env that this root
+# script hands to su/install/chown/kasmvncpasswd, to a sed replacement
+# in kasm-os-user-rename, and to /run/kasm/os-user.env, which other
+# scripts source. Refuse anything outside a conservative charset (no
+# quotes, |, &, \, whitespace, newlines or leading -) so a malformed
+# value fails the unit instead of being parsed as shell or sed syntax.
+# kasm-os-user-rename repeats the check for direct invocations.
+bad_identity() {
+    echo "kasm-setup: refusing $1: must match $2" >&2
+    exit 1
+}
+case $KASM_OS_USER in ''|[!A-Za-z_]*|*[!A-Za-z0-9._-]*) bad_identity KASM_OS_USER '[A-Za-z_][A-Za-z0-9._-]*' ;; esac
+case $KASM_OS_GROUP in ''|[!A-Za-z_]*|*[!A-Za-z0-9._-]*) bad_identity KASM_OS_GROUP '[A-Za-z_][A-Za-z0-9._-]*' ;; esac
+case $KASM_OS_UID in ''|*[!0-9]*) bad_identity KASM_OS_UID '[0-9]+' ;; esac
+case $KASM_OS_GID in ''|*[!0-9]*) bad_identity KASM_OS_GID '[0-9]+' ;; esac
+case $KASM_OS_HOME in ''|[!/]*|*[!A-Za-z0-9._/-]*) bad_identity KASM_OS_HOME '/[A-Za-z0-9._/-]*' ;; esac
+
 # 1) OS-user rename (Phase 4.10) — no-op when every value matches the default.
 if [ "$KASM_OS_USER" != kasm-user ] || [ "$KASM_OS_UID" != 1000 ] \
         || [ "$KASM_OS_GID" != 1000 ] || [ "$KASM_OS_GROUP" != kasm-user ] \
@@ -203,13 +220,15 @@ if [ -d /nix-stores ]; then
     [ -e /run/nix-compose.ready ] || echo "kasm-setup: WARN nix-compose not ready after 30s; kasmvncpasswd may fail" >&2
 fi
 
+# Passwords travel as printf arguments into kasmvncpasswd's stdin and are
+# never re-parsed by a shell, so any byte (quotes included) is stored as-is.
 if command -v kasmvncpasswd >/dev/null 2>&1 && [ -n "${VNC_PW:-}" ]; then
-    HOME="$KASM_OS_HOME" sh -c "printf '%s\n%s\n\n' '$VNC_PW' '$VNC_PW' | kasmvncpasswd -u kasm_user -wo" >/dev/null 2>&1 || true
+    printf '%s\n%s\n\n' "$VNC_PW" "$VNC_PW" | HOME="$KASM_OS_HOME" kasmvncpasswd -u kasm_user -wo >/dev/null 2>&1 || true
     if [ "$KASM_OS_USER" != kasm_user ] && [ "$KASM_OS_USER" != kasm-user ]; then
-        HOME="$KASM_OS_HOME" sh -c "printf '%s\n%s\n\n' '$VNC_PW' '$VNC_PW' | kasmvncpasswd -u '$KASM_OS_USER' -wo" >/dev/null 2>&1 || true
+        printf '%s\n%s\n\n' "$VNC_PW" "$VNC_PW" | HOME="$KASM_OS_HOME" kasmvncpasswd -u "$KASM_OS_USER" -wo >/dev/null 2>&1 || true
     fi
     if [ -n "${VNC_VIEW_ONLY_PW:-}" ]; then
-        HOME="$KASM_OS_HOME" sh -c "printf '%s\n%s\n\n' '$VNC_VIEW_ONLY_PW' '$VNC_VIEW_ONLY_PW' | kasmvncpasswd -u kasm_viewer -r" >/dev/null 2>&1 || true
+        printf '%s\n%s\n\n' "$VNC_VIEW_ONLY_PW" "$VNC_VIEW_ONLY_PW" | HOME="$KASM_OS_HOME" kasmvncpasswd -u kasm_viewer -r >/dev/null 2>&1 || true
     fi
     if [ -f "$KASM_OS_HOME/.kasmpasswd" ]; then
         chown "$KASM_OS_USER:$KASM_OS_GROUP" "$KASM_OS_HOME/.kasmpasswd"
