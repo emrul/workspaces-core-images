@@ -1,9 +1,9 @@
 {
-  "commit_id": "5ad5aacc2b546c090c7586ff83dbe3d30a1d8e7a",
-  "branch": "v0.2.86-rc.1",
+  "commit_id": "806f812a1bf96bdc26dd655c3eaa00cfe4a29462",
+  "branch": "v0.2.96-rc.1",
   "hashes": {
-    "x86_64-linux": "sha256-rnKHUV1tiNIgkGRwfGIRsg7m8sJ/hEq7zg0gxmJC0PI=",
-    "aarch64-linux": "sha256-N4Ejtx+JyXpnkxE4j5fz24XZcK4S/RGl3T3yT1uBcR8="
+    "x86_64-linux": "sha256-jXQFj+/A+Bg0LMDK3TaMl37z1ILomHFvpVaXvNTSlcw=",
+    "aarch64-linux": "sha256-0P41S8DzmRgdrNqUcIovbziwxFMy7Dw7BkHdzdY0jYo="
   },
-  "_note": "Pinned against kasm-session-runtime's v0.2.86-rc.1 tag (pre-release). This tag makes a declared shell tool's post: failure carry the command's output (apply: postcondition N (...) did not hold within ...; output: <out>), the same capped, redacted text a success returns, so a command that exits 0 and leaves no window still tells the model why (wine-assess post-failure-output request, 2026-09-14). The nonzero-exit path already did this. Two consumer notes: the output collector keeps the head, not the tail, so lead with the explanation; and evidence.tool_result_chars (default 300) caps the trace row separately from what the model sees. The sidebar (pkgs/kasm-ai-runtime-sidebar) is pinned to the same commit -- bump both together. Hashes computed by downloading both published objects (curl) and taking sha256-<base64 of the raw SHA-256 digest>, the same value nix's fixed-output check computes for a fetchurl. Re-pin the same way: download kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short> and kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>, hash, update."
+  "_note": "Pinned against kasm-session-runtime's v0.2.96-rc.1 tag (pre-release). This tag adds the human-in-the-loop channel (docs/human-in-the-loop.md): a run-scoped inbox behind KASM_RUNTIME_INBOX_TOKEN with messages, attachments, typed requests answered through the sidebar's new Inbox tab, ask_human for the agent, stop and finish_handoff control actions; launch.on_error_dialog: continue so a benign post-launch dialog opens the loop instead of ending the run (wine-assess OI-045); and the sidebar documented as two contracts (docs/sidebar-hosting.md, docs/sidebar-protocol.md). The sidebar bundle in this tag carries the Inbox tab. Nothing changes for a run without an inbox token. The sidebar (pkgs/kasm-ai-runtime-sidebar) is pinned to the same commit -- bump both together. Hashes computed by downloading both published objects (curl) and taking sha256-<base64 of the raw SHA-256 digest>, the same value nix's fixed-output check computes for a fetchurl. Re-pin the same way: download kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short> and kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>, hash, update."
 }
