@@ -1,6 +1,6 @@
 {
-  "commit_id": "9a841b6d8e5ee0481b28456ff724570a04a9aaa3",
-  "branch": "v0.2.2-rc.1",
-  "hash": "sha256-6eaheuIhFF3DzP+mm2GQ1Cv5iskpVh14r67RJ7Ea9+g=",
-  "_note": "Pinned against kasm-session-runtime's v0.2.2-rc.1 tag, the same commit as pkgs/kasm-session-runtime/pin.json -- the sidebar renders that runtime's events, so bump the two together. One architecture-independent object: kasm_session_runtime/<commit>/kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>; hash = sha256-<base64 of the raw digest>."
+  "commit_id": "5ad5aacc2b546c090c7586ff83dbe3d30a1d8e7a",
+  "branch": "v0.2.86-rc.1",
+  "hash": "sha256-zktDCaBLyHqFi/V8zzC7GFGdotAIsI+53YuGf2MK9q4=",
+  "_note": "Pinned against kasm-session-runtime's v0.2.86-rc.1 tag, the same commit as pkgs/kasm-session-runtime/pin.json -- the sidebar renders that runtime's events, so bump the two together. One architecture-independent object: kasm_session_runtime/<commit>/kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>; hash = sha256-<base64 of the raw digest>."
 }

@@ -1,9 +1,9 @@
 {
-  "commit_id": "9a841b6d8e5ee0481b28456ff724570a04a9aaa3",
-  "branch": "v0.2.2-rc.1",
+  "commit_id": "5ad5aacc2b546c090c7586ff83dbe3d30a1d8e7a",
+  "branch": "v0.2.86-rc.1",
   "hashes": {
-    "x86_64-linux": "sha256-95K1toC3JXoPBDwfhiMJdXhW5bpzVlnHjDUfYi7Rxoo=",
-    "aarch64-linux": "sha256-QGEdQdF82hX/Eu34TSDNkqwhOa8xHhQQuoQAkOLYLIU="
+    "x86_64-linux": "sha256-rnKHUV1tiNIgkGRwfGIRsg7m8sJ/hEq7zg0gxmJC0PI=",
+    "aarch64-linux": "sha256-N4Ejtx+JyXpnkxE4j5fz24XZcK4S/RGl3T3yT1uBcR8="
   },
-  "_note": "Pinned against kasm-session-runtime's v0.2.2-rc.1 tag (pre-release). This tag makes the two max_tokens reply caps operator config: a max_tokens block (judge, default 2000; tools, default 500) in KASM_RUNTIME_CONFIG_FILE, or KASM_RUNTIME_MAX_TOKENS_JUDGE / KASM_RUNTIME_MAX_TOKENS_TOOLS. Both were hardcoded and sized for the local Gemma deployment; a hosted model hit the tool-call cap. Defaults unchanged, so an unconfigured run sends what it did before; the pair in force is recorded at agent.vision.max_tokens in report.json. The sidebar (pkgs/kasm-ai-runtime-sidebar) is pinned to the same commit -- bump both together. Hashes computed by downloading both published objects (curl) and taking sha256-<base64 of the raw SHA-256 digest>, the same value nix's fixed-output check computes for a fetchurl. Re-pin the same way: download kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short> and kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>, hash, update."
+  "_note": "Pinned against kasm-session-runtime's v0.2.86-rc.1 tag (pre-release). This tag makes a declared shell tool's post: failure carry the command's output (apply: postcondition N (...) did not hold within ...; output: <out>), the same capped, redacted text a success returns, so a command that exits 0 and leaves no window still tells the model why (wine-assess post-failure-output request, 2026-09-14). The nonzero-exit path already did this. Two consumer notes: the output collector keeps the head, not the tail, so lead with the explanation; and evidence.tool_result_chars (default 300) caps the trace row separately from what the model sees. The sidebar (pkgs/kasm-ai-runtime-sidebar) is pinned to the same commit -- bump both together. Hashes computed by downloading both published objects (curl) and taking sha256-<base64 of the raw SHA-256 digest>, the same value nix's fixed-output check computes for a fetchurl. Re-pin the same way: download kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short> and kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>, hash, update."
 }
