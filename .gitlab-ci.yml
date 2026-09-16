@@ -388,11 +388,16 @@ base:
       fi
       echo "rebuilding distro bases: ${reb}  (parallel=${BUILD_PARALLEL})"
       # RapidFort base: stage the credential helper on the runner (it lands in
-      # $CI_PROJECT_DIR/.rf, which is mounted into DIND at /work/.rf). Only needed
-      # when the ubuntu base is a private image AND ubuntu is being rebuilt.
+      # $CI_PROJECT_DIR/.rf, which is mounted into DIND at /work/.rf). Needed
+      # whenever the ubuntu base is a private image, whichever distros are in
+      # the set: nix-base-build.sh's registry_auth_setup runs the helper login
+      # unconditionally when RF_ROOT_URL is set, so a resolute-only staleness
+      # rebuild (ubuntu:26.04 moved upstream, no re-pin in flight) died at
+      # "[rf-login] credential helper not found" on 2026-09-16 (pipeline
+      # 2853305609) while the ubuntu-gated fetch below sat idle. Same gate as
+      # base-check's.
       case "${NIX_BASE_SRC_UBUNTU:-}" in
-        */*/*) case " ${reb} " in *" ubuntu "*)
-                 bash ci-scripts/rf-fetch-credhelper.sh ;; esac ;;
+        */*/*) bash ci-scripts/rf-fetch-credhelper.sh ;;
       esac
       bash ci-scripts/${NIX_RUNNER_SHIM} "nixci-${CI_JOB_NAME}-${CI_PIPELINE_ID}" \
         -v "$DIND_ROOT/containers:/var/lib/containers" \
