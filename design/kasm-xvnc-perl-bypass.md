@@ -162,6 +162,10 @@ readiness poll by letting the supervisor own liveness. The remaining ~250 ms
 to first-listen is inside Xvnc itself (extension loading, framebuffer alloc);
 sub-100 ms is unrealistic without modifying Xvnc.
 
+> Update 2026-09-17: upstream did modify Xvnc — KasmVNC VNC-574 removes four
+> recursive `/usr/lib` walks from FFmpeg loading at startup. Adopted, with
+> like-for-like measurements, in `design/vnc-574-adoption.md`.
+
 ## Pointers
 
 - `src/common/kasm-go/cmd/kasm-xvnc/main.go` — the launcher (header comment
