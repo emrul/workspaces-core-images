@@ -16,3 +16,6 @@ SCRIPT_PATH="$(realpath $SCRIPT_PATH)"
 mkdir -p /usr/share/extra/icons/
 cp ${SCRIPT_PATH}/gamepad.svg /usr/share/extra/icons/gamepad.svg
 echo "${BRANCH}:${COMMIT_ID}" > $STARTUPDIR/gamepad/kasm_gamepad_server.version
+
+# Avoid extracting the bundled runtime at every container start.
+kasm-unpack-staticx "$STARTUPDIR/gamepad/kasm_gamepad_server"

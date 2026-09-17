@@ -42,6 +42,9 @@ mkdir -p $STARTUPDIR/printer
 wget -qO- https://kasmweb-build-artifacts.s3.amazonaws.com/kasm_printer_service/${COMMIT_ID}/kasm_printer_service_${ARCH}_${BRANCH}.${COMMIT_ID_SHORT}.tar.gz | tar -xvz -C $STARTUPDIR/printer/
 echo "${BRANCH}:${COMMIT_ID}" > $STARTUPDIR/printer/kasm_printer.version
 
+# Avoid extracting the bundled runtime at every container start.
+kasm-unpack-staticx "$STARTUPDIR/printer/kasm_printer_service"
+
 
 cat >/usr/bin/printer_ready <<EOL
 #!/usr/bin/env bash

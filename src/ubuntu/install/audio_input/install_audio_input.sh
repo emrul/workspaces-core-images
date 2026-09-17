@@ -44,4 +44,7 @@ exec env LD_PRELOAD=/usr/local/lib/libreadline_compat.so \
 WRAPPER
   chmod +x $STARTUPDIR/audio_input/kasm_audio_input_server
   chmod +x $STARTUPDIR/audio_input/kasm_audio_input_server.bin
+  kasm-unpack-staticx "$STARTUPDIR/audio_input/kasm_audio_input_server.bin"
+else
+  kasm-unpack-staticx "$STARTUPDIR/audio_input/kasm_audio_input_server"
 fi

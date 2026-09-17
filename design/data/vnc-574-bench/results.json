@@ -1,0 +1,412 @@
+{
+ "stock-develop": [
+  {
+   "listen": 1.6,
+   "desktop": 11.666
+  },
+  {
+   "listen": 1.582,
+   "desktop": 11.036
+  },
+  {
+   "listen": 1.556,
+   "desktop": 11.699
+  },
+  {
+   "listen": 1.415,
+   "desktop": 11.47
+  },
+  {
+   "listen": 1.484,
+   "desktop": 11.595
+  },
+  {
+   "listen": 1.601,
+   "desktop": 12.202
+  },
+  {
+   "listen": 1.486,
+   "desktop": 12.205
+  },
+  {
+   "listen": 1.353,
+   "desktop": 11.52
+  },
+  {
+   "listen": 1.537,
+   "desktop": 10.238
+  },
+  {
+   "listen": 1.833,
+   "desktop": 12.99
+  },
+  {
+   "listen": 2.001,
+   "desktop": 13.204
+  },
+  {
+   "listen": 1.433,
+   "desktop": 12.883
+  },
+  {
+   "listen": 1.483,
+   "desktop": 13.014
+  },
+  {
+   "listen": 1.961,
+   "desktop": 13.255
+  },
+  {
+   "listen": 1.586,
+   "desktop": 12.61
+  },
+  {
+   "listen": 1.67,
+   "desktop": 12.387
+  },
+  {
+   "listen": 1.699,
+   "desktop": 12.114
+  },
+  {
+   "listen": 1.481,
+   "desktop": 12.914
+  },
+  {
+   "listen": 1.693,
+   "desktop": 12.293
+  },
+  {
+   "listen": 1.631,
+   "desktop": 12.414
+  }
+ ],
+ "stock-vnc574": [
+  {
+   "listen": 1.471,
+   "desktop": 4.205
+  },
+  {
+   "listen": 1.097,
+   "desktop": 4.015
+  },
+  {
+   "listen": 0.957,
+   "desktop": 4.004
+  },
+  {
+   "listen": 0.981,
+   "desktop": 4.464
+  },
+  {
+   "listen": 1.073,
+   "desktop": 4.33
+  },
+  {
+   "listen": 1.177,
+   "desktop": 4.068
+  },
+  {
+   "listen": 1.111,
+   "desktop": 3.814
+  },
+  {
+   "listen": 0.93,
+   "desktop": 3.933
+  },
+  {
+   "listen": 0.931,
+   "desktop": 4.477
+  },
+  {
+   "listen": 1.33,
+   "desktop": 4.272
+  },
+  {
+   "listen": 1.083,
+   "desktop": 4.255
+  },
+  {
+   "listen": 0.96,
+   "desktop": 3.661
+  },
+  {
+   "listen": 1.061,
+   "desktop": 3.817
+  },
+  {
+   "listen": 1.275,
+   "desktop": 4.02
+  },
+  {
+   "listen": 1.249,
+   "desktop": 4.547
+  },
+  {
+   "listen": 0.977,
+   "desktop": 3.896
+  },
+  {
+   "listen": 1.196,
+   "desktop": 3.929
+  },
+  {
+   "listen": 0.845,
+   "desktop": 3.767
+  },
+  {
+   "listen": 0.994,
+   "desktop": 3.984
+  },
+  {
+   "listen": 1.108,
+   "desktop": 3.758
+  }
+ ],
+ "ours-base": [
+  {
+   "listen": 0.426,
+   "desktop": 4.253
+  },
+  {
+   "listen": 0.459,
+   "desktop": 4.109
+  },
+  {
+   "listen": 0.463,
+   "desktop": 3.897
+  },
+  {
+   "listen": 0.268,
+   "desktop": 4.204
+  },
+  {
+   "listen": 0.76,
+   "desktop": 4.208
+  },
+  {
+   "listen": 0.356,
+   "desktop": 3.992
+  },
+  {
+   "listen": 0.474,
+   "desktop": 4.208
+  },
+  {
+   "listen": 0.475,
+   "desktop": 4.338
+  },
+  {
+   "listen": 0.729,
+   "desktop": 4.668
+  },
+  {
+   "listen": 0.388,
+   "desktop": 4.331
+  },
+  {
+   "listen": 0.333,
+   "desktop": 4.565
+  },
+  {
+   "listen": 0.773,
+   "desktop": 5.624
+  },
+  {
+   "listen": 0.47,
+   "desktop": 4.404
+  },
+  {
+   "listen": 0.759,
+   "desktop": 4.76
+  },
+  {
+   "listen": 0.787,
+   "desktop": 4.638
+  },
+  {
+   "listen": 0.76,
+   "desktop": 4.522
+  },
+  {
+   "listen": 0.401,
+   "desktop": 4.266
+  },
+  {
+   "listen": 0.504,
+   "desktop": 4.456
+  },
+  {
+   "listen": 0.39,
+   "desktop": 4.158
+  },
+  {
+   "listen": 0.378,
+   "desktop": 4.1
+  }
+ ],
+ "ours-vnc574": [
+  {
+   "listen": 0.377,
+   "desktop": 2.787
+  },
+  {
+   "listen": 0.58,
+   "desktop": 2.985
+  },
+  {
+   "listen": 0.435,
+   "desktop": 3.22
+  },
+  {
+   "listen": 0.564,
+   "desktop": 2.562
+  },
+  {
+   "listen": 0.616,
+   "desktop": 3.001
+  },
+  {
+   "listen": 0.619,
+   "desktop": 3.198
+  },
+  {
+   "listen": 0.386,
+   "desktop": 2.621
+  },
+  {
+   "listen": 0.657,
+   "desktop": 3.053
+  },
+  {
+   "listen": 0.308,
+   "desktop": 2.624
+  },
+  {
+   "listen": 0.307,
+   "desktop": 2.796
+  },
+  {
+   "listen": 0.61,
+   "desktop": 2.745
+  },
+  {
+   "listen": 0.484,
+   "desktop": 2.745
+  },
+  {
+   "listen": 0.471,
+   "desktop": 2.813
+  },
+  {
+   "listen": 0.461,
+   "desktop": 2.677
+  },
+  {
+   "listen": 0.471,
+   "desktop": 2.52
+  },
+  {
+   "listen": 0.443,
+   "desktop": 2.711
+  },
+  {
+   "listen": 0.241,
+   "desktop": 2.987
+  },
+  {
+   "listen": 0.389,
+   "desktop": 3.263
+  },
+  {
+   "listen": 0.437,
+   "desktop": 3.397
+  },
+  {
+   "listen": 0.397,
+   "desktop": 2.855
+  }
+ ],
+ "ours-nix-minimal": [
+  {
+   "listen": 0.397,
+   "desktop": 4.323
+  },
+  {
+   "listen": 0.789,
+   "desktop": 4.322
+  },
+  {
+   "listen": 0.295,
+   "desktop": 4.373
+  },
+  {
+   "listen": 0.36,
+   "desktop": 4.334
+  },
+  {
+   "listen": 0.344,
+   "desktop": 4.317
+  },
+  {
+   "listen": 0.379,
+   "desktop": 4.486
+  },
+  {
+   "listen": 0.439,
+   "desktop": 4.5
+  },
+  {
+   "listen": 0.465,
+   "desktop": 4.257
+  },
+  {
+   "listen": 0.422,
+   "desktop": 4.495
+  },
+  {
+   "listen": 0.751,
+   "desktop": 4.714
+  },
+  {
+   "listen": 0.485,
+   "desktop": 3.978
+  },
+  {
+   "listen": 0.448,
+   "desktop": 4.189
+  },
+  {
+   "listen": 0.222,
+   "desktop": 4.297
+  },
+  {
+   "listen": 0.721,
+   "desktop": 4.694
+  },
+  {
+   "listen": 0.684,
+   "desktop": 4.694
+  },
+  {
+   "listen": 0.437,
+   "desktop": 4.711
+  },
+  {
+   "listen": 0.336,
+   "desktop": 4.61
+  },
+  {
+   "listen": 0.475,
+   "desktop": 4.804
+  },
+  {
+   "listen": 0.789,
+   "desktop": 4.73
+  },
+  {
+   "listen": 0.472,
+   "desktop": 4.663
+  }
+ ]
+}

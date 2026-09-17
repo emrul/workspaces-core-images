@@ -92,6 +92,9 @@ wget -q  https://kasmweb-build-artifacts.s3.amazonaws.com/kasm_smartcard_bridge/
 tar -xvzf kasm_smartcard_bridge_${ARCH}_${BRANCH}.${COMMIT_ID_SHORT}.tar.gz -C $STARTUPDIR/smartcard/
 echo "${BRANCH}:${COMMIT_ID}" > $STARTUPDIR/smartcard/kasm_smartcard_bridge.version
 
+# Avoid extracting the bundled runtime at every container start.
+kasm-unpack-staticx "$STARTUPDIR/smartcard/kasm_smartcard_bridge"
+
 # register and pin the packages for Kali Linux to prevent
 # the installation of the version of the packages that use a different
 #client protocol version than the one used by the kasm-smartcard-bridge
