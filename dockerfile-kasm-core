@@ -29,7 +29,10 @@ RUN GOOS=linux GOARCH=${TARGETARCH} CGO_ENABLED=0 \
     -o /out/kasm-upload-server ./cmd/kasm-upload-server && \
     GOOS=linux GOARCH=${TARGETARCH} CGO_ENABLED=0 \
     go build -trimpath -tags 'osusergo,netgo' -ldflags '-s -w' \
-    -o /out/kasm-xvnc ./cmd/kasm-xvnc
+    -o /out/kasm-xvnc ./cmd/kasm-xvnc && \
+    GOOS=linux GOARCH=${TARGETARCH} CGO_ENABLED=0 \
+    go build -trimpath -tags 'osusergo,netgo' -ldflags '-s -w' \
+    -o /out/kasm-unpack-staticx ./cmd/kasm-unpack-staticx
 
 #### Build Stage ####
 FROM $BASE_IMAGE AS base_layer
@@ -86,6 +89,10 @@ ARG INCLUDE_PRINTER=1
 ARG INCLUDE_SMARTCARD=1
 ### Install common tools
 COPY ./src/ubuntu/install/tools $INST_SCRIPTS/tools/
+# Build-time only: the StaticX helper installers below call this to unpack
+# their bundled runtime once, instead of on every container start.
+# cleanup.sh removes it from the final image.
+COPY --from=kasmgo_builder /out/kasm-unpack-staticx /usr/local/bin/kasm-unpack-staticx
 RUN bash $INST_SCRIPTS/tools/install_tools.sh && rm -rf $INST_SCRIPTS/tools/
 
 ### Copy over the maximization script to our startup dir for use by app images.

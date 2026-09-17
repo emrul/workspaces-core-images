@@ -13,6 +13,10 @@ elif [[ "${DISTRO}" == @(debian|kali|parrotos7|ubuntu) ]]; then
   apt-get autoclean -y
 fi
 
+# kasm-unpack-staticx is a build-time tool: the helper installers have
+# already run by now, and nothing at runtime unpacks StaticX bundles.
+rm -f /usr/local/bin/kasm-unpack-staticx
+
 # Phase 6.7 — drop perl runtime by default. Nothing in the boot path
 # needs perl: container-init's kasm-xvnc execs Xvnc directly,
 # bypassing KasmVNC's perl `vncserver` wrapper (Phase 4.4); kasmvncpasswd
