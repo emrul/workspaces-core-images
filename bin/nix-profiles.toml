@@ -185,6 +185,9 @@ pkgs = [
     "path:/config/kasm-overlay#winetricks-headless",
     "nixpkgs#dxvk",
     "nixpkgs#vkd3d-proton",
+    # mesa: the software GL/Vulkan stack (llvmpipe, lavapipe) the app launchers
+    # default to; the store wine cannot use the host's mesa (different glibc).
+    "nixpkgs#mesa",
 ]
 platforms = ["amd64"]
 fat_store = false

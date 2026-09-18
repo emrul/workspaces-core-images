@@ -30,6 +30,7 @@ let
   lib = prev.lib;
   slug = pin.slug;
   wine = final.${pin.wine};
+  mesa = prev.mesa;
   copyOnStart = pin.copy_on_start or [ ];
   appDir = "share/wine-apps/${slug}";
   launcher = prev.writeShellScript "wine-app-${slug}" ''
@@ -65,6 +66,16 @@ let
     fi
     export WINEPREFIX="$DST"
     export WINEDEBUG="''${WINEDEBUG:--all}"
+    # Graphics. The store wine's glvnd and Vulkan loader cannot use the host's mesa
+    # (a different glibc; seen in a Kasm session as "couldn't initialize OpenGL" and
+    # DXVK "Failed to create Vulkan instance"), so default to nixpkgs mesa's software
+    # stack: llvmpipe for GL, lavapipe for Vulkan. A GPU launcher that sets these
+    # first (kasm-nix's nix-gpu-run) wins; kasm-nix's nix-launch has already cleared
+    # the image's LD_LIBRARY_PATH before we get here.
+    export VK_ICD_FILENAMES="''${VK_ICD_FILENAMES:-${mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json}"
+    export __EGL_VENDOR_LIBRARY_DIRS="''${__EGL_VENDOR_LIBRARY_DIRS:-${mesa}/share/glvnd/egl_vendor.d}"
+    export LIBGL_DRIVERS_PATH="''${LIBGL_DRIVERS_PATH:-${mesa}/lib/dri}"
+    export LD_LIBRARY_PATH="${mesa}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     exec ${wine}/bin/wine ${lib.escapeShellArg pin.entrypoint} "$@"
   '';
 in
