@@ -75,7 +75,7 @@ prev.stdenvNoCC.mkDerivation {
     url = pin.url;
     hash = pin.hash;
   };
-  nativeBuildInputs = [ prev.zstd ];
+  nativeBuildInputs = [ prev.zstd prev.icoutils prev.imagemagick ];  # icoutils: wrestool only
   dontUnpack = true;
   dontBuild = true;
   installPhase = ''
@@ -87,15 +87,45 @@ prev.stdenvNoCC.mkDerivation {
     sed "s#@out@#$out#g" ${launcher} > $out/bin/wine-app-${slug}
     chmod 755 $out/bin/wine-app-${slug}
     cp ${prev.writeText "app.json" (builtins.toJSON pin)} $out/${appDir}/app.json
+
+    # The app's own icon, from the entrypoint's PE resources (wrestool for the icon
+    # group, ImageMagick for the frames): the widest frame, resized into hicolor PNGs. Falls back to
+    # the generic wine glass if the exe carries none. The entrypoint is a Windows
+    # path under C:, mapped onto drive_c.
+    exe="$out/${appDir}/prefix/drive_c/$(printf '%s' ${lib.escapeShellArg pin.entrypoint} | sed -e 's#^[A-Za-z]:\\##' -e 's#\\#/#g')"
+    icon=wine
+    if [ -f "$exe" ]; then
+      # (explicit finds, not globs: the stdenv builder runs with nullglob, so an
+      # unmatched icons/*.png would silently become a listing of the build dir)
+      mkdir -p icons
+      wrestool -x -t14 -o icons "$exe" 2>/dev/null || true
+      first="$(find icons -maxdepth 1 -name '*.ico' | sort | head -n1)"
+      if [ -n "$first" ]; then
+        # ImageMagick reads the ICO's frames itself (icotool rejects some layouts,
+        # e.g. Affinity's, over a bitmap size check); take the widest frame.
+        idx="$(magick identify -format '%p %w\n' "$first" 2>/dev/null | sort -k2 -rn | head -n1 | cut -d' ' -f1)"
+        if [ -n "$idx" ]; then
+          for size in 256 128 64 48 32; do
+            mkdir -p "$out/share/icons/hicolor/''${size}x''${size}/apps"
+            magick "$first[$idx]" -resize "''${size}x''${size}" "$out/share/icons/hicolor/''${size}x''${size}/apps/wine-app-${slug}.png"
+          done
+          icon=wine-app-${slug}
+        fi
+      fi
+    fi
+    echo "icon: $icon"
+
+    exeBase="$(basename "$exe" | tr 'A-Z' 'a-z')"
     cat > $out/share/applications/wine-app-${slug}.desktop <<DESKTOP
     [Desktop Entry]
     Type=Application
     Name=${pin.name}
     Comment=${pin.name} (Windows app under wine, packaged by wine-assess)
     Exec=wine-app-${slug} %F
-    Icon=wine
+    Icon=$icon
     Terminal=false
     Categories=Wine;
+    StartupWMClass=$exeBase
     DESKTOP
     runHook postInstall
   '';

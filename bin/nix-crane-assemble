@@ -228,6 +228,13 @@ ensure_crane
 ensure_registry
 
 # ── fat store: scratch + all store partitions + full meta (mountable /store) ─
+# SKIP_FAT_STORE=1 assembles only the per-app (and resolute) images: for a
+# local iteration on one profile the fat store is a 12 GB image plus its
+# registry copy that nothing consumes, and on a full docker host that is the
+# difference between fitting and filling the disk (linbox, 2026-09-18).
+if [[ "${SKIP_FAT_STORE:-0}" == 1 ]]; then
+  log "SKIP_FAT_STORE=1: not assembling the fat store ${FAT_TAG}"
+else
 log "assembling fat store ${FAT_TAG}"
 fat_args=()
 det_tar base store base && fat_args+=( -f "${BLOBS}/base.tar" )
@@ -273,6 +280,8 @@ fi
 "${CONTAINER_CLI}" pull ${TLS_FLAG} "${fat_ref}" >/dev/null
 "${CONTAINER_CLI}" tag "${fat_ref}" "${FAT_TAG}"
 log "fat store ready: ${FAT_TAG}"
+
+fi
 
 # ── per-app: base + its store subset + meta + symlink + wiring + ENV ────────
 # Parallel: shared partitions are already tarred (fat step above); each worker

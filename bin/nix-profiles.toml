@@ -181,7 +181,8 @@ pkgs = ["nixpkgs#kdePackages.angelfish"]
 [profiles.wine]
 pkgs = [
     "path:/config/kasm-overlay#kasm-wine",
-    "nixpkgs#winetricks",
+    # winetricks without its .desktop entry (a tool, not an app on the desktop).
+    "path:/config/kasm-overlay#winetricks-headless",
     "nixpkgs#dxvk",
     "nixpkgs#vkd3d-proton",
 ]
@@ -193,6 +194,9 @@ fat_store = false
 # `requires = ["wine"]` subtracts the wine closure, so this image adds one layer with
 # just the prefix on top of the shared wine layer. First of the Wine app profiles.
 [profiles.wine-app-affinity]
+# seccomp: bwrap -- as a Resolute desktop image (multi-store), the same reason as
+#           tracelabs: Ubuntu 26.04's GTK icon loading decodes inside bwrap.
+seccomp   = "bwrap"
 pkgs      = ["path:/config/kasm-overlay#wine-app-affinity"]
 requires  = ["wine"]
 kasm_name = "affinity-wine"

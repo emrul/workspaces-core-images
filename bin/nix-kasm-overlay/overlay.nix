@@ -128,6 +128,15 @@ in
     pin = loadPin "kasm-wine" ./pkgs/kasm-wine;
   };
 
+  # winetricks for the wine profile, minus its desktop entry: it is a tool the app
+  # packages' bakes already ran, not something a session user launches, and the
+  # Resolute desktop would otherwise show it next to the apps (seen 2026-09-18).
+  winetricks-headless = prev.winetricks.overrideAttrs (old: {
+    postInstall = (old.postInstall or "") + ''
+      rm -rf $out/share/applications $out/share/icons
+    '';
+  });
+
   # Wine apps from wine-assess: one attribute per pkgs/wine-apps/<slug>/pin.json,
   # all built by pkgs/wine-app/package.nix (the app's baked prefix as a fixed-output
   # fetch; see that file). Named wine-app-<slug>; each is a profile that requires the
