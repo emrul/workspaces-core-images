@@ -199,6 +199,25 @@ func hostname() string            { h, _ := os.Hostname(); return h }
 // effective config + perl-wrapper defaults; we hard-code the
 // observed values. Inputs are factored out so tests can pin every
 // conditional flag independently of the host filesystem.
+// defaultSidebarRoot is where named sidebars live, one web root each
+// (<root>/<name>/www). Shared by convention with kasm-setup and with
+// kasm-session-runtime's web/sidebar/install.sh --name.
+const defaultSidebarRoot = "/usr/share/kasmvnc-sidebars"
+
+// validSidebarName reports whether name matches [a-z0-9][a-z0-9_-]*. The name
+// becomes a path segment, so nothing that could leave the sidebar root.
+func validSidebarName(name string) bool {
+	for i, c := range name {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case (c == '_' || c == '-') && i > 0:
+		default:
+			return false
+		}
+	}
+	return name != ""
+}
+
 func buildXvncArgs(env map[string]string, arch string, fileExists func(string) bool, host func() string) ([]string, []string, error) {
 	display := env["DISPLAY"]
 	if display == "" {
@@ -277,8 +296,30 @@ func buildXvncArgs(env map[string]string, arch string, fileExists func(string) b
 	// nothing, which the Kasm proxy reports as 502 and the user sees as a
 	// blank viewer. Logged, not silent, so the fallback is visible in the
 	// container log.
+	//
+	// KASM_RUNTIME_SIDEBAR=<name> is the named form of the same choice
+	// (kasm-session-runtime docs/sidebar-hosting.md section 2): it selects
+	// <sidebarRoot>/<name>, one web root per installed sidebar, and wins over
+	// KASM_VNC_PATH when it resolves. It is resolved here rather than by
+	// kasm-setup because the two are separate units and one cannot export
+	// into the other's environment. A malformed name, or one with no www/,
+	// is logged and ignored, so a typo gives the stock viewer.
 	const defaultKasmvncPath = "/usr/share/kasmvnc"
 	kasmvncPath := env["KASM_VNC_PATH"]
+	if name := env["KASM_RUNTIME_SIDEBAR"]; name != "" {
+		root := env["KASM_SIDEBAR_ROOT"]
+		if root == "" {
+			root = defaultSidebarRoot
+		}
+		switch {
+		case !validSidebarName(name):
+			fmt.Fprintf(os.Stderr, "kasm-xvnc: KASM_RUNTIME_SIDEBAR=%q is not a valid name ([a-z0-9][a-z0-9_-]*) -- ignoring it\n", name)
+		case !fileExists(root + "/" + name + "/www"):
+			fmt.Fprintf(os.Stderr, "kasm-xvnc: KASM_RUNTIME_SIDEBAR=%s has no web root at %s/%s/www -- ignoring it\n", name, root, name)
+		default:
+			kasmvncPath = root + "/" + name
+		}
+	}
 	if kasmvncPath == "" {
 		kasmvncPath = defaultKasmvncPath
 	} else if !fileExists(kasmvncPath+"/www") && fileExists(defaultKasmvncPath+"/www") {

@@ -125,7 +125,35 @@ chown -h "$KASM_OS_USER:$KASM_OS_GROUP" "$KASM_OS_HOME/Desktop/Uploads" "$KASM_O
 # blank one. Writable copy, not a store path, because 2c below rewrites
 # the Downloads symlink under whichever root is active (same reason the
 # stock www is a copy in the resolute image).
-if [ "${KASM_VNC_PATH:-}" = "/usr/share/kasmvnc-agent" ] && [ ! -d /usr/share/kasmvnc-agent/www ]; then
+#
+# Named sidebars (kasm-session-runtime docs/sidebar-hosting.md section 2):
+# KASM_RUNTIME_SIDEBAR=<name> selects /usr/share/kasmvnc-sidebars/<name>, one
+# web root per sidebar, so an image can carry several side by side.
+# "default" is the bundled sidebar and is built here on first request, exactly
+# as kasmvnc-agent is. Any other name is a downstream's own bundle, which its
+# image installs at build time (install.sh --name <name>); nothing is built
+# for it here. kasm-xvnc resolves the name itself (separate unit, separate
+# environment) with the same rules, so the two agree on which root is live.
+sidebar_root="${KASM_SIDEBAR_ROOT:-/usr/share/kasmvnc-sidebars}"
+active_vnc_path="${KASM_VNC_PATH:-}"
+materialise=""
+case "${KASM_RUNTIME_SIDEBAR:-}" in
+    "") ;;
+    [!a-z0-9]*|*[!a-z0-9_-]*)
+        echo "kasm-setup: KASM_RUNTIME_SIDEBAR='${KASM_RUNTIME_SIDEBAR}' is not a valid name ([a-z0-9][a-z0-9_-]*) -- ignoring it" >&2 ;;
+    default)
+        materialise="$sidebar_root/default" ;;
+    *)
+        [ -d "$sidebar_root/$KASM_RUNTIME_SIDEBAR/www" ] \
+            || echo "kasm-setup: KASM_RUNTIME_SIDEBAR=$KASM_RUNTIME_SIDEBAR is not installed under $sidebar_root (installed: $(ls "$sidebar_root" 2>/dev/null | tr '\n' ' ')) -- kasm-xvnc will serve the stock viewer" >&2 ;;
+esac
+# The legacy root is still built for KASM_VNC_PATH=/usr/share/kasmvnc-agent,
+# unless a named sidebar that exists is going to be served instead.
+if [ -z "$materialise" ] && [ "${KASM_VNC_PATH:-}" = "/usr/share/kasmvnc-agent" ] \
+   && ! { [ -n "${KASM_RUNTIME_SIDEBAR:-}" ] && [ -d "$sidebar_root/${KASM_RUNTIME_SIDEBAR:-}/www" ]; }; then
+    materialise=/usr/share/kasmvnc-agent
+fi
+if [ -n "$materialise" ] && [ ! -d "$materialise/www" ]; then
     sb=/usr/local/share/kasm-ai-runtime-sidebar
     if [ ! -x "$sb/install.sh" ]; then
         for d in /nix/store/*-kasm-ai-runtime-sidebar-*/share/kasm-ai-runtime-sidebar; do
@@ -133,28 +161,34 @@ if [ "${KASM_VNC_PATH:-}" = "/usr/share/kasmvnc-agent" ] && [ ! -d /usr/share/ka
         done
     fi
     if [ -x "$sb/install.sh" ] && [ -d /usr/share/kasmvnc/www ]; then
-        if "$sb/install.sh" /usr/share/kasmvnc/www /usr/share/kasmvnc-agent/www "$sb"; then
-            chown -R 0:0 /usr/share/kasmvnc-agent
-            chmod -R og-w /usr/share/kasmvnc-agent
-            mkdir -p /usr/share/kasmvnc-agent/www/Downloads
-            chown -R 1000:0 /usr/share/kasmvnc-agent/www/Downloads
-            echo "kasm-setup: agent sidebar web root materialised at /usr/share/kasmvnc-agent/www"
+        if "$sb/install.sh" /usr/share/kasmvnc/www "$materialise/www" "$sb"; then
+            chown -R 0:0 "$materialise"
+            chmod -R og-w "$materialise"
+            mkdir -p "$materialise/www/Downloads"
+            chown -R 1000:0 "$materialise/www/Downloads"
+            echo "kasm-setup: sidebar web root materialised at $materialise/www"
         else
             echo "kasm-setup: sidebar install.sh failed -- kasm-xvnc will serve the stock viewer" >&2
-            rm -rf /usr/share/kasmvnc-agent/www
+            rm -rf "$materialise/www"
         fi
     else
-        echo "kasm-setup: KASM_VNC_PATH=/usr/share/kasmvnc-agent requested but no kasm-ai-runtime-sidebar install.sh under /usr/local/share or the nix store -- kasm-xvnc will serve the stock viewer" >&2
+        echo "kasm-setup: a sidebar was requested but there is no kasm-ai-runtime-sidebar install.sh under /usr/local/share or the nix store -- kasm-xvnc will serve the stock viewer" >&2
     fi
 fi
+# The root kasm-xvnc will serve, for 2c: a named sidebar that exists wins,
+# otherwise KASM_VNC_PATH as given.
+case "${KASM_RUNTIME_SIDEBAR:-}" in
+    ""|[!a-z0-9]*|*[!a-z0-9_-]*) ;;
+    *) [ -d "$sidebar_root/$KASM_RUNTIME_SIDEBAR/www" ] && active_vnc_path="$sidebar_root/$KASM_RUNTIME_SIDEBAR" ;;
+esac
 
 # 2c) RX-panel Downloads symlink. The KasmVNC HTTP server serves
 # /Downloads/ from $KASM_VNC_PATH/www/Downloads — the noVNC client
 # reads it to render the in-browser file list. Point it at the
 # active user's home so files written there show up in the RX UI.
-if [ -n "${KASM_VNC_PATH:-}" ] && [ -d "$KASM_VNC_PATH/www/Downloads" ]; then
-    rm -f "$KASM_VNC_PATH/www/Downloads/Downloads"
-    ln -sfn "$KASM_OS_HOME/Downloads" "$KASM_VNC_PATH/www/Downloads/Downloads"
+if [ -n "$active_vnc_path" ] && [ -d "$active_vnc_path/www/Downloads" ]; then
+    rm -f "$active_vnc_path/www/Downloads/Downloads"
+    ln -sfn "$KASM_OS_HOME/Downloads" "$active_vnc_path/www/Downloads/Downloads"
 fi
 
 # 3) Session D-Bus. Spawn dbus-launch AS the OS user — XFCE's

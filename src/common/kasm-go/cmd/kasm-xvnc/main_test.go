@@ -333,3 +333,46 @@ func TestBuildXvncArgsFallsBackWhenTheRequestedWebRootIsMissing(t *testing.T) {
 		})
 	}
 }
+
+// KASM_RUNTIME_SIDEBAR=<name> selects <root>/<name> when that web root exists
+// and wins over KASM_VNC_PATH; a malformed or uninstalled name is ignored, so
+// the session gets whatever it would have had without the variable.
+func TestBuildXvncArgsSelectsANamedSidebar(t *testing.T) {
+	const stock = "/usr/share/kasmvnc/www"
+	cases := []struct {
+		name    string
+		env     map[string]string
+		present []string
+		want    string
+	}{
+		{"installed name", map[string]string{"KASM_RUNTIME_SIDEBAR": "default"},
+			[]string{"/usr/share/kasmvnc-sidebars/default/www", stock}, "/usr/share/kasmvnc-sidebars/default/www"},
+		{"second sidebar beside it", map[string]string{"KASM_RUNTIME_SIDEBAR": "acme_2-x"},
+			[]string{"/usr/share/kasmvnc-sidebars/default/www", "/usr/share/kasmvnc-sidebars/acme_2-x/www", stock}, "/usr/share/kasmvnc-sidebars/acme_2-x/www"},
+		{"name wins over KASM_VNC_PATH", map[string]string{"KASM_RUNTIME_SIDEBAR": "default", "KASM_VNC_PATH": "/usr/share/kasmvnc-agent"},
+			[]string{"/usr/share/kasmvnc-sidebars/default/www", "/usr/share/kasmvnc-agent/www", stock}, "/usr/share/kasmvnc-sidebars/default/www"},
+		{"custom root", map[string]string{"KASM_RUNTIME_SIDEBAR": "default", "KASM_SIDEBAR_ROOT": "/opt/sb"},
+			[]string{"/opt/sb/default/www", stock}, "/opt/sb/default/www"},
+		{"not installed", map[string]string{"KASM_RUNTIME_SIDEBAR": "nope"},
+			[]string{"/usr/share/kasmvnc-sidebars/default/www", stock}, stock},
+		{"not installed keeps KASM_VNC_PATH", map[string]string{"KASM_RUNTIME_SIDEBAR": "nope", "KASM_VNC_PATH": "/usr/share/kasmvnc-agent"},
+			[]string{"/usr/share/kasmvnc-agent/www", stock}, "/usr/share/kasmvnc-agent/www"},
+		{"traversal", map[string]string{"KASM_RUNTIME_SIDEBAR": "../kasmvnc-agent"},
+			[]string{"/usr/share/kasmvnc-agent/www", stock}, stock},
+		{"leading hyphen", map[string]string{"KASM_RUNTIME_SIDEBAR": "-x"},
+			[]string{"/usr/share/kasmvnc-sidebars/-x/www", stock}, stock},
+		{"uppercase", map[string]string{"KASM_RUNTIME_SIDEBAR": "Default"},
+			[]string{"/usr/share/kasmvnc-sidebars/Default/www", stock}, stock},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args, _, err := buildXvncArgs(tc.env, "amd64", fakeStat(tc.present...), fakeHost)
+			if err != nil {
+				t.Fatalf("buildXvncArgs: %v", err)
+			}
+			if !hasFlagValue(args, "-httpd", tc.want) {
+				t.Errorf("-httpd = %v, want %s", args, tc.want)
+			}
+		})
+	}
+}
