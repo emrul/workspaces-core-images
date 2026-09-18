@@ -1,0 +1,7 @@
+#!/bin/sh
+# wine-app-affinity-launch -- the single-app image's entry for Affinity (a wine-assess
+# packaged Windows app: wine-assess/docs/wine-nix-packaging.md). The profile's own
+# launcher materialises the app's prefix under $HOME on first run and execs wine;
+# nix-launch supplies the env a Nix-built GUI app needs inside KasmVNC.
+set -u
+exec /usr/local/bin/nix-launch /nix/var/nix/profiles/wine-app-affinity/bin/wine-app-affinity "$@"

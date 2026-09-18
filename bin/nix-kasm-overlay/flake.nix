@@ -89,6 +89,13 @@
           metagoofil   = pkgs.metagoofil;
           # wine-assess's wine fork (Windows-app profiles require it). amd64 only.
           kasm-wine    = pkgs.kasm-wine;
+        }
+        # Every pkgs/wine-apps/<slug> pin, exposed as wine-app-<slug> (see overlay.nix).
+        // nixpkgs.lib.genAttrs
+          (map (slug: "wine-app-${slug}")
+            (builtins.attrNames (nixpkgs.lib.filterAttrs (n: t: t == "directory") (builtins.readDir ./pkgs/wine-apps))))
+          (name: pkgs.${name})
+        // {
           default      = pkgs.chrome;
         });
     };

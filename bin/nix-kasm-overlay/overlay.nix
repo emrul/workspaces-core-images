@@ -128,6 +128,13 @@ in
     pin = loadPin "kasm-wine" ./pkgs/kasm-wine;
   };
 
+  # Wine apps from wine-assess: one attribute per pkgs/wine-apps/<slug>/pin.json,
+  # all built by pkgs/wine-app/package.nix (the app's baked prefix as a fixed-output
+  # fetch; see that file). Named wine-app-<slug>; each is a profile that requires the
+  # wine profile the pin names.
+  # (wineApps is spliced in below, after the attribute set, because a `//` inside a
+  # rec-less set cannot refer to its own siblings: see the end of this file.)
+
   # Kind B (from scratch): Trace Labs OSINT tools absent from nixpkgs. Each is a
   # `{ prev }:` derivation pinned to an upstream tag. TraceLabs-unique (excluded
   # from the fat store); no committed pin.json — the tag is pinned in-package.
@@ -202,3 +209,16 @@ in
     '';
   };
 }
+// (
+  let
+    appsDir = ./pkgs/wine-apps;
+    slugs = builtins.attrNames (lib.filterAttrs (n: t: t == "directory") (builtins.readDir appsDir));
+  in
+  lib.listToAttrs (map (slug: {
+    name = "wine-app-${slug}";
+    value = import ./pkgs/wine-app/package.nix {
+      inherit prev final;
+      pin = loadPin "wine-app-${slug}" (appsDir + "/${slug}");
+    };
+  }) slugs)
+)

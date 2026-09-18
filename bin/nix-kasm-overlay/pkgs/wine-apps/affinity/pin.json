@@ -1,0 +1,20 @@
+{
+  "slug": "affinity",
+  "name": "Affinity",
+  "version": "20260918",
+  "url": "http://192.168.1.140:8765/affinity-20260918.tar.zst",
+  "hash": "sha256-mBUpbeBMol4EQriTdFMViZaH0x83xYMFFpm6mxgbSA4=",
+  "size": 1371178312,
+  "wine": "kasm-wine",
+  "entrypoint": "C:\\Program Files\\Affinity\\Affinity\\Affinity.exe",
+  "copy_on_start": [],
+  "verbs": ["vcrun2022", "dotnet40", "dotnet48", "d3dcompiler_47", "mfc140", "quartz", "win7"],
+  "source": {
+    "image": "wine-app-affinity:dev",
+    "digest": "sha256:748cca540786f0d631db33663f62b2adb1fbcce9316365c9d386ce058844476e",
+    "exported_by": "wine-assess containers/wine-app/export-prefix.sh",
+    "baked_under": "wine-devel 11.16 (apt), prefix reports Windows 7"
+  },
+  "updated": "2026-09-18",
+  "_note": "Stage-2 proof pin. The archive is the prefix baked into wine-assess's wine-app-affinity:dev image (docs/wine-app-image.md), exported with .update-timestamp=disable and temp dirs dropped: 4.1 GB prefix, 1.37 GB zstd. INTERIM URL: served by a python http.server on linbox from /mnt/data/wine-app-archives; the intended home is the public labs-sandbox S3 bucket once publish can upload there (see the design doc's open questions). Re-pin by re-running export-prefix.sh and copying name/size/hash from its JSON line."
+}
