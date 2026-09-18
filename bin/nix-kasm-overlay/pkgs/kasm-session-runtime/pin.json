@@ -1,9 +1,9 @@
 {
-  "commit_id": "806f812a1bf96bdc26dd655c3eaa00cfe4a29462",
-  "branch": "v0.2.96-rc.1",
+  "commit_id": "f4799a411cae562d96bda243ba56e443836edace",
+  "branch": "v0.2.102",
   "hashes": {
-    "x86_64-linux": "sha256-jXQFj+/A+Bg0LMDK3TaMl37z1ILomHFvpVaXvNTSlcw=",
-    "aarch64-linux": "sha256-0P41S8DzmRgdrNqUcIovbziwxFMy7Dw7BkHdzdY0jYo="
+    "x86_64-linux": "sha256-qd1Gq8pX02sZwZ+UJRzv9SdloHf5ek96RrmO0dkxvVI=",
+    "aarch64-linux": "sha256-MNtO16FbPB1MPpI4DBv23jftUbnUTKUjQrycfoGqZu0="
   },
-  "_note": "Pinned against kasm-session-runtime's v0.2.96-rc.1 tag (pre-release). This tag adds the human-in-the-loop channel (docs/human-in-the-loop.md): a run-scoped inbox behind KASM_RUNTIME_INBOX_TOKEN with messages, attachments, typed requests answered through the sidebar's new Inbox tab, ask_human for the agent, stop and finish_handoff control actions; launch.on_error_dialog: continue so a benign post-launch dialog opens the loop instead of ending the run (wine-assess OI-045); and the sidebar documented as two contracts (docs/sidebar-hosting.md, docs/sidebar-protocol.md). The sidebar bundle in this tag carries the Inbox tab. Nothing changes for a run without an inbox token. The sidebar (pkgs/kasm-ai-runtime-sidebar) is pinned to the same commit -- bump both together. Hashes computed by downloading both published objects (curl) and taking sha256-<base64 of the raw SHA-256 digest>, the same value nix's fixed-output check computes for a fetchurl. Re-pin the same way: download kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short> and kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>, hash, update."
+  "_note": "Pinned against kasm-session-runtime's v0.2.102 tag. Release tags no longer carry an -rc.N suffix: a release is exactly v<commit-count version>, so `branch` here is the plain version. This release adds named sidebars (that repo's docs/sidebar-hosting.md section 2): the sidebar tarball gains select.sh and install.sh --name, and a session picks a sidebar with KASM_RUNTIME_SIDEBAR=<name> (kasm-xvnc resolves it, kasm-setup builds `default` on request; KASM_VNC_PATH=/usr/share/kasmvnc-agent still works). The runtime binary itself is functionally unchanged from v0.2.96-rc.1. The sidebar (pkgs/kasm-ai-runtime-sidebar) is pinned to the same commit -- bump both together. Hashes computed by downloading both published objects (curl) and taking sha256-<base64 of the raw SHA-256 digest>, the same value nix's fixed-output check computes for a fetchurl. Re-pin the same way: download kasm-session-runtime-linux-<amd64|arm64>.<tag>.<short> and kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>, hash, update."
 }

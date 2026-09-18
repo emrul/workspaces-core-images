@@ -13,8 +13,9 @@
 #     [base] profile is closure/pin bookkeeping, not a runtime path (there is
 #     no _base profile link in a running session), and kasm-setup only falls
 #     back to the store path if the ADD is missing.
-#   - A session opts in with KASM_VNC_PATH=/usr/share/kasmvnc-agent in its
-#     environment. kasm-setup (src/common/kasm-go/scripts/kasm-setup, step 2b)
+#   - A session opts in with KASM_RUNTIME_SIDEBAR=default in its environment
+#     (named sidebars, that repo's docs/sidebar-hosting.md section 2; the older
+#     KASM_VNC_PATH=/usr/share/kasmvnc-agent still works). kasm-setup (src/common/kasm-go/scripts/kasm-setup, step 2b)
 #     then materialises that second web root at boot -- a copy of the stock
 #     www plus these assets and one line in vnc.html -- and kasm-xvnc serves it
 #     via Xvnc's -httpd. Without the variable, or if anything here is missing,
@@ -59,12 +60,12 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
     mkdir -p $out/share/kasm-ai-runtime-sidebar
     install -m0644 sidebar.js sidebar.css README.md $out/share/kasm-ai-runtime-sidebar/
-    install -m0755 install.sh $out/share/kasm-ai-runtime-sidebar/install.sh
+    install -m0755 install.sh select.sh $out/share/kasm-ai-runtime-sidebar/
     runHook postInstall
   '';
 
   meta = {
-    description = "kasm-session-runtime's in-session sidebar (KasmVNC viewer add-on), baked into every nix base image, inert until KASM_VNC_PATH selects it";
+    description = "kasm-session-runtime's in-session sidebar (KasmVNC viewer add-on), baked into every nix base image, inert until KASM_RUNTIME_SIDEBAR selects it";
     platforms = [ "x86_64-linux" "aarch64-linux" ];
   };
 }

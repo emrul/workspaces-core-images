@@ -1,6 +1,6 @@
 {
-  "commit_id": "806f812a1bf96bdc26dd655c3eaa00cfe4a29462",
-  "branch": "v0.2.96-rc.1",
-  "hash": "sha256-wXdoDg51o9QUNrTbPlsVY3vZgQPDBhjBagah4/thjXQ=",
-  "_note": "Pinned against kasm-session-runtime's v0.2.96-rc.1 tag, the same commit as pkgs/kasm-session-runtime/pin.json -- the sidebar renders that runtime's events, so bump the two together. One architecture-independent object: kasm_session_runtime/<commit>/kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>; hash = sha256-<base64 of the raw digest>."
+  "commit_id": "f4799a411cae562d96bda243ba56e443836edace",
+  "branch": "v0.2.102",
+  "hash": "sha256-4JDo42BxQzK1i2Ebiqev0NyQovbFJbf9rZ7U7QWbpjI=",
+  "_note": "Pinned against kasm-session-runtime's v0.2.102 tag, the same commit as pkgs/kasm-session-runtime/pin.json -- the sidebar renders that runtime's events, so bump the two together. One architecture-independent object: kasm_session_runtime/<commit>/kasm-ai-runtime-sidebar.tar.gz.<tag>.<short>; hash = sha256-<base64 of the raw digest>. From v0.2.102 the tarball also carries select.sh (named sidebars), which package.nix installs."
 }
