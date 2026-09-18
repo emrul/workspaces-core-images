@@ -1,0 +1,79 @@
+Subject: ElementalWarrior rtx5070ti
+Fork-Commit: 63b3b96bda5fa2f5a6ded6a5c73abe2a8ed8a281
+Source: ryzendew/Affinity-Wine-Builder patches/wine-11.12/0005-ElementalWarrior-rtx5070ti.patch (ElementalWarrior lineage)
+
+diff --git a/dlls/wined3d/adapter_gl.c b/dlls/wined3d/adapter_gl.c
+index 085c6ac48bb..3b8f259f55c 100644
+--- a/dlls/wined3d/adapter_gl.c
++++ b/dlls/wined3d/adapter_gl.c
+@@ -1298,6 +1298,12 @@ static const struct wined3d_renderer_table
+ cards_nvidia_binary[] =
+ {
+     /* Direct 3D 11 */
++    {"RTX 5090",                    CARD_NVIDIA_GEFORCE_RTX5090},
++    {"RTX 5080",                    CARD_NVIDIA_GEFORCE_RTX5080},
++    {"RTX 5070 Ti",                 CARD_NVIDIA_GEFORCE_RTX5070TI},
++    {"RTX 5070",                    CARD_NVIDIA_GEFORCE_RTX5070},
++    {"RTX 5060 Ti",                 CARD_NVIDIA_GEFORCE_RTX5060TI},
++    {"RTX 5060",                    CARD_NVIDIA_GEFORCE_RTX5060},
+     {"RTX 4090",                    CARD_NVIDIA_GEFORCE_RTX4090},
+     {"RTX 4080 SUPER",              CARD_NVIDIA_GEFORCE_RTX4080SUPER},
+     {"RTX 4080",                    CARD_NVIDIA_GEFORCE_RTX4080},
+@@ -1667,6 +1673,7 @@ cards_intel[] =
+ cards_amd_mesa[] =
+ {
+     /* Navi 4x */
++    {"gfx1201",                     CARD_AMD_RADEON_RX_NAVI_48},
+     {"gfx1200",                     CARD_AMD_RADEON_RX_NAVI_44},
+     /* Navi 2x */
+     {"rembrandt",                   CARD_AMD_RADEON_680M},
+diff --git a/dlls/wined3d/directx.c b/dlls/wined3d/directx.c
+index e75c3cf625e..d157fd528cd 100644
+--- a/dlls/wined3d/directx.c
++++ b/dlls/wined3d/directx.c
+@@ -509,6 +509,12 @@ static const struct wined3d_gpu_description gpu_description_table[] =
+     {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX4070TISUPER, "NVIDIA GeForce RTX 4070 Ti SUPER", DRIVER_NVIDIA_KEPLER, 16384},
+     {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX4080,    "NVIDIA GeForce RTX 4080",          DRIVER_NVIDIA_KEPLER,  16384},
+     {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX4080SUPER, "NVIDIA GeForce RTX 4080 SUPER",  DRIVER_NVIDIA_KEPLER,  16384},
++    {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX5090,    "NVIDIA GeForce RTX 5090",          DRIVER_NVIDIA_KEPLER,  32768},
++    {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX5080,    "NVIDIA GeForce RTX 5080",          DRIVER_NVIDIA_KEPLER,  16384},
++    {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX5070TI,  "NVIDIA GeForce RTX 5070 Ti",       DRIVER_NVIDIA_KEPLER,  16384},
++    {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX5070,    "NVIDIA GeForce RTX 5070",          DRIVER_NVIDIA_KEPLER,  12288},
++    {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX5060TI,  "NVIDIA GeForce RTX 5060 Ti",       DRIVER_NVIDIA_KEPLER,  16384},
++    {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX5060,    "NVIDIA GeForce RTX 5060",          DRIVER_NVIDIA_KEPLER,   8192},
+     {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX4090,    "NVIDIA GeForce RTX 4090",          DRIVER_NVIDIA_KEPLER,  24576},
+ 
+     /* AMD cards */
+@@ -574,6 +580,7 @@ static const struct wined3d_gpu_description gpu_description_table[] =
+     {HW_VENDOR_AMD,        CARD_AMD_RADEON_RX_NAVI_21,     "Radeon RX 6800/6800 XT / 6900 XT", DRIVER_AMD_RX,          16384},
+     {HW_VENDOR_AMD,        CARD_AMD_RADEON_680M,           "AMD Radeon(TM) Graphics",          DRIVER_AMD_RX,           8192},
+     {HW_VENDOR_AMD,        CARD_AMD_RADEON_RX_NAVI_44,     "AMD Radeon RX 9060 XT",            DRIVER_AMD_RX,           16384},
++    {HW_VENDOR_AMD,        CARD_AMD_RADEON_RX_NAVI_48,     "AMD Radeon RX 9070 XT",            DRIVER_AMD_RX,           16384},
+     {HW_VENDOR_AMD,        CARD_AMD_RADEON_PRO_V620,       "Radeon Pro V620",                  DRIVER_AMD_RX,          32768},
+     {HW_VENDOR_AMD,        CARD_AMD_RADEON_PRO_V620_VF,    "Radeon Pro V620 VF",               DRIVER_AMD_RX,          32768},
+     {HW_VENDOR_AMD,        CARD_AMD_VANGOGH,               "AMD VANGOGH",                      DRIVER_AMD_RX,           4096},
+diff --git a/dlls/wined3d/wined3d_private.h b/dlls/wined3d/wined3d_private.h
+index cb1ca037272..2f50d4a7fed 100644
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -2159,6 +2159,7 @@ enum wined3d_pci_device
+     CARD_AMD_RADEON_RX_NAVI_21      = 0x73bf,
+     CARD_AMD_RADEON_680M            = 0x1681,
+     CARD_AMD_RADEON_RX_NAVI_44      = 0x7590,
++    CARD_AMD_RADEON_RX_NAVI_48      = 0x7550,
+     CARD_AMD_RADEON_PRO_V620        = 0x73a1,
+     CARD_AMD_RADEON_PRO_V620_VF     = 0x73ae,
+     CARD_AMD_RADEON_RX_6700_XT      = 0x73df,
+@@ -2339,6 +2340,12 @@ enum wined3d_pci_device
+     CARD_NVIDIA_GEFORCE_RTX4070TISUPER = 0x2705,
+     CARD_NVIDIA_GEFORCE_RTX4080     = 0x2704,
+     CARD_NVIDIA_GEFORCE_RTX4080SUPER = 0x2702,
++    CARD_NVIDIA_GEFORCE_RTX5090     = 0x2b85,
++    CARD_NVIDIA_GEFORCE_RTX5080     = 0x2c02,
++    CARD_NVIDIA_GEFORCE_RTX5070TI   = 0x2c05,
++    CARD_NVIDIA_GEFORCE_RTX5070     = 0x2f04,
++    CARD_NVIDIA_GEFORCE_RTX5060TI   = 0x2d04,
++    CARD_NVIDIA_GEFORCE_RTX5060     = 0x2d05,
+     CARD_NVIDIA_GEFORCE_RTX4090     = 0x2684,
+ 
+     CARD_REDHAT_VIRGL               = 0x1010,

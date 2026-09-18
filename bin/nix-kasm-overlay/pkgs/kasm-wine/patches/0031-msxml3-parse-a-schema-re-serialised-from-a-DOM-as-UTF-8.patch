@@ -1,0 +1,95 @@
+Subject: msxml3: parse a schema re-serialised from a DOM as UTF-8.
+Fork-Commit: 1e3c966eeb638c48607ea6be4c2e850280472470
+
+diff --git a/dlls/msxml3/schema.c b/dlls/msxml3/schema.c
+index bceb8d097a9..edffb0f0a25 100644
+--- a/dlls/msxml3/schema.c
++++ b/dlls/msxml3/schema.c
+@@ -921,7 +921,12 @@ static xmlDocPtr create_xmldoc_for_text(BSTR xml)
+     xmlChar *str = xmlchar_from_wchar(xml);
+     xmlDocPtr doc;
+ 
+-    doc = xmlParseMemory((const char *)str, xmlStrlen(str));
++    /* The text came from get_xml on a DOM we already hold, so it still carries
++     * that document's original encoding declaration, but xmlchar_from_wchar has
++     * just converted it to UTF-8. Say so explicitly: otherwise a schema
++     * declaring, say, utf-16 makes libxml2 read UTF-8 bytes as utf-16, fail, and
++     * the caller reports E_INVALIDARG for a schema native accepts. */
++    doc = xmlReadMemory((const char *)str, xmlStrlen(str), NULL, "UTF-8", 0);
+     free(str);
+     return doc;
+ }
+diff --git a/dlls/msxml3/tests/schema.c b/dlls/msxml3/tests/schema.c
+index 50e5a743b82..12b278c15e6 100644
+--- a/dlls/msxml3/tests/schema.c
++++ b/dlls/msxml3/tests/schema.c
+@@ -1533,6 +1533,61 @@ static void test_dispex(void)
+     IXMLDOMSchemaCollection_Release(cache);
+ }
+ 
++static void test_schema_encoding_declaration(void)
++{
++    /* A schema whose declaration names an encoding other than the one the
++     * string is actually in. schema_cache_add serialises the DOM back to text
++     * and re-parses it, so the stale declaration must not decide how those
++     * bytes are read. The Office 365 Click-to-Run installer hits this with a
++     * utf-16 App-V schema. */
++    static const WCHAR xsd_utf16_decl[] =
++        L"<?xml version=\"1.0\" encoding=\"utf-16\"?>\n"
++        L"<xs:schema xmlns:xs=\"http://www.w3.org/2001/XMLSchema\" "
++        L"targetNamespace=\"urn:test-utf16\" xmlns=\"urn:test-utf16\" "
++        L"elementFormDefault=\"qualified\">\n"
++        L"  <xs:element name=\"root\"/>\n"
++        L"</xs:schema>\n";
++    /* msxml2.h stops at version 40, and this is version 6.0 behaviour: the
++     * document and the cache must both be 6.0, as Office creates them. */
++    static const GUID clsid_domdocument60 =
++        {0x88d96a05,0xf192,0x11d4,{0xa6,0x5f,0x00,0x40,0x96,0x32,0x51,0xe5}};
++    static const GUID clsid_schema_cache60 =
++        {0x88d96a07,0xf192,0x11d4,{0xa6,0x5f,0x00,0x40,0x96,0x32,0x51,0xe5}};
++    IXMLDOMSchemaCollection *cache;
++    IXMLDOMDocument2 *doc;
++    VARIANT_BOOL b;
++    HRESULT hr;
++    LONG len;
++
++    doc = _create_object(&clsid_domdocument60, "DOMDocument60",
++                         &IID_IXMLDOMDocument2, __LINE__);
++    if (!doc) return;
++    cache = _create_object(&clsid_schema_cache60, "XMLSchemaCache60",
++                           &IID_IXMLDOMSchemaCollection, __LINE__);
++    if (!cache)
++    {
++        IXMLDOMDocument2_Release(doc);
++        return;
++    }
++
++    b = VARIANT_FALSE;
++    hr = IXMLDOMDocument2_loadXML(doc, _bstr_(xsd_utf16_decl), &b);
++    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
++    ok(b == VARIANT_TRUE, "Failed to load schema.\n");
++
++    hr = IXMLDOMSchemaCollection_add(cache, _bstr_(L"urn:test-utf16"), _variantdoc_(doc));
++    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
++
++    len = -1;
++    hr = IXMLDOMSchemaCollection_get_length(cache, &len);
++    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
++    ok(len == 1, "Unexpected length %ld.\n", len);
++
++    IXMLDOMSchemaCollection_Release(cache);
++    IXMLDOMDocument2_Release(doc);
++    free_bstrs();
++}
++
+ START_TEST(schema)
+ {
+     HRESULT r;
+@@ -1547,6 +1602,7 @@ START_TEST(schema)
+     test_XDR_schemas();
+     test_XDR_datatypes();
+     test_dispex();
++    test_schema_encoding_declaration();
+ 
+     CoUninitialize();
+ }

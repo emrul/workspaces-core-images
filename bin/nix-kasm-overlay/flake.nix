@@ -87,6 +87,8 @@
           phoneinfoga  = pkgs.phoneinfoga;
           sublist3r    = pkgs.sublist3r;
           metagoofil   = pkgs.metagoofil;
+          # wine-assess's wine fork (Windows-app profiles require it). amd64 only.
+          kasm-wine    = pkgs.kasm-wine;
           default      = pkgs.chrome;
         });
     };

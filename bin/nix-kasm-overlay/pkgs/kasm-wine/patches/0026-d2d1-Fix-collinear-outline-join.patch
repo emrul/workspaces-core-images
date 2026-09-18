@@ -1,0 +1,44 @@
+Subject: d2d1 Fix collinear outline join
+Fork-Commit: f0d32052d2dae6e9a95ce104af25bff8c465e6de
+Source: ryzendew/Affinity-Wine-Builder patches/wine-11.12/0027-d2d1-Fix-collinear-outline-join.patch (ElementalWarrior lineage)
+
+diff --git a/dlls/d2d1/geometry.c b/dlls/d2d1/geometry.c
+index 50d8de169ad..a161e34ee84 100644
+--- a/dlls/d2d1/geometry.c
++++ b/dlls/d2d1/geometry.c
+@@ -3044,12 +3044,29 @@ static BOOL d2d_geometry_outline_add_join(struct d2d_geometry *geometry,
+     ccw = d2d_point_ccw(&origin, prev, next);
+     if (ccw == 0.0f)
+     {
+-        d2d_outline_vertex_set(&v[0], p0->x, p0->y, -prev->x, -prev->y, -prev->x, -prev->y);
+-        d2d_outline_vertex_set(&v[1], p0->x, p0->y,  prev->x,  prev->y,  prev->x,  prev->y);
+-        d2d_outline_vertex_set(&v[2], p0->x + 25.0f * -prev->x, p0->y + 25.0f * -prev->y,
+-                 prev->x,  prev->y,  prev->x,  prev->y);
+-        d2d_outline_vertex_set(&v[3], p0->x + 25.0f * -prev->x, p0->y + 25.0f * -prev->y,
+-                -prev->x, -prev->y, -prev->x, -prev->y);
++        float dot = prev->x * next->x + prev->y * next->y;
++
++        if (dot >= 0.0f)
++        {
++            /* Hairpin: prev and next point in the same direction (reversal).
++             * Place cap vertices 25 units away. */
++            d2d_outline_vertex_set(&v[0], p0->x, p0->y, -prev->x, -prev->y, -prev->x, -prev->y);
++            d2d_outline_vertex_set(&v[1], p0->x, p0->y,  prev->x,  prev->y,  prev->x,  prev->y);
++            d2d_outline_vertex_set(&v[2], p0->x + 25.0f * -prev->x, p0->y + 25.0f * -prev->y,
++                     prev->x,  prev->y,  prev->x,  prev->y);
++            d2d_outline_vertex_set(&v[3], p0->x + 25.0f * -prev->x, p0->y + 25.0f * -prev->y,
++                    -prev->x, -prev->y, -prev->x, -prev->y);
++        }
++        else
++        {
++            /* Smooth continuation: prev and next point in opposite directions.
++             * Use a flat join — the perpendicular direction is the same on
++             * both sides, so the outline segments already meet cleanly. */
++            d2d_outline_vertex_set(&v[0], p0->x, p0->y,  prev->x,  prev->y,  prev->x,  prev->y);
++            d2d_outline_vertex_set(&v[1], p0->x, p0->y, -prev->x, -prev->y, -prev->x, -prev->y);
++            d2d_outline_vertex_set(&v[2], p0->x, p0->y,  prev->x,  prev->y,  prev->x,  prev->y);
++            d2d_outline_vertex_set(&v[3], p0->x, p0->y, -prev->x, -prev->y, -prev->x, -prev->y);
++        }
+     }
+     else if (ccw < 0.0f)
+     {

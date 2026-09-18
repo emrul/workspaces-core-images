@@ -1,0 +1,20 @@
+Subject: fix loop index bug in opencl extension lookup
+Fork-Commit: 1fb5151df7641beabf0c8ed88fe33b9df27c7205
+Source: ryzendew/Affinity-Wine-Builder patches/wine-11.12/0007-fix-loop-index-bug-in-opencl-extension-lookup.patch (ElementalWarrior lineage)
+
+diff --git a/dlls/opencl/pe_wrappers.c b/dlls/opencl/pe_wrappers.c
+index 00896b7c37c..0c028320714 100644
+--- a/dlls/opencl/pe_wrappers.c
++++ b/dlls/opencl/pe_wrappers.c
+@@ -197,9 +197,9 @@ void * WINAPI clGetExtensionFunctionAddress( const char *func_name )
+     void * ret = 0;
+     TRACE("(%s)\n",func_name);
+     for (i=0; i<ARRAY_SIZE(known_extensions); i++) {
+-        if (known_extensions->get_function == NULL)
++        if (known_extensions[i].get_function == NULL)
+             continue;
+-        ret = known_extensions->get_function(func_name);
++        ret = known_extensions[i].get_function(func_name);
+         if (ret)
+             break;
+     }

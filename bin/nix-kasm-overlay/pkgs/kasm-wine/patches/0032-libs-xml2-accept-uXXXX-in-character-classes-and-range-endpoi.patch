@@ -1,0 +1,124 @@
+Subject: libs/xml2: accept \uXXXX in character classes and range endpoints.
+Fork-Commit: dd05d3689102bd601fb3e981197d13db413bfa67
+
+diff --git a/libs/xml2/xmlregexp.c b/libs/xml2/xmlregexp.c
+index f434a0cf986..d3d0f7c9649 100644
+--- a/libs/xml2/xmlregexp.c
++++ b/libs/xml2/xmlregexp.c
+@@ -4705,6 +4705,56 @@ static int parse_escaped_codeunit(xmlRegParserCtxtPtr ctxt)
+     return val;
+ }
+ 
++/*
++ * A range endpoint is a bare code unit: MSXML rejects a surrogate pair used as
++ * an endpoint, so detect one and fail rather than silently taking the high
++ * surrogate and leaving the low one to be parsed as a further class member.
++ */
++static int parse_escaped_range_end(xmlRegParserCtxtPtr ctxt)
++{
++    int val = parse_escaped_codeunit(ctxt);
++
++    if (val < 0)
++	return -1;
++    if ((val >= 0xD800) && (val <= 0xDBFF) &&
++	(NXT(1) == '\\') && (NXT(2) == 'u')) {
++	ERROR("Surrogate pair is not valid as a range endpoint");
++	return -1;
++    }
++    return val;
++}
++
++/*
++ * MSXML 6 accepts \uXXXX as a code unit wherever a single character is allowed.
++ * A high surrogate followed by \uDCxx folds into one codepoint; a lone
++ * surrogate is accepted as-is rather than rejected. Used for single-character
++ * positions; range endpoints parse a bare code unit instead, since MSXML
++ * rejects a surrogate pair used as an endpoint.
++ */
++static int parse_escaped_char(xmlRegParserCtxtPtr ctxt)
++{
++    int val = parse_escaped_codeunit(ctxt);
++    const xmlChar *save;
++
++    if (val < 0)
++	return -1;
++    if ((val < 0xD800) || (val > 0xDBFF))
++	return val;
++
++    save = ctxt->cur;
++    if ((NXT(1) == '\\') && (NXT(2) == 'u')) {
++	int low;
++
++	NEXT;
++	NEXT;
++	low = parse_escaped_codeunit(ctxt);
++	if ((low >= 0xDC00) && (low <= 0xDFFF))
++	    return (val - 0xD800) * 0x400 + (low - 0xDC00) + 0x10000;
++    }
++    ctxt->cur = save;
++    return val;
++}
++
+ static int parse_escaped_codepoint(xmlRegParserCtxtPtr ctxt)
+ {
+     int val = parse_escaped_codeunit(ctxt);
+@@ -4820,7 +4870,7 @@ xmlFAParseCharClassEsc(xmlRegParserCtxtPtr ctxt) {
+ 		        ctxt->atom->codepoint = '\t';
+ 			break;
+ 		    case 'u':
+-			cur = parse_escaped_codepoint(ctxt);
++			cur = parse_escaped_char(ctxt);
+ 			if (cur < 0) {
+ 			    return;
+ 			}
+@@ -4841,6 +4891,11 @@ xmlFAParseCharClassEsc(xmlRegParserCtxtPtr ctxt) {
+                 case 't':
+                     cur = '\t';
+                     break;
++                case 'u':
++                    cur = parse_escaped_char(ctxt);
++                    if (cur < 0)
++                        return;
++                    break;
+             }
+ 	    xmlRegAtomAddRange(ctxt, ctxt->atom, ctxt->neg,
+ 			       XML_REGEXP_CHARVAL, cur, cur, NULL);
+@@ -4924,6 +4979,11 @@ xmlFAParseCharRange(xmlRegParserCtxtPtr ctxt) {
+ 	    case 'n': start = 0xA; break;
+ 	    case 'r': start = 0xD; break;
+ 	    case 't': start = 0x9; break;
++	    case 'u':
++		start = parse_escaped_char(ctxt);
++		if (start < 0)
++		    return;
++		break;
+ 	    case '\\': case '|': case '.': case '-': case '^': case '?':
+ 	    case '*': case '+': case '{': case '}': case '(': case ')':
+ 	    case '[': case ']':
+@@ -4969,6 +5029,11 @@ xmlFAParseCharRange(xmlRegParserCtxtPtr ctxt) {
+ 	    case 'n': end = 0xA; break;
+ 	    case 'r': end = 0xD; break;
+ 	    case 't': end = 0x9; break;
++	    case 'u':
++		end = parse_escaped_range_end(ctxt);
++		if (end < 0)
++		    return;
++		break;
+ 	    case '\\': case '|': case '.': case '-': case '^': case '?':
+ 	    case '*': case '+': case '{': case '}': case '(': case ')':
+ 	    case '[': case ']':
+@@ -5010,7 +5075,13 @@ xmlFAParseCharRange(xmlRegParserCtxtPtr ctxt) {
+ static void
+ xmlFAParsePosCharGroup(xmlRegParserCtxtPtr ctxt) {
+     do {
+-	if (CUR == '\\') {
++	/*
++	 * \uXXXX is the one escape that can also be a range endpoint, so it has
++	 * to go to the range parser: taking it here would add the character as a
++	 * lone member and leave the following '-' to be swallowed, turning
++	 * [\u0041-\u005A] into [AZ] instead of [A-Z].
++	 */
++	if ((CUR == '\\') && (NXT(1) != 'u')) {
+ 	    xmlFAParseCharClassEsc(ctxt);
+ 	} else {
+ 	    xmlFAParseCharRange(ctxt);

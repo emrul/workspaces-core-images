@@ -52,3 +52,13 @@ kind      = "binary"
 discover  = "manual"
 cadence   = "manual"
 platforms = ["amd64", "arm64"]
+
+# kasm-wine: wine-assess's wine fork (upstream tarball + vendored patch series), the
+# runtime every packaged Windows app profile requires. Moves are made by hand in the
+# fork (wine-assess/docs/wine-fork.md) and land here as a regenerated patches/ dir plus
+# a pin.json bump, so no automated discoverer.
+[apps.kasm-wine]
+kind      = "source"
+discover  = "manual"
+cadence   = "manual"
+platforms = ["amd64"]

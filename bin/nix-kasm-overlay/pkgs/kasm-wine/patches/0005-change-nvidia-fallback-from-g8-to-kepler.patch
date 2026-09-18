@@ -1,0 +1,17 @@
+Subject: change nvidia fallback from g8 to kepler
+Fork-Commit: 2c8c6242c8424fae3498fd5e32aaaa195b1d1aa9
+Source: ryzendew/Affinity-Wine-Builder patches/wine-11.12/0008-change-nvidia-fallback-from-g8-to-kepler.patch (ElementalWarrior lineage)
+
+diff --git a/dlls/wined3d/adapter_vk.c b/dlls/wined3d/adapter_vk.c
+index 3e349247899..035ab48712a 100644
+--- a/dlls/wined3d/adapter_vk.c
++++ b/dlls/wined3d/adapter_vk.c
+@@ -2140,7 +2140,7 @@ static enum wined3d_display_driver guess_display_driver(enum wined3d_pci_vendor
+     {
+         case HW_VENDOR_AMD:    return DRIVER_AMD_RX;
+         case HW_VENDOR_INTEL:  return DRIVER_INTEL_HD4000;
+-        case HW_VENDOR_NVIDIA: return DRIVER_NVIDIA_GEFORCE8;
++        case HW_VENDOR_NVIDIA: return DRIVER_NVIDIA_KEPLER;
+         default:               return DRIVER_WINE;
+     }
+ }

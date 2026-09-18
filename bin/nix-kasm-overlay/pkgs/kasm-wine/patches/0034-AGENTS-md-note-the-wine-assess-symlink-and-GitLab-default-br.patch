@@ -1,0 +1,19 @@
+Subject: AGENTS.md: note the wine-assess symlink and GitLab default branch
+Fork-Commit: 01ccc35d93cd3c19844dea39cb05092ea1cafab6
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 9d927733c95..401f13d42fb 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -17,6 +17,11 @@ It is **not** a general-purpose Wine distribution. Every patch here is here
+ because some app wine-assess assessed needed it. Don't add a patch
+ speculatively; add it when an assessment names the gap.
+ 
++Reachable from wine-assess as `wine-assess/wine` — a local symlink to this
++checkout (not committed there; it's a machine-specific path). On GitLab, the
++project's default branch is `kasm/main` (what's actually shipped), not
++`master`.
++
+ ## Remotes and branches (current reality)
+ 
+ ```

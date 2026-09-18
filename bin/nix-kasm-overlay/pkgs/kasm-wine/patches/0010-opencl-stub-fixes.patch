@@ -1,0 +1,40 @@
+Subject: opencl stub fixes
+Fork-Commit: ffe7894702ecce3f0d8e4db9193eb8a1ba6faaa2
+Source: ryzendew/Affinity-Wine-Builder patches/wine-11.12/0015-opencl-stub-fixes.patch (ElementalWarrior lineage)
+
+diff --git a/dlls/opencl/unix_wrappers.c b/dlls/opencl/unix_wrappers.c
+index 93b58fb871a..0941ed86598 100644
+--- a/dlls/opencl/unix_wrappers.c
++++ b/dlls/opencl/unix_wrappers.c
+@@ -73,13 +73,18 @@ NTSTATUS wrap_clSetEventCallback( void *args )
+ NTSTATUS wrap_clSetMemObjectDestructorCallback( void *args )
+ {
+     FIXME( "not yet implemented\n" );
+-    return CL_INVALID_OPERATION;
++    return CL_SUCCESS;
+ }
+ 
+ NTSTATUS wrap_clCompileProgram( void *args )
+ {
++    struct clCompileProgram_params *params = args;
++
+     FIXME( "not yet implemented\n" );
+-    return CL_INVALID_OPERATION;
++    if (params->pfn_notify) FIXME( "notify callback not supported\n" );
++    return clCompileProgram( params->program, params->num_devices, params->device_list,
++                             params->options, params->num_input_headers, params->input_headers,
++                             params->header_include_names, NULL, NULL );
+ }
+ 
+ NTSTATUS wrap_clLinkProgram( void *args )
+@@ -87,6 +92,9 @@ NTSTATUS wrap_clLinkProgram( void *args )
+     struct clLinkProgram_params *params = args;
+ 
+     FIXME( "not yet implemented\n" );
+-    *params->errcode_ret = CL_INVALID_OPERATION;
++    if (params->pfn_notify) FIXME( "notify callback not supported\n" );
++    *params->__retval = clLinkProgram( params->context, params->num_devices, params->device_list,
++                                       params->options, params->num_input_programs, params->input_programs,
++                                       NULL, NULL, params->errcode_ret );
+     return STATUS_SUCCESS;
+ }

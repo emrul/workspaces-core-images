@@ -1,0 +1,143 @@
+Subject: Add AGENTS.md documenting the fork's patch-branch convention
+Fork-Commit: 8b1bee63716d4a2a5e4e79321fd97fe21149b462
+
+diff --git a/AGENTS.md b/AGENTS.md
+new file mode 100644
+index 00000000000..9d927733c95
+--- /dev/null
++++ b/AGENTS.md
+@@ -0,0 +1,134 @@
++# AGENTS.md
++
++This file orients a coding agent working in this checkout of Wine.
++
++## What this repo is
++
++This is a fork of upstream Wine (`https://gitlab.winehq.org/wine/wine`),
++maintained for [wine-assess](https://github.com/kasm-technologies) (repo:
++`~/dev/kasm/projects/wine-assess`) — the project that assesses whether Windows
++apps run under Wine, and remediates when they don't. Most of the time Wine
++gaps are worked around with levers (Windows-version flips, DLL overrides,
++winetricks verbs). This fork exists for the residue that needs an actual code
++change: patches Wine doesn't (yet) carry, adopted from the community so a
++specific class of app works.
++
++It is **not** a general-purpose Wine distribution. Every patch here is here
++because some app wine-assess assessed needed it. Don't add a patch
++speculatively; add it when an assessment names the gap.
++
++## Remotes and branches (current reality)
++
++```
++origin    https://gitlab.com/kasm-technologies/labs-sandbox/wine.git   (fetch+push) — our fork, hosted
++upstream  https://gitlab.winehq.org/wine/wine                          (fetch+push) — read-only in practice
++```
++
++`origin` is **our own hosted fork** (created 2026-09-13, resolves `OI-027`'s
++hosting question). `upstream` is the real Wine project — we fetch from it to
++pick up new releases and to review what's changed before a patch-branch
++rebase, but we never push to it and never commit directly to a branch that
++mirrors it.
++
++Branches:
++
++- `master` — mirrors `upstream/master`. Never commit here; only ever
++  fast-forwarded from `upstream`, then pushed to `origin` to keep our hosted
++  copy current.
++- `patch/<topic>` — one branch per patch set (see below).
++- `kasm/main` — the integration branch: the upstream tag we ship, plus every
++  `patch/<topic>` branch cherry-picked on top, in a fixed order. **This is what
++  gets built.** Tagged `kasm-wine-<upstream-tag>-p<N>`; `N` bumps whenever the
++  patch set changes on the same upstream base.
++- `upgrade/wine-<tag>` — created only while moving to a new upstream release
++  (see below). Not long-lived; folded back into `kasm/main` once the move is
++  done.
++
++All of the above live on `origin` (our fork). Nothing is ever pushed to
++`upstream`.
++
++## The patch-branch convention
++
++1. **One topic branch per patch set**, `patch/<topic>`, branched from the
++   upstream release tag we currently ship. A topic branch holds only that
++   set's commits — one commit per source patch — each with a `Source:`
++   trailer (URL or repo path, plus author lineage) so provenance survives a
++   rebase.
++2. **`kasm/main` never carries a patch directly.** It is rebuilt by cherry-
++   picking every topic branch onto the upstream tag, in order. If a cherry-pick
++   conflicts, fix it **on the topic branch**, never by hand-editing `kasm/main`.
++3. **A patch that upstream absorbs gets dropped**, not carried forward dead.
++   This is the part worth doing deliberately rather than skipping under time
++   pressure — see the next section.
++
++## Moving to a new upstream release (the reconciliation step)
++
++This is the step that's easy to skip and shouldn't be: don't just rebase every
++topic branch onto the new tag and declare victory. For **each** `patch/<topic>`
++branch, before rebasing it:
++
++1. Fetch `upstream` and read its own log/changelog for the files and functions
++   the patch touches between the old base and the new tag:
++   `git fetch upstream && git log --oneline <old-tag>..<new-tag> -- <paths the patch touches>`.
++2. Decide, per patch commit, one of:
++   - **Still needed, ports clean or with minor conflict fixes** — rebase it,
++     resolve conflicts on the topic branch, note what changed in the port.
++   - **Upstream absorbed it** (same fix landed independently, possibly
++     differently implemented) — **drop it** from the topic branch and record
++     that it was dropped and why (upstream commit/PR if you can find one).
++     Don't keep a patch alive just because it still applies textually if
++     upstream's own code now does the same thing a different way — check
++     behaviour, not just whether the diff still fits.
++   - **Unclear** — keep the patch, but flag it explicitly as *potentially
++     stale* (needs a human or a deeper look) rather than silently re-carrying
++     it or silently dropping it. Silence in either direction is the failure
++     mode to avoid.
++3. Only after that review, rebase: `git rebase --onto wine-<new-tag>
++   wine-<old-tag> patch/<topic>`.
++4. Rebuild `kasm/main` from the new tag + reviewed topic branches, bump the
++   `-pN` tag (starts back at `p1` on a new upstream base).
++5. Record the outcome — kept/ported, dropped-because-absorbed, or
++   flagged-as-stale, per topic branch — in wine-assess's
++   `docs/wine-fork.md` (the authoritative ledger; see below), then push the
++   updated branches and the new `kasm-wine-<tag>-pN` tag to `origin`.
++
++## Current patch set (orientation only — see wine-fork.md for the live ledger)
++
++Base `wine-11.16` (upstream tag `8da89f8493b`), tagged `kasm-wine-11.16-p1`. 29
++patches across 5 topic branches, all sourced from `ryzendew/Affinity-Wine-Builder`
++`patches/wine-11.12/` (the ElementalWarrior Affinity lineage), imported at
++`wine-11.12` and rebased onto `11.16`:
++
++| Topic branch | Carries |
++| --- | --- |
++| `patch/dxcore-elementalwarrior` | dxcore adapter-enumerating implementation |
++| `patch/opencl-elementalwarrior` | OpenCL ICD thunks + caches |
++| `patch/vkd3d-shader-affinity` | vkd3d-shader output-signature/SPIR-V/GLSL fixes |
++| `patch/d2d1-geometry-fixes` | d2d1 bezier/outline geometry fixes |
++| `patch/comdlg32-xdg-portal` | native file dialogs via XDG Desktop Portal (inert without a portal bus; kept for now) |
++
++Full per-commit detail, port notes, and verification history: wine-assess's
++`docs/wine-fork.md`.
++
++## Where the authoritative record lives
++
++**This file is orientation; it is not the ledger.** The live, per-cycle record
++of what's carried, what was dropped, and why is `docs/wine-fork.md` in
++`~/dev/kasm/projects/wine-assess`, because that's the project that consumes
++this fork and tracks why each patch set exists. Update that file, not this
++one, when a patch set changes. Also relevant there:
++
++- `docs/wine-gap-discovery.md` — how a wine-assess run turns "no lever fixes
++  this" into a candidate patch for this fork (the `wine-gap` escalation class).
++- `OUTSTANDING_ISSUES.md` — tracked items against this fork, e.g. `OI-027`
++  (this fork's own existence and hosting), `OI-031` (the gap-discovery
++  pipeline that will eventually feed it patches), `OI-038` (a candidate found
++  2026-09-13 — WinMerge's menu bar — not yet pinned to a specific call, so
++  **not** a patch yet; an example of the "flag, don't guess" discipline this
++  file asks for).
++
++## Open items
++
++- `containers/wine-kasm/` in wine-assess builds `kasm/main` from an **exported
++  source tree**, not this repo directly — the image doesn't need `.git`
++  history, just the tree at the tag.

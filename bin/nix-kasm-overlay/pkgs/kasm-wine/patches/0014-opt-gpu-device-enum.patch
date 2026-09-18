@@ -1,0 +1,42 @@
+Subject: opt gpu device enum
+Fork-Commit: 5fe030f0509c5761f4a562b0b70476a430749be8
+Source: ryzendew/Affinity-Wine-Builder patches/wine-11.12/0019-opt-gpu-device-enum.patch (ElementalWarrior lineage)
+
+diff --git a/dlls/opencl/cl_khr_d3d10_sharing.c b/dlls/opencl/cl_khr_d3d10_sharing.c
+index af2e27e5da0..3836e237dee 100644
+--- a/dlls/opencl/cl_khr_d3d10_sharing.c
++++ b/dlls/opencl/cl_khr_d3d10_sharing.c
+@@ -31,7 +31,23 @@ cl_int compare_dxgi_cl_device(IUnknown* d3d_adapter, cl_device_id cl_device, cl_
+     }
+     IUnknown_Release(this);
+ 
+-    /* First try vendor ID matching (most reliable) */
++    /* Try LUID comparison first (fast, available on NVIDIA/Intel). */
++    {
++        BYTE luid_buf[sizeof(LUID)];
++        params.device = cl_device;
++        params.param_name = CL_DEVICE_LUID_KHR;
++        params.param_value = luid_buf;
++        params.param_value_size = sizeof(luid_buf);
++        params.param_value_size_ret = NULL;
++        if (!OPENCL_CALL( clGetDeviceInfo, &params ))
++        {
++            *result = !memcmp( luid_buf, &info.AdapterLuid, sizeof(LUID) );
++            TRACE("LUID match: result=%d\n", *result);
++            if (*result) return CL_SUCCESS;
++        }
++    }
++
++    /* Next try vendor ID matching */
+     {
+         cl_int vid;
+         params.device = cl_device;
+@@ -101,7 +117,7 @@ cl_int WINAPI dxgi_adapter_to_opencl(
+ 
+ 
+     ids_params.platform = platform;
+-    ids_params.device_type = CL_DEVICE_TYPE_ALL;
++    ids_params.device_type = CL_DEVICE_TYPE_GPU;
+     ids_params.num_devices = &ids_params.num_entries;
+     ids_params.num_entries = 0;
+     ids_params.devices = NULL;

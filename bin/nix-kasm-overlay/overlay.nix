@@ -119,6 +119,15 @@ in
     pin = loadPin "kasm-ai-runtime-sidebar" ./pkgs/kasm-ai-runtime-sidebar;
   };
 
+  # Kind B (source): wine-assess's wine fork for its packaged Windows apps
+  # (wine-assess/docs/wine-nix-packaging.md). Upstream's tarball plus a vendored
+  # patch series, built through nixpkgs' wineWow64 derivation; carries no
+  # prefix -- every app profile ships its own. amd64 only. See package.nix.
+  kasm-wine = import ./pkgs/kasm-wine/package.nix {
+    inherit prev;
+    pin = loadPin "kasm-wine" ./pkgs/kasm-wine;
+  };
+
   # Kind B (from scratch): Trace Labs OSINT tools absent from nixpkgs. Each is a
   # `{ prev }:` derivation pinned to an upstream tag. TraceLabs-unique (excluded
   # from the fat store); no committed pin.json — the tag is pinned in-package.

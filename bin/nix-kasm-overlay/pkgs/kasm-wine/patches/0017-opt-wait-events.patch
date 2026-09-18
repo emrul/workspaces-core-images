@@ -1,0 +1,33 @@
+Subject: opt wait events
+Fork-Commit: 262f857e44103423a5a4058f793708357c7e37b2
+Source: ryzendew/Affinity-Wine-Builder patches/wine-11.12/0023-opt-wait-events.patch (ElementalWarrior lineage)
+
+diff --git a/dlls/opencl/pe_thunks.c b/dlls/opencl/pe_thunks.c
+index 452aebbc338..432827f8974 100644
+--- a/dlls/opencl/pe_thunks.c
++++ b/dlls/opencl/pe_thunks.c
+@@ -756,9 +756,24 @@ cl_int WINAPI clUnloadPlatformCompiler( cl_platform_id platform )
+ 
+ cl_int WINAPI clWaitForEvents( cl_uint num_events, const cl_event* event_list )
+ {
++    cl_uint i;
+     cl_int ret;
+     struct clWaitForEvents_params params = { num_events, event_list };
+     TRACE( "(%u, %p)\n", num_events, event_list );
++
++    for (i = 0; i < num_events; i++)
++    {
++        cl_int status;
++        struct clGetEventInfo_params info_params = { event_list[i], CL_EVENT_COMMAND_EXECUTION_STATUS, sizeof(status), &status, NULL };
++        OPENCL_CALL( clGetEventInfo, &info_params );
++        if (status != CL_COMPLETE) break;
++    }
++    if (i == num_events)
++    {
++        TRACE( "all events already completed, skipping thunk\n" );
++        return CL_SUCCESS;
++    }
++
+     ret = OPENCL_CALL( clWaitForEvents, &params );
+     check_completed_callbacks();
+     return ret;

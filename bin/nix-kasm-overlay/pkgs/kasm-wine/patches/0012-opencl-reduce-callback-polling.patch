@@ -1,0 +1,33 @@
+Subject: opencl reduce callback polling
+Fork-Commit: a7adda00eda215c00d9315c62741a097ca3673ae
+Source: ryzendew/Affinity-Wine-Builder patches/wine-11.12/0017-opencl-reduce-callback-polling.patch (ElementalWarrior lineage)
+
+diff --git a/dlls/opencl/pe_thunks.c b/dlls/opencl/pe_thunks.c
+index 3ea3f5ccf45..2bf27f2a0af 100644
+--- a/dlls/opencl/pe_thunks.c
++++ b/dlls/opencl/pe_thunks.c
+@@ -27,6 +27,7 @@ static void check_completed_callbacks(void)
+ {
+     struct event_callback *completed = NULL;
+     struct event_callback **pp = &callback_list;
++    cl_int i;
+ 
+     EnterCriticalSection(&callback_cs);
+     while (*pp)
+@@ -41,6 +42,7 @@ static void check_completed_callbacks(void)
+         params.param_value = &status;
+         params.param_value_size_ret = NULL;
+         OPENCL_CALL(clGetEventInfo, &params);
++        i++;
+ 
+         if (status == cb->trigger_status || status < 0)
+         {
+@@ -53,6 +55,8 @@ static void check_completed_callbacks(void)
+         pp = &cb->next;
+     }
+ 
++    if (i > 10) Sleep(1);
++
+     LeaveCriticalSection(&callback_cs);
+ 
+     while (completed)

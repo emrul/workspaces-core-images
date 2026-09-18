@@ -1,0 +1,26 @@
+Subject: fix wddm version and vulkan ext
+Fork-Commit: 2528d2c7e8d8d19de52d00524c0383fe9a6f6263
+Source: ryzendew/Affinity-Wine-Builder patches/wine-11.12/0011-fix-wddm-version-and-vulkan-ext.patch (ElementalWarrior lineage)
+
+diff --git a/dlls/win32u/d3dkmt.c b/dlls/win32u/d3dkmt.c
+index ae82a769794..91d65063509 100644
+--- a/dlls/win32u/d3dkmt.c
++++ b/dlls/win32u/d3dkmt.c
+@@ -398,7 +398,7 @@ static void d3dkmt_init_vulkan(void)
+     static const struct vulkan_instance_extensions extensions =
+     {
+         .has_VK_KHR_get_physical_device_properties2 = 1,
+-        .has_VK_KHR_external_fence_capabilities = 1,
++        .has_VK_KHR_external_memory_capabilities = 1,
+     };
+ 
+     d3dkmt_vulkan_instance = vulkan_instance_create( &extensions );
+@@ -614,7 +614,7 @@ NTSTATUS WINAPI NtGdiDdDDIQueryAdapterInfo( D3DKMT_QUERYADAPTERINFO *desc )
+         if (desc->PrivateDriverDataSize < sizeof(*value))
+             return STATUS_INVALID_PARAMETER;
+ 
+-        *value = KMT_DRIVERVERSION_WDDM_3_1;
++        *value = KMT_DRIVERVERSION_WDDM_1_3;
+         return STATUS_SUCCESS;
+     }
+     default:

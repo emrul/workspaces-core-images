@@ -1,0 +1,46 @@
+Subject: AGENTS.md: orientation for the wine-11.17 base and the Office topic branches
+Fork-Commit: d5cae421d4b570ae0ff50fb145bc0bc887412589
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 401f13d42fb..ed5dabe8f02 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -99,18 +99,33 @@ branch, before rebasing it:
+ 
+ ## Current patch set (orientation only — see wine-fork.md for the live ledger)
+ 
+-Base `wine-11.16` (upstream tag `8da89f8493b`), tagged `kasm-wine-11.16-p1`. 29
+-patches across 5 topic branches, all sourced from `ryzendew/Affinity-Wine-Builder`
+-`patches/wine-11.12/` (the ElementalWarrior Affinity lineage), imported at
+-`wine-11.12` and rebased onto `11.16`:
++Base `wine-11.17` (upstream tag `1c5b3a5dd17`), tagged `kasm-wine-11.17-p1`. Two
++lineages:
++
++- **Affinity**: 28 patches across 5 topic branches, sourced from
++  `ryzendew/Affinity-Wine-Builder` `patches/wine-11.12/` (the ElementalWarrior
++  lineage), imported at `wine-11.12` and rebased through `11.16` to `11.17`. The
++  11.17 move dropped one patch (vkd3d-shader output-signature zero padding):
++  upstream's vkd3d 2.1 import (`9226b10cd1d`) does the same thing itself.
++- **Office 365 Click-to-Run**: 4 fixes of our own across 3 topic branches, written
++  against `wine-11.17` while working OI-041, each validated against native Windows
++  with the wine test suites (see wine-assess's `docs/office365-proof-of-value.md`).
+ 
+ | Topic branch | Carries |
+ | --- | --- |
+ | `patch/dxcore-elementalwarrior` | dxcore adapter-enumerating implementation |
+ | `patch/opencl-elementalwarrior` | OpenCL ICD thunks + caches |
+-| `patch/vkd3d-shader-affinity` | vkd3d-shader output-signature/SPIR-V/GLSL fixes |
++| `patch/vkd3d-shader-affinity` | precautionary reverts of the 11.11 SPIR-V caps and GLSL texelFetchOffset changes (flagged *potentially stale*: no diagnosed gap behind them) |
+ | `patch/d2d1-geometry-fixes` | d2d1 bezier/outline geometry fixes |
+ | `patch/comdlg32-xdg-portal` | native file dialogs via XDG Desktop Portal (inert without a portal bus; kept for now) |
++| `patch/wintrust-office-c2r` | wintrust: no `pgKnownSubject` dereference when tracing; close the file we opened at the end of verify |
++| `patch/msxml3-schema-utf16` | msxml3: parse a DOM re-serialised schema as UTF-8 |
++| `patch/msxml3-xsd-uescape` | libs/xml2: `\uXXXX` in XSD pattern character classes and range endpoints |
++| `patch/fork-docs` | this file |
++
++`patch/wintrust-trace-subject` stays on `origin` as the superset the Office candidate
++was distilled from (one hardening commit shown not load-bearing); it is not
++cherry-picked onto `kasm/main`.
+ 
+ Full per-commit detail, port notes, and verification history: wine-assess's
+ `docs/wine-fork.md`.

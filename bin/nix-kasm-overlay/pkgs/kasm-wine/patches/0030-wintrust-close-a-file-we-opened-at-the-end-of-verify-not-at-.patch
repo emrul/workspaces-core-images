@@ -1,0 +1,83 @@
+Subject: wintrust: close a file we opened at the end of verify, not at cleanup.
+Fork-Commit: 625cc474bfbe21e3285557e6e0538e3d79eca189
+
+diff --git a/dlls/wintrust/tests/softpub.c b/dlls/wintrust/tests/softpub.c
+index 8bff31861a3..0a12bf1c784 100644
+--- a/dlls/wintrust/tests/softpub.c
++++ b/dlls/wintrust/tests/softpub.c
+@@ -937,6 +937,41 @@ static void test_wintrust_close_subject(void)
+     if (subject) VirtualFree(subject, 0, MEM_RELEASE);
+ }
+ 
++static void test_wintrust_verify_closes_file(void)
++{
++    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
++    WINTRUST_FILE_INFO file = {0};
++    WINTRUST_DATA data = {0}, close_data;
++    WCHAR path[MAX_PATH];
++    LONG ret;
++
++    GetModuleFileNameW(NULL, path, ARRAY_SIZE(path));
++    file.cbStruct = sizeof(file);
++    file.pcwszFilePath = path;
++    file.hFile = NULL;
++    data.cbStruct = sizeof(data);
++    data.dwUIChoice = WTD_UI_NONE;
++    data.dwUnionChoice = WTD_CHOICE_FILE;
++    data.pFile = &file;
++    data.dwStateAction = WTD_STATEACTION_VERIFY;
++    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
++
++    ret = WinVerifyTrust(NULL, &action, &data);
++    ok(ret == TRUST_E_NOSIGNATURE, "Unexpected verify result %#lx.\n", ret);
++    ok(file.hFile == INVALID_HANDLE_VALUE, "Expected hFile closed by verify, got %p.\n", file.hFile);
++    if (!data.hWVTStateData) return;
++
++    /* The close must not write into the caller's file info: native leaves a
++     * sentinel placed after verify untouched. */
++    file.hFile = (HANDLE)(ULONG_PTR)0x1234;
++    close_data = data;
++    close_data.dwStateAction = WTD_STATEACTION_CLOSE;
++    ret = WinVerifyTrust(NULL, &action, &close_data);
++    ok(ret == S_OK, "Unexpected close result %#lx.\n", ret);
++    ok(file.hFile == (HANDLE)(ULONG_PTR)0x1234,
++       "Close wrote into caller file info, got %p.\n", file.hFile);
++}
++
+ /* Self-signed .exe, built with tcc, signed with signtool
+  * (and a certificate generated on a self-signed CA).
+  *
+@@ -1999,6 +2034,7 @@ START_TEST(softpub)
+     test_sip_create_indirect_data();
+     test_wintrust();
+     test_wintrust_close_subject();
++    test_wintrust_verify_closes_file();
+     test_wintrust_digest();
+     test_get_known_usages();
+     test_WTHelperGetProvCertFromChain();
+diff --git a/dlls/wintrust/wintrust_main.c b/dlls/wintrust/wintrust_main.c
+index 613edc885b3..d4c5377ec73 100644
+--- a/dlls/wintrust/wintrust_main.c
++++ b/dlls/wintrust/wintrust_main.c
+@@ -284,6 +284,21 @@ static LONG WINTRUST_DefaultVerify(HWND hwnd, GUID *actionID,
+     numSteps = WINTRUST_AddTrustStepsFromFunctions(verifySteps,
+      provData->psPfns);
+     err = WINTRUST_ExecuteSteps(verifySteps, numSteps, provData);
++
++    /* If we opened the file ourselves, close it here rather than at cleanup.
++     * Native writes the caller's hFile during the verify call and never during
++     * the close: verifying signed and unsigned files on Windows 10.0.26200
++     * leaves hFile as INVALID_HANDLE_VALUE when verify returns, and a sentinel
++     * placed in it afterwards survives the close untouched. Deferring the
++     * write-back to SoftpubCleanup made the provider dereference
++     * pWintrustData long after the caller was entitled to reuse it, which is
++     * what crashed the Office 365 Click-to-Run bootstrapper. */
++    if (provData->fOpenedFile && data->dwUnionChoice == WTD_CHOICE_FILE && data->pFile)
++    {
++        CloseHandle(data->pFile->hFile);
++        data->pFile->hFile = INVALID_HANDLE_VALUE;
++        provData->fOpenedFile = FALSE;
++    }
+     goto done;
+ 
+ error:

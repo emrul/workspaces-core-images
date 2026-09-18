@@ -1,0 +1,59 @@
+Subject: opt cache extensions
+Fork-Commit: 22f7cbc4f176c7f348441585268ab3a0b8fff0cf
+Source: ryzendew/Affinity-Wine-Builder patches/wine-11.12/0018-opt-cache-extensions.patch (ElementalWarrior lineage)
+
+diff --git a/dlls/opencl/pe_wrappers.c b/dlls/opencl/pe_wrappers.c
+index fd0be256ffb..d5592f8820f 100644
+--- a/dlls/opencl/pe_wrappers.c
++++ b/dlls/opencl/pe_wrappers.c
+@@ -31,14 +31,36 @@ extern CRITICAL_SECTION callback_cs;
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(opencl);
+ 
++static struct
++{
++    char *raw;
++    size_t raw_len;
++    char *filtered;
++    size_t filtered_len;
++} ext_cache;
++
+ static cl_int filter_extensions( const char *unix_exts, SIZE_T size, char *win_exts, size_t *ret_size )
+ {
+     char *p = win_exts;
+     const char *ext;
+     SIZE_T win_size;
++    size_t unix_len;
+ 
+     TRACE( "got host extension string %s\n", debugstr_a( unix_exts ) );
+ 
++    unix_len = strlen( unix_exts ) + 1;
++    if (ext_cache.raw && unix_len == ext_cache.raw_len && !memcmp( unix_exts, ext_cache.raw, unix_len ))
++    {
++        TRACE( "using cached extensions\n" );
++        if (ret_size) *ret_size = ext_cache.filtered_len;
++        if (win_exts)
++        {
++            if (size < ext_cache.filtered_len) return CL_INVALID_VALUE;
++            memcpy( win_exts, ext_cache.filtered, ext_cache.filtered_len );
++        }
++        return CL_SUCCESS;
++    }
++
+     ext = unix_exts;
+     win_size = 0;
+ 
+@@ -100,6 +122,13 @@ static cl_int filter_extensions( const char *unix_exts, SIZE_T size, char *win_e
+ 
+     TRACE( "returning extension string %s\n", debugstr_a(win_exts) );
+ 
++    free( ext_cache.raw );
++    free( ext_cache.filtered );
++    ext_cache.raw = strdup( unix_exts );
++    ext_cache.raw_len = unix_len;
++    ext_cache.filtered = strdup( win_exts );
++    ext_cache.filtered_len = strlen( win_exts ) + 1;
++
+     return CL_SUCCESS;
+ }
+ 

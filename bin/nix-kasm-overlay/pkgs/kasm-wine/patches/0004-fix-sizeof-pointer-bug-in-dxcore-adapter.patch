@@ -1,0 +1,17 @@
+Subject: fix sizeof pointer bug in dxcore adapter
+Fork-Commit: 8b57caa0949f5bfc4daeda041815bda9f8d89e73
+Source: ryzendew/Affinity-Wine-Builder patches/wine-11.12/0006-fix-sizeof-pointer-bug-in-dxcore-adapter.patch (ElementalWarrior lineage)
+
+diff --git a/dlls/dxcore/adapter.c b/dlls/dxcore/adapter.c
+index 21f4ff8c96b..17907f8f678 100644
+--- a/dlls/dxcore/adapter.c
++++ b/dlls/dxcore/adapter.c
+@@ -21,7 +21,7 @@ HRESULT dxcore_adapter_pInstanceLuid(struct dxcore_adapter *this, size_t lenBuff
+     if (FAILED(hr))
+         return hr;
+ 
+-    memcpy(buffer, (void*)&desc.AdapterLuid, sizeof(&desc.AdapterLuid));
++    memcpy(buffer, (void*)&desc.AdapterLuid, sizeof(desc.AdapterLuid));
+     return S_OK;
+ }
+ HRESULT dxcore_adapter_pDriverVersion(struct dxcore_adapter *this, size_t lenBuffer, void *buffer) {
