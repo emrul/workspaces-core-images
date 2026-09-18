@@ -217,6 +217,8 @@ kasm_name = "photodemon-wine"
 platforms = ["amd64"]
 fat_store = false
 
+# ── Wine apps (wine-assess publish writes below this line; one stanza per app) ──
+
 [profiles.claude-code]
 pkgs     = ["nixpkgs#claude-code"]
 ref      = "github:NixOS/nixpkgs/nixos-unstable"
