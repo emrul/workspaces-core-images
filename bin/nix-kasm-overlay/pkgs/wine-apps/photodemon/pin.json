@@ -1,0 +1,20 @@
+{
+  "slug": "photodemon",
+  "name": "PhotoDemon",
+  "version": "20260918",
+  "url": "http://192.168.1.140:8765/photodemon-20260918.tar.zst",
+  "hash": "sha256-TXlyKPtYJscehCuGc1fkR34uQqAXl809o0w02GGbVwY=",
+  "size": 815655065,
+  "wine": "kasm-wine",
+  "entrypoint": "C:\\Program Files\\PhotoDemon-2025.12\\PhotoDemon.exe",
+  "copy_on_start": [],
+  "verbs": ["vcrun2022", "dotnet40", "dotnet48", "d3dcompiler_47", "mfc140", "quartz", "vb6run", "gdiplus"],
+  "source": {
+    "image": "wine-app-photodemon:20260905",
+    "digest": "sha256:428a797fdf14fe3f8a273cab2346d6fc253bd181231402433ca96996252e0797",
+    "exported_by": "wine-assess containers/wine-app/export-prefix.sh",
+    "baked_under": "wine-devel 11.16 (apt)"
+  },
+  "updated": "2026-09-18",
+  "_note": "Second Wine app, for the shared-layer proof (docs/wine-nix-packaging.md stage 4). Same interim HTTP host as the affinity pin; 2.7 GB prefix, 0.8 GB zstd."
+}

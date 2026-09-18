@@ -206,6 +206,17 @@ kasm_name = "affinity-wine"
 platforms = ["amd64"]
 fat_store = false
 
+# PhotoDemon (a VB6 photo editor) packaged by wine-assess, the second Wine app: it
+# exists to prove the shared wine layer (same profile-wine blob digest as the
+# Affinity image) and a two-app workspace. Same shape as wine-app-affinity.
+[profiles.wine-app-photodemon]
+seccomp   = "bwrap"
+pkgs      = ["path:/config/kasm-overlay#wine-app-photodemon"]
+requires  = ["wine"]
+kasm_name = "photodemon-wine"
+platforms = ["amd64"]
+fat_store = false
+
 [profiles.claude-code]
 pkgs     = ["nixpkgs#claude-code"]
 ref      = "github:NixOS/nixpkgs/nixos-unstable"
