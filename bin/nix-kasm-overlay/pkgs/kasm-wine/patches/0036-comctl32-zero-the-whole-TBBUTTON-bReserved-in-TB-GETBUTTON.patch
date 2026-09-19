@@ -1,0 +1,17 @@
+Subject: comctl32: zero the whole TBBUTTON.bReserved in TB_GETBUTTON.
+Fork-Commit: dd6b85d9e92
+
+diff --git a/dlls/comctl32/toolbar.c b/dlls/comctl32/toolbar.c
+index 56d2a060168..1eef9b71a88 100644
+--- a/dlls/comctl32/toolbar.c
++++ b/dlls/comctl32/toolbar.c
+@@ -3413,8 +3413,7 @@ TOOLBAR_GetButton (const TOOLBAR_INFO *infoPtr, INT nIndex, TBBUTTON *lpTbb)
+     lpTbb->idCommand = btnPtr->idCommand;
+     lpTbb->fsState   = btnPtr->fsState;
+     lpTbb->fsStyle   = btnPtr->fsStyle;
+-    lpTbb->bReserved[0] = 0;
+-    lpTbb->bReserved[1] = 0;
++    memset( lpTbb->bReserved, 0, sizeof(lpTbb->bReserved) );
+     lpTbb->dwData    = btnPtr->dwData;
+     lpTbb->iString   = btnPtr->iString;
+ 

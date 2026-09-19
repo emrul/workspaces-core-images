@@ -1,8 +1,8 @@
 {
   "version": "11.17",
-  "fork_tag": "kasm-wine-11.17-p1",
+  "fork_tag": "kasm-wine-11.17-p2",
   "hash": "sha256-jnUuKbuikBrZ+RUTk0XG7mcYSwmdQlcE2RWXHKXAVfw=",
   "fork": "https://gitlab.com/kasm-technologies/labs-sandbox/wine",
-  "updated": "2026-09-18",
+  "updated": "2026-09-19",
   "_note": "version + hash are upstream's public wine-<version>.tar.xz from dl.winehq.org (hash = sha256-<base64 of the raw digest>, what fetchurl checks). fork_tag names the kasm/main tag in the private fork whose commits over wine-<version> are vendored as patches/ (git format-patch); the ledger for that tag is wine-assess/docs/wine-fork.md. On a fork move: regenerate patches/, bump version/fork_tag/hash together."
 }
