@@ -64,6 +64,20 @@ let
       printf '%s\n' "@out@" > "$DST.partial/.materialised"
       mv "$DST.partial" "$DST"
     fi
+    # GPU. The Resolute desktop images launch us straight from the .desktop entry
+    # (there is no single-app custom_startup on that path), so the handoff to
+    # kasm-nix's GPU launcher has to live HERE rather than in the image wiring:
+    # when Kasm allocated a GPU and owns the device nodes, re-exec ourselves through
+    # nix-gpu-run, which stages the NVIDIA vendor libs, points the Vulkan loader at
+    # the NVIDIA ICD and wraps us in `vglrun -d egl` -- the same path Chromium uses.
+    # DXVK then creates its device on the real GPU (proven with Affinity on an RTX
+    # 3090, wine-assess docs/gpu-acceleration.md). WINE_APP_GPU stops the recursion
+    # and tells the block below to leave the software stack alone.
+    if [ -z "''${WINE_APP_GPU:-}" ] && [ -x /usr/local/bin/nix-gpu-run ] \
+       && /usr/local/bin/nix-gpu-run --available; then
+      WINE_APP_GPU=1; export WINE_APP_GPU
+      exec /usr/local/bin/nix-gpu-run "$0" "$@"
+    fi
     export WINEPREFIX="$DST"
     export WINEDEBUG="''${WINEDEBUG:--all}"
     # Graphics. Two cases.
@@ -82,7 +96,7 @@ let
     # "Failed to create Vulkan instance"), so default to nixpkgs mesa's software stack:
     # llvmpipe for GL, lavapipe for Vulkan. kasm-nix's nix-launch has already cleared
     # the image's LD_LIBRARY_PATH before we get here.
-    if [ -x /usr/local/bin/nix-gpu-run ] && /usr/local/bin/nix-gpu-run --available; then
+    if [ -n "''${WINE_APP_GPU:-}" ]; then
       :
     else
       export VK_ICD_FILENAMES="''${VK_ICD_FILENAMES:-${mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json}"
