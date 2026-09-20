@@ -1,7 +1,34 @@
 #!/bin/sh
-# wine-app-affinity-launch -- the single-app image's entry for Affinity (a wine-assess
+# wine-app-affinity-launch -- the single-app image's entry for affinity (a wine-assess
 # packaged Windows app: wine-assess/docs/wine-nix-packaging.md). The profile's own
-# launcher materialises the app's prefix under $HOME on first run and execs wine;
-# nix-launch supplies the env a Nix-built GUI app needs inside KasmVNC.
+# launcher materialises the app's prefix under $HOME on first run and execs wine.
+#
+# GPU: same shape as blender/launch. When Kasm has allocated a GPU (KASM_EGL_CARD /
+# KASM_RENDERD present and session-owned) we hand off to nix-gpu-run, which sets the
+# NVIDIA vendor lib dir + Vulkan ICD and runs the app under `vglrun -d egl`; DXVK then
+# creates its device on the real GPU. Otherwise nix-launch, and the app launcher's own
+# software defaults (llvmpipe/lavapipe). Proven on linbox 2026-09-20: "Found device:
+# NVIDIA GeForce RTX 3090" in DXVK's log via this path. See wine-assess
+# docs/gpu-acceleration.md.
 set -u
-exec /usr/local/bin/nix-launch /nix/var/nix/profiles/wine-app-affinity/bin/wine-app-affinity "$@"
+
+BIN=/nix/var/nix/profiles/wine-app-affinity/bin/wine-app-affinity
+
+if /usr/local/bin/nix-gpu-run --available; then
+    # dbus/XDG fixups (container-init services don't source /etc/profile.d);
+    # nix-gpu-run sets the nvidia/vulkan LD_LIBRARY_PATH itself, and the app
+    # launcher leaves it alone when a GPU is allocated.
+    [ -f /tmp/kasm-dbus.env ] && {
+        . /tmp/kasm-dbus.env 2>/dev/null
+        [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && export DBUS_SESSION_BUS_ADDRESS
+    }
+    if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+        uid=$(id -u); XDG_RUNTIME_DIR="/run/user/${uid}"
+        [ -d "${XDG_RUNTIME_DIR}" ] || mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null
+        export XDG_RUNTIME_DIR
+    fi
+    echo "wine-app-affinity-launch: GPU allocated — handing off to nix-gpu-run (vglrun -d egl)" >&2
+    exec /usr/local/bin/nix-gpu-run "${BIN}" "$@"
+fi
+
+exec /usr/local/bin/nix-launch "${BIN}" "$@"

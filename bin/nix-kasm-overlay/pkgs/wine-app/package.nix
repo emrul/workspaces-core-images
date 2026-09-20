@@ -66,16 +66,30 @@ let
     fi
     export WINEPREFIX="$DST"
     export WINEDEBUG="''${WINEDEBUG:--all}"
-    # Graphics. The store wine's glvnd and Vulkan loader cannot use the host's mesa
-    # (a different glibc; seen in a Kasm session as "couldn't initialize OpenGL" and
-    # DXVK "Failed to create Vulkan instance"), so default to nixpkgs mesa's software
-    # stack: llvmpipe for GL, lavapipe for Vulkan. A GPU launcher that sets these
-    # first (kasm-nix's nix-gpu-run) wins; kasm-nix's nix-launch has already cleared
+    # Graphics. Two cases.
+    #
+    # GPU allocated (Kasm set KASM_EGL_CARD/KASM_RENDERD and the session owns the
+    # device nodes): kasm-nix's nix-gpu-run has ALREADY staged the NVIDIA vendor libs,
+    # pointed the Vulkan loader at the NVIDIA ICD and wrapped us in `vglrun -d egl` —
+    # the same path that gives Chromium its real GPU. Touch nothing here: prepending
+    # software mesa to LD_LIBRARY_PATH shadows the vendor stack and the app dies
+    # before DXVK ever creates a device (measured on linbox 2026-09-20; removing just
+    # that one line was the difference between no window and "Found device: NVIDIA
+    # GeForce RTX 3090"). See wine-assess docs/gpu-acceleration.md.
+    #
+    # No GPU: the store wine's glvnd and Vulkan loader cannot use the host's mesa (a
+    # different glibc; seen in a Kasm session as "couldn't initialize OpenGL" and DXVK
+    # "Failed to create Vulkan instance"), so default to nixpkgs mesa's software stack:
+    # llvmpipe for GL, lavapipe for Vulkan. kasm-nix's nix-launch has already cleared
     # the image's LD_LIBRARY_PATH before we get here.
-    export VK_ICD_FILENAMES="''${VK_ICD_FILENAMES:-${mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json}"
-    export __EGL_VENDOR_LIBRARY_DIRS="''${__EGL_VENDOR_LIBRARY_DIRS:-${mesa}/share/glvnd/egl_vendor.d}"
-    export LIBGL_DRIVERS_PATH="''${LIBGL_DRIVERS_PATH:-${mesa}/lib/dri}"
-    export LD_LIBRARY_PATH="${mesa}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    if [ -x /usr/local/bin/nix-gpu-run ] && /usr/local/bin/nix-gpu-run --available; then
+      :
+    else
+      export VK_ICD_FILENAMES="''${VK_ICD_FILENAMES:-${mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json}"
+      export __EGL_VENDOR_LIBRARY_DIRS="''${__EGL_VENDOR_LIBRARY_DIRS:-${mesa}/share/glvnd/egl_vendor.d}"
+      export LIBGL_DRIVERS_PATH="''${LIBGL_DRIVERS_PATH:-${mesa}/lib/dri}"
+      export LD_LIBRARY_PATH="${mesa}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
     exec ${wine}/bin/wine ${lib.escapeShellArg pin.entrypoint} "$@"
   '';
 in
