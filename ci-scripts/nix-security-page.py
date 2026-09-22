@@ -29,6 +29,12 @@ import urllib.request
 
 LIVE_URL = "https://sandbox.registry.kasm.com/1.1/security.json"
 FRESH_MIN_IMAGES = 20  # full-catalog threshold for seeding without a live file
+# Build-side profiles that are not published, pullable artifacts. The fat
+# store is the union of every app closure: it is built for the registry but
+# its scan is skipped by default (SKIP_FAT_SCAN=1 — each app is already
+# scanned), so a row for it can only ever be stale. It sat on the page from
+# 2026-07-19 showing 20 fixed-Criticals that no image actually carried.
+NOT_ARTIFACTS = {"nix-store"}
 
 
 def main() -> int:
@@ -60,8 +66,11 @@ def main() -> int:
         return 0
 
     today = time.strftime("%Y-%m-%d", time.gmtime())
-    merged = {i["name"]: i for i in (live or {}).get("images", [])}
+    merged = {i["name"]: i for i in (live or {}).get("images", [])
+              if i["name"] not in NOT_ARTIFACTS}
     for i in rows:
+        if i["name"] in NOT_ARTIFACTS:
+            continue
         merged[i["name"]] = {
             "name": i["name"],
             "packages": i["packages"],
