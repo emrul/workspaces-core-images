@@ -52,6 +52,18 @@ in
     pin = loadPin "chrome" ./pkgs/chrome;
   };
 
+  # Kind A (override, vendored): OnlyOffice Desktop Editors pinned FORWARD of
+  # nixpkgs (9.4.0 vs 9.1.0) with the bundled Qt 5.9.9 stripped — that copy
+  # carries CVE-2023-51714 / CVE-2024-36048 (Critical) and upstream still ships
+  # it in 9.4.0. nixpkgs hides the real derivation inside a buildFHSEnv, so the
+  # file is vendored rather than overridden. REVERT to
+  # nixpkgs#onlyoffice-desktopeditors when the condition in
+  # pkgs/onlyoffice/derivation.nix's header holds.
+  onlyoffice = import ./pkgs/onlyoffice/package.nix {
+    inherit prev;
+    pin = loadPin "onlyoffice" ./pkgs/onlyoffice;
+  };
+
   # Kind A (override): Vivaldi with proprietary media codecs. Plain
   # nixpkgs#vivaldi ships without libffmpeg.so; the browser crash-loops at
   # startup trying to self-install it into the read-only store (testbench

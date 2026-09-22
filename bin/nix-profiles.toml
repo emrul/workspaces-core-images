@@ -136,7 +136,12 @@ ref  = "github:NixOS/nixpkgs/nixos-unstable"
 # seccomp: bwrap — nixpkgs wraps it in a buildFHSEnv/bubblewrap sandbox; see
 #           src/ubuntu/install/nix/onlyoffice/launch.
 seccomp = "bwrap"
-pkgs      = ["nixpkgs#onlyoffice-desktopeditors"]
+# Self-hosted (bin/nix-kasm-overlay/pkgs/onlyoffice) since 2026-09-22: 9.4.0
+# with the bundled Qt 5.9.9 stripped — CVE-2023-51714 / CVE-2024-36048 — bound
+# to nixpkgs' Qt 5.15 instead. REVERT to "nixpkgs#onlyoffice-desktopeditors"
+# when nixpkgs is at or past the pinned version AND the Qt copy it ships is
+# fixed (condition spelled out in pkgs/onlyoffice/derivation.nix).
+pkgs      = ["path:/config/kasm-overlay#onlyoffice"]
 kasm_name = "only-office"
 # Track unstable: 25.05 ships 9.0.0.172, whose CEF null-derefs at startup on
 # headless KasmVNC (stat(NULL) after an empty /changes/ doc path). Testing a

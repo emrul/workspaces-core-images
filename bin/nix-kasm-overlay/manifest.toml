@@ -62,3 +62,15 @@ kind      = "source"
 discover  = "manual"
 cadence   = "manual"
 platforms = ["amd64"]
+
+# OnlyOffice Desktop Editors: pinned forward of nixpkgs with the bundled Qt 5.9
+# stripped (CVE-2023-51714 / CVE-2024-36048). Upstream publishes GitHub
+# releases (ONLYOFFICE/DesktopEditors), but the github-releases discoverer is
+# not implemented yet, so the pin is bumped by hand: new version + SRI hash of
+# onlyoffice-desktopeditors_amd64.deb into pin.json. Temporary — see the REVERT
+# condition in pkgs/onlyoffice/derivation.nix.
+[apps.onlyoffice]
+kind      = "override"
+discover  = "manual"
+cadence   = "manual"
+platforms = ["amd64"]

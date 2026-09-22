@@ -65,6 +65,9 @@
         in {
           chrome       = pkgs.chrome;
           vivaldi      = pkgs.vivaldi;
+          # OnlyOffice with the bundled Qt 5.9 stripped (CVE-2023-51714,
+          # CVE-2024-36048); see overlay.nix. amd64 only.
+          onlyoffice   = pkgs.onlyoffice;
           kasmvnc      = pkgs.kasmvnc;
           # jq: baked into the resolute base's /nix-stores/services so
           # nix-activate has it at RUNTIME (profile activation, `requires`
